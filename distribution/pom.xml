@@ -54,12 +54,12 @@
       <groupId>org.apache.drill.memory</groupId>
       <artifactId>drill-memory-base</artifactId>
       <version>${project.version}</version>
-    </dependency>    
+    </dependency>
     <dependency>
       <groupId>org.apache.drill.exec</groupId>
       <artifactId>drill-rpc</artifactId>
       <version>${project.version}</version>
-    </dependency>    
+    </dependency>
     <dependency>
       <groupId>org.apache.drill.exec</groupId>
       <artifactId>drill-java-exec</artifactId>
@@ -335,6 +335,11 @@
         <dependency>
           <groupId>org.apache.drill.contrib</groupId>
           <artifactId>drill-udfs</artifactId>
+          <version>${project.version}</version>
+        </dependency>
+        <dependency>
+          <groupId>org.apache.drill.contrib</groupId>
+          <artifactId>drill-couch-storage</artifactId>
           <version>${project.version}</version>
         </dependency>
         <dependency>
