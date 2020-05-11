@@ -18,12 +18,14 @@
 package org.apache.drill.exec.store.couch.schema;
 
 import java.io.IOException;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 
-import net.sf.json.JSONObject;
-import org.apache.drill.common.exceptions.DrillRuntimeException;
 import org.apache.drill.common.exceptions.ExecutionSetupException;
 import org.apache.drill.exec.planner.logical.DrillTable;
 import org.apache.drill.exec.planner.logical.DynamicDrillTable;
@@ -33,7 +35,6 @@ import org.apache.drill.exec.store.couch.CouchScanSpec;
 import org.apache.drill.exec.store.couch.CouchStoragePlugin;
 import org.apache.calcite.schema.SchemaPlus;
 import org.apache.drill.exec.store.SchemaConfig;
-import org.apache.drill.exec.store.SchemaFactory;
 import org.apache.drill.exec.store.couch.CouchStoragePluginConfig;
 import org.apache.drill.exec.store.couch.util.SimpleHttp;
 import org.apache.drill.shaded.guava.com.google.common.cache.CacheBuilder;
@@ -78,12 +79,13 @@ public class CouchSchemaFactory extends AbstractSchemaFactory {
             logger.info(url);
             SimpleHttp http = new SimpleHttp();
             String s = http.get(url);
-            s = s.substring(1,s.length()-1);
+            s = s.substring(1, s.length() - 1);
             String[] list = s.split(",");
-            for(String i : list) {
+            for (String i : list) {
                 i = i.substring(1, i.length() - 1);
-                if (!i.startsWith("_"))
+                if (!i.startsWith("_")) {
                     dbNames.add(i);
+                }
             }
             return dbNames;
         }
@@ -100,12 +102,13 @@ public class CouchSchemaFactory extends AbstractSchemaFactory {
             logger.info(url);
             SimpleHttp http = new SimpleHttp();
             String s = http.get(url);
-            s = s.substring(1,s.length()-1);
+            s = s.substring(1, s.length() - 1);
             String[] tables = s.split(",");
-            for(String i : tables) {
+            for (String i : tables) {
                 i = i.substring(1, i.length() - 1);
-                if (!i.startsWith("_"))
+                if (!i.startsWith("_")) {
                     tableNames.add(i);
+                }
             }
             return tableNames;
         }
@@ -137,10 +140,9 @@ public class CouchSchemaFactory extends AbstractSchemaFactory {
 
                 return schemaMap.get(name);
 
-                //return new MongoDatabaseSchema(tables, this, name);
+                // return new MongoDatabaseSchema(tables, this, name);
             } catch (ExecutionException e) {
-                logger.warn("Failure while attempting to access MongoDataBase '{}'.",
-                        name, e.getCause());
+                logger.warn("Failure while attempting to access MongoDataBase '{}'.", name, e.getCause());
                 return null;
             }
 
@@ -172,8 +174,7 @@ public class CouchSchemaFactory extends AbstractSchemaFactory {
             try {
                 return tableNameLoader.get(dbName);
             } catch (ExecutionException e) {
-                logger.warn("Failure while loading table names for database '{}'.",
-                        dbName, e.getCause());
+                logger.warn("Failure while loading table names for database '{}'.", dbName, e.getCause());
                 return Collections.emptyList();
             }
         }
@@ -188,6 +189,5 @@ public class CouchSchemaFactory extends AbstractSchemaFactory {
             return CouchStoragePluginConfig.NAME;
         }
     }
-
 
 }

@@ -6,8 +6,9 @@ import java.util.Map;
 import java.util.Map.Entry;
 import net.sf.json.JSONObject;
 
-import com.google.common.collect.Lists;
-import com.google.common.collect.Maps;
+import org.apache.drill.shaded.guava.com.google.common.collect.Lists;
+import org.apache.drill.shaded.guava.com.google.common.collect.Maps;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -37,7 +38,7 @@ public class CouchUtils {
     public static Map<String, List<JSONObject>> mergeFilters(
             Map<String, Object> minFilters, Map<String, Object> maxFilters) {
         Map<String, List<JSONObject>> filters = Maps.newHashMap();
-        logger.info("what t fk????????????????");
+        // WS - unknown behavior noted here previously
         for (Entry<String, Object> entry : minFilters.entrySet()) {
             List<JSONObject> list = filters.get(entry.getKey());
             if (list == null) {

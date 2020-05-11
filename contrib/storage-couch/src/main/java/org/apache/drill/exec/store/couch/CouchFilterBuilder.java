@@ -14,8 +14,6 @@ import net.sf.json.JSONObject;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import org.apache.drill.shaded.guava.com.google.common.collect.ImmutableList;
-
 public class CouchFilterBuilder extends
         AbstractExprVisitor<CouchScanSpec, Void, RuntimeException>
 {

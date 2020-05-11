@@ -1,5 +1,9 @@
 package org.apache.drill.exec.store.couch;
-import java.util.*;
+
+import java.util.Map;
+import java.util.List;
+import java.util.Iterator;
+import java.util.Collections;
 
 import com.fasterxml.jackson.annotation.JacksonInject;
 import com.fasterxml.jackson.annotation.JsonCreator;
@@ -14,7 +18,6 @@ import org.apache.drill.exec.physical.base.PhysicalOperator;
 import org.apache.drill.exec.physical.base.PhysicalVisitor;
 import org.apache.drill.exec.physical.base.SubScan;
 
-import com.google.common.collect.Iterators;
 import org.apache.drill.exec.store.StoragePluginRegistry;
 
 public class CouchSubScan extends AbstractBase implements SubScan {
@@ -97,7 +100,7 @@ public class CouchSubScan extends AbstractBase implements SubScan {
 
     @Override
     public Iterator<PhysicalOperator> iterator() {
-        return Iterators.emptyIterator();
+        return Collections.emptyIterator();
     }
 
     public static class CouchSubScanSpec {

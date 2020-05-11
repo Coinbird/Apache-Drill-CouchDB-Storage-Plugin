@@ -18,8 +18,11 @@
 package org.apache.drill.exec.store.couch;
 
 import java.io.IOException;
-import java.util.*;
-import java.util.Map.Entry;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Collection;
+import java.util.ArrayList;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
 
 import org.apache.drill.common.exceptions.DrillRuntimeException;
@@ -63,8 +66,8 @@ public class CouchRecordReader extends AbstractRecordReader {
 
     private boolean isBsonRecordReader = false;
 
-    public CouchRecordReader(CouchSubScan.CouchSubScanSpec subScanSpec, List<SchemaPath> projectedColumns
-                             , FragmentContext context, CouchStoragePlugin plugin) {
+    public CouchRecordReader(CouchSubScan.CouchSubScanSpec subScanSpec, List<SchemaPath> projectedColumns,
+            FragmentContext context, CouchStoragePlugin plugin) {
         querystring = new JSONObject();
         fields = new ArrayList<>();
 
@@ -76,21 +79,15 @@ public class CouchRecordReader extends AbstractRecordReader {
         filters = subScanSpec.getFilter();
         logger.info("filter {}, fields {}", filters, fields);
         querystring.put("selector", "{}");
-        if(filters != null){
+        if (filters != null) {
             querystring.put("selector", filters);
         }
         querystring.put("fields", fields);
 
         logger.debug("BsonRecordReader is enabled? " + isBsonRecordReader);
         tableName = subScanSpec.getTableName();
-        CouchDbProperties properties = new CouchDbProperties()
-                .setDbName(tableName)
-                .setCreateDbIfNotExist(false)
-                .setProtocol("http")
-                .setHost("127.0.0.1")
-                .setPort(5984)
-                .setUsername("admin")
-                .setPassword("admin");
+        CouchDbProperties properties = new CouchDbProperties().setDbName(tableName).setCreateDbIfNotExist(false)
+                .setProtocol("http").setHost("127.0.0.1").setPort(5984).setUsername("admin").setPassword("admin");
         dbClient = new CouchDbClient(properties);
     }
 
@@ -111,23 +108,21 @@ public class CouchRecordReader extends AbstractRecordReader {
     }
 
     @Override
-    public void setup(OperatorContext context, OutputMutator output)
-            throws ExecutionSetupException {
+    public void setup(OperatorContext context, OutputMutator output) throws ExecutionSetupException {
         this.writer = new VectorContainerWriter(output);
         this.jsonReader = new JsonReader.Builder(fragmentContext.getManagedBuffer())
-                .schemaPathColumns(Lists.newArrayList(getColumns()))
-                .allTextMode(true)
-                .readNumbersAsDouble(false)
+                .schemaPathColumns(Lists.newArrayList(getColumns())).allTextMode(true).readNumbersAsDouble(false)
                 .enableNanInf(true).build();
-            logger.debug(" Intialized JsonRecordReader. " + getColumns().toString());
+        logger.debug(" Intialized JsonRecordReader. " + getColumns().toString());
     }
 
     @Override
-    public int next(){
-        if(jsonIt == null){
+    public int next() {
+        if (jsonIt == null) {
             logger.info("filters: {}", querystring);
-            jsonIt = dbClient.findDocs(querystring.toString(),JSONObject.class).iterator();
-            //jsonIt = dbClient.findDocs("{\"selector\": {\"company\": \"sicnu.edu.cn\"}}",JSONObject.class).iterator();
+            jsonIt = dbClient.findDocs(querystring.toString(), JSONObject.class).iterator();
+            // jsonIt = dbClient.findDocs("{\"selector\": {\"company\":
+            // \"sicnu.edu.cn\"}}",JSONObject.class).iterator();
         }
 
         logger.debug("CouchRecordReader next");
@@ -143,7 +138,7 @@ public class CouchRecordReader extends AbstractRecordReader {
                 jsonReader.setSource(jsonIt.next().toString().getBytes(Charsets.UTF_8));
                 writer.setPosition(docCount);
                 jsonReader.write(writer);
-                docCount ++;
+                docCount++;
             }
 
             jsonReader.ensureAtLeastOneField(writer);

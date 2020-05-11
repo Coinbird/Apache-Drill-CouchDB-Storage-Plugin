@@ -4,11 +4,6 @@ package org.apache.drill.exec.store.couch.schema;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-
-import com.google.common.collect.ImmutableList;
-import org.apache.drill.exec.planner.logical.DynamicDrillTable;
-import org.apache.drill.exec.store.couch.CouchScanSpec;
-import org.apache.drill.exec.store.couch.CouchStoragePlugin;
 import org.apache.calcite.schema.Table;
 
 import org.apache.drill.exec.planner.logical.DrillTable;
