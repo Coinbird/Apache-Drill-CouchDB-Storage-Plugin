@@ -80,7 +80,7 @@ public class CouchFilterBuilder extends
 
     @Override
     public CouchScanSpec visitBooleanOperator(BooleanOperator op, Void value) {
-        List<LogicalExpression> args = op.args;
+        List<LogicalExpression> args = op.args();
         CouchScanSpec nodeScanSpec = null;
         String functionName = op.getName();
         for (int i = 0; i < args.size(); ++i) {
@@ -108,7 +108,7 @@ public class CouchFilterBuilder extends
             throws RuntimeException {
         CouchScanSpec nodeScanSpec = null;
         String functionName = call.getName();
-        ImmutableList<LogicalExpression> args = call.args;
+        List<LogicalExpression> args = call.args();
 
         if (CouchCompareFunctionProcessor.isCompareFunction(functionName)) {
             CouchCompareFunctionProcessor processor = CouchCompareFunctionProcessor

@@ -34,8 +34,8 @@ public class CouchCompareFunctionProcessor extends
 
     public static CouchCompareFunctionProcessor process(FunctionCall call) {
         String functionName = call.getName();
-        LogicalExpression nameArg = call.args.get(0);
-        LogicalExpression valueArg = call.args.size() == 2 ? call.args.get(1)
+        LogicalExpression nameArg = call.args().get(0);
+        LogicalExpression valueArg = call.args().size() == 2 ? call.args().get(1)
                 : null;
         CouchCompareFunctionProcessor evaluator = new CouchCompareFunctionProcessor(
                 functionName);
@@ -49,7 +49,7 @@ public class CouchCompareFunctionProcessor extends
                         .get(functionName);
             }
             evaluator.success = nameArg.accept(evaluator, valueArg);
-        } else if (call.args.get(0) instanceof SchemaPath) {
+        } else if (call.args().get(0) instanceof SchemaPath) {
             evaluator.success = true;
             evaluator.path = (SchemaPath) nameArg;
         }
