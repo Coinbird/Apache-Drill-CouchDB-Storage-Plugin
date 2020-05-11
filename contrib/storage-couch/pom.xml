@@ -65,7 +65,7 @@
         <dependency>
             <groupId>org.apache.drill.exec</groupId>
             <artifactId>drill-jdbc-all</artifactId>
-            <version>1.18.0</version>
+            <version>1.16.0</version>
         </dependency>
 
     </dependencies>
