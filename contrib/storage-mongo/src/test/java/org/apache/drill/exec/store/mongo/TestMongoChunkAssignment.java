@@ -31,17 +31,18 @@ import org.apache.drill.categories.SlowTest;
 import org.apache.drill.common.exceptions.ExecutionSetupException;
 import org.apache.drill.exec.proto.CoordinationProtos.DrillbitEndpoint;
 import org.apache.drill.exec.store.mongo.common.ChunkInfo;
-import org.junit.Before;
-import org.junit.Test;
-
 import org.apache.drill.shaded.guava.com.google.common.collect.Lists;
 import org.apache.drill.shaded.guava.com.google.common.collect.Maps;
 import org.apache.drill.shaded.guava.com.google.common.collect.Sets;
-import com.mongodb.ServerAddress;
+import org.apache.drill.test.BaseTest;
+import org.junit.Before;
+import org.junit.Test;
 import org.junit.experimental.categories.Category;
 
+import com.mongodb.ServerAddress;
+
 @Category({SlowTest.class, MongoStorageTest.class})
-public class TestMongoChunkAssignment {
+public class TestMongoChunkAssignment extends BaseTest {
   static final String HOST_A = "A";
   static final String HOST_B = "B";
   static final String HOST_C = "C";
@@ -274,5 +275,4 @@ public class TestMongoChunkAssignment {
     assertEquals(6, mongoGroupScan.getSpecificScan(0).getChunkScanSpecList()
         .size());
   }
-
 }

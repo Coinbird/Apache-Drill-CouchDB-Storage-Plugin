@@ -24,7 +24,6 @@ import org.junit.experimental.categories.Category;
 
 @Category({SqlTest.class, OperatorTest.class})
 public class TestCorrelation extends PlanTestBase {
-  static final org.slf4j.Logger logger = org.slf4j.LoggerFactory.getLogger(TestCorrelation.class);
 
   @Test  // DRILL-2962
   public void testScalarAggCorrelatedSubquery() throws Exception {
@@ -103,5 +102,28 @@ public class TestCorrelation extends PlanTestBase {
       .unOrdered()
       .expectsEmptyResultSet()
       .go();
+  }
+
+  @Test // DRILL-7050
+  public void testCorrelatedSubQueryInSelect() throws Exception {
+    String tableName = "dfs.tmp.source";
+    String query =
+        "select t1.id,\n" +
+            "(select count(t2.id)\n" +
+            "from %1$s t2 where t2.id = t1.id) as c\n" +
+        "from %1$s t1";
+    try {
+      test("create table %s as (select 1 as id union all select 2 as id)", tableName);
+
+      testBuilder()
+        .sqlQuery(query, tableName)
+        .unOrdered()
+        .baselineColumns("id", "c")
+        .baselineValues(1, 1L)
+        .baselineValues(2, 1L)
+        .go();
+    } finally {
+      test("drop table if exists %s", tableName);
+    }
   }
 }

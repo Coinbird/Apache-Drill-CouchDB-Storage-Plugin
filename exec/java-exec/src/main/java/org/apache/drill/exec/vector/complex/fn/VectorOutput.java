@@ -56,7 +56,8 @@ import com.fasterxml.jackson.core.JsonToken;
 
 abstract class VectorOutput {
 
-  private static final Logger LOG = LoggerFactory.getLogger(VectorOutput.class);
+  private static final Logger logger = LoggerFactory.getLogger(VectorOutput.class);
+
   final VarBinaryHolder binary = new VarBinaryHolder();
   final TimeHolder time = new TimeHolder();
   final DateHolder date = new DateHolder();
@@ -95,7 +96,7 @@ abstract class VectorOutput {
         if(checkNextToken(JsonToken.VALUE_NUMBER_INT) || !hasBinary()) {
           throw UserException.parseError()
           .message("Either $type is not an integer or has no $binary")
-          .build(LOG);
+          .build(logger);
         }
         writeBinary(checkNextToken(JsonToken.VALUE_STRING));
         checkCurrentToken(JsonToken.END_OBJECT);
@@ -210,7 +211,7 @@ abstract class VectorOutput {
           if (type < 0 || type > 255) {
             throw UserException.validationError()
             .message("$type should be between 0 to 255")
-            .build(LOG);
+            .build(logger);
           }
         }
         work.prepareBinary(binaryData, binary);
@@ -254,7 +255,7 @@ abstract class VectorOutput {
         default:
           throw UserException.unsupportedError()
               .message(parser.getCurrentToken().toString())
-              .build(LOG);
+              .build(logger);
         }
       }
     }
@@ -301,7 +302,6 @@ abstract class VectorOutput {
       return innerRun();
     }
 
-    @SuppressWarnings("resource")
     @Override
     public void writeBinary(boolean isNull) throws IOException {
       VarBinaryWriter bin = writer.varBinary(fieldName);
@@ -313,7 +313,7 @@ abstract class VectorOutput {
           if (type < 0 || type > 255) {
             throw UserException.validationError()
             .message("$type should be between 0 to 255")
-            .build(LOG);
+            .build(logger);
           }
         }
         work.prepareBinary(binaryData, binary);
@@ -334,7 +334,6 @@ abstract class VectorOutput {
 
     @Override
     public void writeTime(boolean isNull) throws IOException {
-      @SuppressWarnings("resource")
       TimeWriter t = writer.time(fieldName);
       if(!isNull){
         LocalTime localTime = OffsetTime.parse(parser.getValueAsString(), DateUtility.isoFormatTime).toLocalTime();
@@ -342,7 +341,6 @@ abstract class VectorOutput {
       }
     }
 
-    @SuppressWarnings("resource")
     @Override
     public void writeTimestamp(boolean isNull) throws IOException {
       TimeStampWriter ts = writer.timeStamp(fieldName);
@@ -360,7 +358,7 @@ abstract class VectorOutput {
         default:
           throw UserException.unsupportedError()
           .message(parser.getCurrentToken().toString())
-          .build(LOG);
+          .build(logger);
         }
       }
     }
@@ -379,7 +377,6 @@ abstract class VectorOutput {
 
     @Override
     public void writeInteger(boolean isNull) throws IOException {
-      @SuppressWarnings("resource")
       BigIntWriter intWriter = writer.bigInt(fieldName);
       if(!isNull){
         intWriter.writeBigInt(Long.parseLong(parser.getValueAsString()));

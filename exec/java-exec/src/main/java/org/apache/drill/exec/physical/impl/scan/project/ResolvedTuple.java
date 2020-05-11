@@ -23,12 +23,14 @@ import java.util.List;
 import org.apache.drill.exec.record.MaterializedField;
 import org.apache.drill.exec.record.VectorContainer;
 import org.apache.drill.exec.memory.BufferAllocator;
-import org.apache.drill.exec.physical.rowSet.ResultVectorCache;
+import org.apache.drill.exec.physical.resultSet.ResultVectorCache;
 import org.apache.drill.exec.record.BatchSchema.SelectionVectorMode;
 import org.apache.drill.exec.vector.UInt4Vector;
 import org.apache.drill.exec.vector.ValueVector;
 import org.apache.drill.exec.vector.complex.AbstractMapVector;
+import org.apache.drill.exec.vector.complex.DictVector;
 import org.apache.drill.exec.vector.complex.MapVector;
+import org.apache.drill.exec.vector.complex.RepeatedDictVector;
 import org.apache.drill.exec.vector.complex.RepeatedMapVector;
 
 import org.apache.drill.shaded.guava.com.google.common.annotations.VisibleForTesting;
@@ -184,7 +186,8 @@ public abstract class ResolvedTuple implements VectorSource {
     protected AbstractMapVector outputMap;
 
     public ResolvedMap(ResolvedMapColumn parentColumn) {
-      super(parentColumn.parent().nullBuilder == null ? null : parentColumn.parent().nullBuilder.newChild());
+      super(parentColumn.parent().nullBuilder == null
+          ? null : parentColumn.parent().nullBuilder.newChild(parentColumn.name()));
       this.parentColumn = parentColumn;
     }
 
@@ -201,10 +204,10 @@ public abstract class ResolvedTuple implements VectorSource {
 
     public AbstractMapVector buildMap() {
       if (parentColumn.sourceIndex() != -1) {
-        final ResolvedTuple parentTuple = parentColumn.parent();
+        ResolvedTuple parentTuple = parentColumn.parent();
         inputMap = (AbstractMapVector) parentTuple.vector(parentColumn.sourceIndex());
       }
-      final MaterializedField colSchema = parentColumn.schema();
+      MaterializedField colSchema = parentColumn.schema();
       outputMap = createMap(inputMap,
           MaterializedField.create(
               colSchema.getName(), colSchema.getType()),
@@ -274,8 +277,8 @@ public abstract class ResolvedTuple implements VectorSource {
       // Create a new map array, reusing the offset vector from
       // the original input map.
 
-      final RepeatedMapVector source = (RepeatedMapVector) inputMap;
-      final UInt4Vector offsets = source.getOffsetVector();
+      RepeatedMapVector source = (RepeatedMapVector) inputMap;
+      UInt4Vector offsets = source.getOffsetVector();
       valueCount = offsets.getAccessor().getValueCount();
       return new RepeatedMapVector(schema,
           offsets, null);
@@ -289,6 +292,136 @@ public abstract class ResolvedTuple implements VectorSource {
     @Override
     public void setRowCount(int rowCount) {
       cascadeRowCount(valueCount);
+    }
+  }
+
+  public static abstract class ResolvedDict extends ResolvedTuple {
+
+    protected final ResolvedDictColumn parentColumn;
+
+    public ResolvedDict(ResolvedDictColumn parentColumn) {
+      super(parentColumn.parent().nullBuilder == null
+          ? null : parentColumn.parent().nullBuilder.newChild(parentColumn.name()));
+      this.parentColumn = parentColumn;
+    }
+
+    public abstract ValueVector buildVector();
+
+    @Override
+    public String name() {
+      return parentColumn.name();
+    }
+  }
+
+  public static class ResolvedSingleDict extends ResolvedDict {
+
+    protected DictVector inputVector;
+    protected DictVector outputVector;
+
+    public ResolvedSingleDict(ResolvedDictColumn parentColumn) {
+      super(parentColumn);
+    }
+
+    @Override
+    public void addVector(ValueVector vector) {
+      outputVector.putChild(vector.getField().getName(), vector);
+    }
+
+    @Override
+    public ValueVector vector(int index) {
+      assert inputVector != null;
+      return inputVector.getChildByOrdinal(index);
+    }
+
+    @Override
+    public ValueVector buildVector() {
+      if (parentColumn.sourceIndex() != -1) {
+        ResolvedTuple parentTuple = parentColumn.parent();
+        inputVector = (DictVector) parentTuple.vector(parentColumn.sourceIndex());
+      }
+      MaterializedField colSchema = parentColumn.schema();
+      MaterializedField dictField = MaterializedField.create(colSchema.getName(), colSchema.getType());
+      outputVector = new DictVector(dictField, parentColumn.parent().allocator(), null);
+      buildColumns();
+      return outputVector;
+    }
+
+    @Override
+    public BufferAllocator allocator() {
+      return outputVector.getAllocator();
+    }
+
+    @Override
+    public String name() {
+      return parentColumn.name();
+    }
+
+    @Override
+    public void setRowCount(int rowCount) {
+      outputVector.getMutator().setValueCount(rowCount);
+      cascadeRowCount(rowCount);
+    }
+
+    @Override
+    public int innerCardinality(int outerCardinality) {
+      return outerCardinality;
+    }
+  }
+
+  public static class ResolvedDictArray extends ResolvedDict {
+
+    protected RepeatedDictVector inputVector;
+    protected RepeatedDictVector outputVector;
+
+    private int valueCount;
+
+    public ResolvedDictArray(ResolvedDictColumn parentColumn) {
+      super(parentColumn);
+    }
+
+    @Override
+    public void addVector(ValueVector vector) {
+      ((DictVector) outputVector.getDataVector()).putChild(vector.getField().getName(), vector);
+    }
+
+    @Override
+    public ValueVector vector(int index) {
+      assert inputVector != null;
+      return ((DictVector) inputVector.getDataVector()).getChildByOrdinal(index);
+    }
+
+    @Override
+    public RepeatedDictVector buildVector() {
+      if (parentColumn.sourceIndex() != -1) {
+        ResolvedTuple parentTuple = parentColumn.parent();
+        inputVector = (RepeatedDictVector) parentTuple.vector(parentColumn.sourceIndex());
+      }
+      MaterializedField colSchema = parentColumn.schema();
+      MaterializedField dictField = MaterializedField.create(colSchema.getName(), colSchema.getType());
+      outputVector = new RepeatedDictVector(dictField, parentColumn.parent().allocator(), null);
+      valueCount = inputVector.getOffsetVector().getAccessor().getValueCount();
+      buildColumns();
+      return outputVector;
+    }
+
+    @Override
+    public BufferAllocator allocator() {
+      return outputVector.getAllocator();
+    }
+
+    @Override
+    public String name() {
+      return parentColumn.name();
+    }
+
+    @Override
+    public void setRowCount(int rowCount) {
+      cascadeRowCount(valueCount);
+    }
+
+    @Override
+    public int innerCardinality(int outerCardinality) {
+      return valueCount;
     }
   }
 
@@ -326,7 +459,7 @@ public abstract class ResolvedTuple implements VectorSource {
       return false;
     }
     for (int i = 0; i < members.size(); i++) {
-      if (members.get(i).nodeType() == ResolvedNullColumn.ID) {
+      if (members.get(i) instanceof ResolvedNullColumn) {
         return false;
       }
     }
@@ -341,7 +474,7 @@ public abstract class ResolvedTuple implements VectorSource {
       nullBuilder.build(vectorCache);
     }
     if (children != null) {
-      for (final ResolvedTuple child : children) {
+      for (ResolvedTuple child : children) {
         child.buildNulls(vectorCache.childCache(child.name()));
       }
     }
@@ -352,7 +485,7 @@ public abstract class ResolvedTuple implements VectorSource {
       nullBuilder.load(rowCount);
     }
     if (children != null) {
-      for (final ResolvedTuple child : children) {
+      for (ResolvedTuple child : children) {
         child.loadNulls(innerCardinality(rowCount));
       }
     }
@@ -401,7 +534,7 @@ public abstract class ResolvedTuple implements VectorSource {
     if (children == null) {
       return;
     }
-    for (final ResolvedTuple child : children) {
+    for (ResolvedTuple child : children) {
       child.setRowCount(rowCount);
     }
   }
@@ -425,7 +558,7 @@ public abstract class ResolvedTuple implements VectorSource {
       nullBuilder.close();
     }
     if (children != null) {
-      for (final ResolvedTuple child : children) {
+      for (ResolvedTuple child : children) {
         child.close();
       }
     }

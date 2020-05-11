@@ -32,13 +32,13 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * This interface represents the context that is used by a Drillbit in classes like the
+ * The context that is used by a Drillbit in classes like the
  * {@link org.apache.drill.exec.work.fragment.FragmentExecutor}.
  */
 public interface ExecutorFragmentContext extends RootFragmentContext {
+
   /**
    * Returns the root allocator for the Drillbit.
-   * @return The root allocator for the Drillbit.
    */
   BufferAllocator getRootAllocator();
 
@@ -58,7 +58,7 @@ public interface ExecutorFragmentContext extends RootFragmentContext {
 
   QueryProfileStoreContext getProfileStoreContext();
 
-  WorkEventBus getWorkEventbus();
+  WorkEventBus getWorkEventBus();
 
   Set<Map.Entry<UserServer.BitToUserConnection, UserServer.BitToUserConnectionConfig>> getUserConnections();
 

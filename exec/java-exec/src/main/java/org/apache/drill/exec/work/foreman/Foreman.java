@@ -17,6 +17,7 @@
  */
 package org.apache.drill.exec.work.foreman;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.apache.drill.exec.work.filter.RuntimeFilterRouter;
 import org.apache.drill.shaded.guava.com.google.common.base.Preconditions;
 import org.apache.drill.shaded.guava.com.google.common.collect.Lists;
@@ -38,7 +39,6 @@ import org.apache.drill.exec.physical.base.FragmentRoot;
 import org.apache.drill.exec.physical.base.PhysicalOperator;
 import org.apache.drill.exec.planner.fragment.Fragment;
 import org.apache.drill.exec.planner.fragment.MakeFragmentsVisitor;
-import org.apache.drill.exec.planner.fragment.SimpleParallelizer;
 import org.apache.drill.exec.planner.sql.DirectPlan;
 import org.apache.drill.exec.planner.sql.DrillSqlWorker;
 import org.apache.drill.exec.proto.BitControl.PlanFragment;
@@ -56,7 +56,7 @@ import org.apache.drill.exec.rpc.RpcException;
 import org.apache.drill.exec.rpc.UserClientConnection;
 import org.apache.drill.exec.server.DrillbitContext;
 import org.apache.drill.exec.server.FailureUtils;
-import org.apache.drill.exec.server.options.OptionManager;
+import org.apache.drill.exec.server.options.OptionSet;
 import org.apache.drill.exec.testing.ControlsInjector;
 import org.apache.drill.exec.testing.ControlsInjectorFactory;
 import org.apache.drill.exec.util.Pointer;
@@ -65,7 +65,8 @@ import org.apache.drill.exec.work.WorkManager.WorkerBee;
 import org.apache.drill.exec.work.foreman.rm.QueryQueue.QueueTimeoutException;
 import org.apache.drill.exec.work.foreman.rm.QueryQueue.QueryQueueException;
 import org.apache.drill.exec.work.foreman.rm.QueryResourceManager;
-import org.codehaus.jackson.map.ObjectMapper;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.util.Date;
@@ -94,8 +95,8 @@ import static org.apache.drill.exec.server.FailureUtils.EXIT_CODE_HEAP_OOM;
  */
 
 public class Foreman implements Runnable {
-  private static final org.slf4j.Logger logger = org.slf4j.LoggerFactory.getLogger(Foreman.class);
-  private static final org.slf4j.Logger queryLogger = org.slf4j.LoggerFactory.getLogger("query.logger");
+  private static final Logger logger = LoggerFactory.getLogger(Foreman.class);
+  private static final Logger queryLogger = LoggerFactory.getLogger("query.logger");
   private static final ControlsInjector injector = ControlsInjectorFactory.getInjector(Foreman.class);
 
   public enum ProfileOption { SYNC, ASYNC, NONE }
@@ -109,13 +110,12 @@ public class Foreman implements Runnable {
   private final QueryManager queryManager; // handles lower-level details of query execution
   private final DrillbitContext drillbitContext;
   private final UserClientConnection initiatingClient; // used to send responses
-  private boolean resume = false;
-  private final ProfileOption profileOption;
+  private boolean resume;
 
   private final QueryResourceManager queryRM;
 
   private final ResponseSendListener responseListener = new ResponseSendListener();
-  private final ConnectionClosedListener closeListener = new ConnectionClosedListener();
+  private final GenericFutureListener<Future<Void>> closeListener = future -> cancel();
   private final ChannelFuture closeFuture;
   private final FragmentsRunner fragmentsRunner;
   private final QueryStateProcessor queryStateProcessor;
@@ -123,7 +123,7 @@ public class Foreman implements Runnable {
   private String queryText;
 
   private RuntimeFilterRouter runtimeFilterRouter;
-  private boolean enableRuntimeFilter;
+  private final boolean enableRuntimeFilter;
 
   /**
    * Constructor. Sets up the Foreman, but does not initiate any execution.
@@ -144,16 +144,19 @@ public class Foreman implements Runnable {
     this.closeFuture = initiatingClient.getChannelClosureFuture();
     closeFuture.addListener(closeListener);
 
+    // Apply AutoLimit on resultSet (Usually received via REST APIs)
+    final int autoLimit = queryRequest.getAutolimitRowcount();
+    if (autoLimit > 0) {
+      connection.getSession().getOptions().setLocalOption(ExecConstants.QUERY_MAX_ROWS, autoLimit);
+    }
     this.queryContext = new QueryContext(connection.getSession(), drillbitContext, queryId);
     this.queryManager = new QueryManager(queryId, queryRequest, drillbitContext.getStoreProvider(),
         drillbitContext.getClusterCoordinator(), this);
     this.queryRM = drillbitContext.getResourceManager().newQueryRM(this);
     this.fragmentsRunner = new FragmentsRunner(bee, initiatingClient, drillbitContext, this);
     this.queryStateProcessor = new QueryStateProcessor(queryIdString, queryManager, drillbitContext, new ForemanResult());
-    this.profileOption = setProfileOption(queryContext.getOptions());
     this.enableRuntimeFilter = queryContext.getOptions().getOption(ExecConstants.HASHJOIN_ENABLE_RUNTIME_FILTER_KEY).bool_val;
   }
-
 
   /**
    * @return query id
@@ -175,7 +178,6 @@ public class Foreman implements Runnable {
   public String getQueryText() {
     return queryText;
   }
-
 
   /**
    * Get the QueryContext created for the query.
@@ -240,7 +242,7 @@ public class Foreman implements Runnable {
     try {
       /*
        Check if the foreman is ONLINE. If not don't accept any new queries.
-      */
+       */
       if (!drillbitContext.isForemanOnline()) {
         throw new ForemanException("Query submission failed since Foreman is shutting down.");
       }
@@ -281,9 +283,9 @@ public class Foreman implements Runnable {
         throw new IllegalStateException();
       }
       injector.injectChecked(queryContext.getExecutionControls(), "run-try-end", ForemanException.class);
-    } catch (final ForemanException e) {
+    } catch (ForemanException | UserException e) {
       queryStateProcessor.moveToState(QueryState.FAILED, e);
-    } catch (final OutOfMemoryError | OutOfMemoryException e) {
+    } catch (OutOfMemoryError | OutOfMemoryException e) {
       if (FailureUtils.isDirectMemoryOOM(e)) {
         queryStateProcessor.moveToState(QueryState.FAILED, UserException.memoryError(e).build(logger));
       } else {
@@ -294,8 +296,7 @@ public class Foreman implements Runnable {
          */
         FailureUtils.unrecoverableFailure(e, "Unable to handle out of memory condition in Foreman.", EXIT_CODE_HEAP_OOM);
       }
-
-    } catch (AssertionError | Exception ex) {
+    } catch (Throwable ex) {
       queryStateProcessor.moveToState(QueryState.FAILED,
           new ForemanException("Unexpected exception during fragment initialization: " + ex.getMessage(), ex));
     } finally {
@@ -324,11 +325,15 @@ public class Foreman implements Runnable {
     }
   }
 
-  private ProfileOption setProfileOption(OptionManager options) {
-    if (! options.getOption(ExecConstants.ENABLE_QUERY_PROFILE_VALIDATOR)) {
+  private ProfileOption getProfileOption(QueryContext queryContext) {
+    if (queryContext.isSkipProfileWrite()) {
       return ProfileOption.NONE;
     }
-    if (options.getOption(ExecConstants.QUERY_PROFILE_DEBUG_VALIDATOR)) {
+    OptionSet options = queryContext.getOptions();
+    if (!options.getBoolean(ExecConstants.ENABLE_QUERY_PROFILE_OPTION)) {
+      return ProfileOption.NONE;
+    }
+    if (options.getBoolean(ExecConstants.QUERY_PROFILE_DEBUG_OPTION)) {
       return ProfileOption.SYNC;
     } else {
       return ProfileOption.ASYNC;
@@ -408,7 +413,7 @@ public class Foreman implements Runnable {
     validatePlan(plan);
 
     queryRM.visitAbstractPlan(plan);
-    final QueryWorkUnit work = getQueryWorkUnit(plan);
+    final QueryWorkUnit work = getQueryWorkUnit(plan, queryRM);
     if (enableRuntimeFilter) {
       runtimeFilterRouter = new RuntimeFilterRouter(work, drillbitContext);
       runtimeFilterRouter.collectRuntimeFilterParallelAndControlInfo();
@@ -463,7 +468,7 @@ public class Foreman implements Runnable {
     } catch (IOException e) {
       throw new ExecutionSetupException(String.format("Unable to parse FragmentRoot from fragment: %s", rootFragment.getFragmentJson()));
     }
-    queryRM.setCost(rootOperator.getCost());
+    queryRM.setCost(rootOperator.getCost().getOutputRowCount());
 
     fragmentsRunner.setFragmentsInfo(planFragments, rootFragment, rootOperator);
 
@@ -505,7 +510,7 @@ public class Foreman implements Runnable {
     } catch (Exception e) {
       queryStateProcessor.moveToState(QueryState.FAILED, e);
     } finally {
-       /*
+      /*
        * Begin accepting external events.
        *
        * Doing this here in the finally clause will guarantee that it occurs. Otherwise, if there
@@ -561,14 +566,18 @@ public class Foreman implements Runnable {
     }
   }
 
-  private QueryWorkUnit getQueryWorkUnit(final PhysicalPlan plan) throws ExecutionSetupException {
+  private QueryWorkUnit getQueryWorkUnit(final PhysicalPlan plan,
+                                         final QueryResourceManager rm) throws ExecutionSetupException {
+
     final PhysicalOperator rootOperator = plan.getSortedOperators(false).iterator().next();
+
     final Fragment rootFragment = rootOperator.accept(MakeFragmentsVisitor.INSTANCE, null);
-    final SimpleParallelizer parallelizer = new SimpleParallelizer(queryContext);
-    return parallelizer.getFragments(
-        queryContext.getOptions().getOptionList(), queryContext.getCurrentEndpoint(),
-        queryId, queryContext.getOnlineEndpoints(), rootFragment,
-        initiatingClient.getSession(), queryContext.getQueryContextInfo());
+
+    return rm.getParallelizer(plan.getProperties().hasResourcePlan).generateWorkUnit(queryContext.getOptions().getOptionList(),
+                                                                        queryContext.getCurrentEndpoint(),
+                                                                        queryId, queryContext.getOnlineEndpoints(),
+                                                                        rootFragment, initiatingClient.getSession(),
+                                                                        queryContext.getQueryContextInfo());
   }
 
   private void logWorkUnit(QueryWorkUnit queryWorkUnit) {
@@ -593,6 +602,9 @@ public class Foreman implements Runnable {
         new BasicOptimizer.BasicOptimizationContext(queryContext), plan);
   }
 
+  public RuntimeFilterRouter getRuntimeFilterRouter() {
+    return runtimeFilterRouter;
+  }
 
   /**
    * Manages the end-state processing for Foreman.
@@ -726,7 +738,6 @@ public class Foreman implements Runnable {
       }
     }
 
-    @SuppressWarnings("resource")
     @Override
     public void close() {
       Preconditions.checkState(!isClosed);
@@ -756,12 +767,7 @@ public class Foreman implements Runnable {
        * We only need to do this if the resultState differs from the last recorded state
        */
       if (resultState != queryStateProcessor.getState()) {
-        suppressingClose(new AutoCloseable() {
-          @Override
-          public void close() throws Exception {
-            queryStateProcessor.recordNewState(resultState);
-          }
-        });
+        suppressingClose(() -> queryStateProcessor.recordNewState(resultState));
       }
 
       // set query end time before writing final profile
@@ -776,7 +782,11 @@ public class Foreman implements Runnable {
       final UserException uex;
       if (resultException != null) {
         final boolean verbose = queryContext.getOptions().getOption(ExecConstants.ENABLE_VERBOSE_ERRORS_KEY).bool_val;
-        uex = UserException.systemError(resultException).addIdentity(queryContext.getCurrentEndpoint()).build(logger);
+        if (resultException instanceof UserException) {
+          uex = (UserException) resultException;
+        } else {
+          uex = UserException.systemError(resultException).addIdentity(queryContext.getCurrentEndpoint()).build(logger);
+        }
         resultBuilder.addError(uex.getOrCreatePBError(verbose));
       } else {
         uex = null;
@@ -784,7 +794,7 @@ public class Foreman implements Runnable {
 
       // Debug option: write query profile before sending final results so that
       // the client can be certain the profile exists.
-
+      ProfileOption profileOption = getProfileOption(queryContext);
       if (profileOption == ProfileOption.SYNC) {
         queryManager.writeFinalProfile(uex);
       }
@@ -842,32 +852,20 @@ public class Foreman implements Runnable {
     }
   }
 
-  private class ConnectionClosedListener implements GenericFutureListener<Future<Void>> {
-    @Override
-    public void operationComplete(Future<Void> future) throws Exception {
-      cancel();
-    }
-  }
-
   /**
    * Listens for the status of the RPC response sent to the user for the query.
    */
-  private class ResponseSendListener extends BaseRpcOutcomeListener<Ack> {
+  private static class ResponseSendListener extends BaseRpcOutcomeListener<Ack> {
     @Override
     public void failed(final RpcException ex) {
       logger.info("Failure while trying communicate query result to initiating client. " +
-              "This would happen if a client is disconnected before response notice can be sent.", ex);
+          "This would happen if a client is disconnected before response notice can be sent.", ex);
     }
 
     @Override
     public void interrupted(final InterruptedException e) {
       logger.warn("Interrupted while waiting for RPC outcome of sending final query result to initiating client.");
     }
-  }
-
-
-  public RuntimeFilterRouter getRuntimeFilterRouter() {
-    return runtimeFilterRouter;
   }
 
 }

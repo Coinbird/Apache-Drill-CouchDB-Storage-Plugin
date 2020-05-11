@@ -17,12 +17,11 @@
  */
 package org.apache.drill.exec.store.ischema;
 
-import java.util.List;
-
+import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonIgnore;
-import org.apache.drill.common.exceptions.ExecutionSetupException;
+import com.fasterxml.jackson.annotation.JsonProperty;
+import com.fasterxml.jackson.annotation.JsonTypeName;
 import org.apache.drill.common.expression.SchemaPath;
-import org.apache.drill.exec.physical.PhysicalOperatorSetupException;
 import org.apache.drill.exec.physical.base.AbstractGroupScan;
 import org.apache.drill.exec.physical.base.GroupScan;
 import org.apache.drill.exec.physical.base.PhysicalOperator;
@@ -30,20 +29,15 @@ import org.apache.drill.exec.physical.base.ScanStats;
 import org.apache.drill.exec.physical.base.ScanStats.GroupScanProperty;
 import org.apache.drill.exec.physical.base.SubScan;
 import org.apache.drill.exec.proto.CoordinationProtos.DrillbitEndpoint;
-
-import com.fasterxml.jackson.annotation.JsonCreator;
-import com.fasterxml.jackson.annotation.JsonProperty;
-import com.fasterxml.jackson.annotation.JsonTypeName;
 import org.apache.drill.shaded.guava.com.google.common.base.Preconditions;
 
+import java.util.List;
+
 @JsonTypeName("info-schema")
-public class InfoSchemaGroupScan extends AbstractGroupScan{
-  static final org.slf4j.Logger logger = org.slf4j.LoggerFactory.getLogger(InfoSchemaGroupScan.class);
+public class InfoSchemaGroupScan extends AbstractGroupScan {
 
   private final InfoSchemaTableType table;
   private final InfoSchemaFilter filter;
-
-  private boolean isFilterPushedDown = false;
 
   public InfoSchemaGroupScan(InfoSchemaTableType table) {
     this(table, null);
@@ -52,7 +46,7 @@ public class InfoSchemaGroupScan extends AbstractGroupScan{
   @JsonCreator
   public InfoSchemaGroupScan(@JsonProperty("table") InfoSchemaTableType table,
                              @JsonProperty("filter") InfoSchemaFilter filter) {
-    super((String)null);
+    super((String) null);
     this.table = table;
     this.filter = filter;
   }
@@ -61,7 +55,6 @@ public class InfoSchemaGroupScan extends AbstractGroupScan{
     super(that);
     this.table = that.table;
     this.filter = that.filter;
-    this.isFilterPushedDown = that.isFilterPushedDown;
   }
 
   @JsonProperty("table")
@@ -74,18 +67,25 @@ public class InfoSchemaGroupScan extends AbstractGroupScan{
     return filter;
   }
 
+  @JsonIgnore
   @Override
-  public void applyAssignments(List<DrillbitEndpoint> endpoints) throws PhysicalOperatorSetupException {
+  public List<SchemaPath> getColumns() {
+    return super.getColumns();
+  }
+
+  @Override
+  public void applyAssignments(List<DrillbitEndpoint> endpoints) {
     Preconditions.checkArgument(endpoints.size() == 1);
   }
 
   @Override
-  public SubScan getSpecificScan(int minorFragmentId) throws ExecutionSetupException {
+  public SubScan getSpecificScan(int minorFragmentId) {
     Preconditions.checkArgument(minorFragmentId == 0);
     return new InfoSchemaSubScan(table, filter);
   }
 
-  public ScanStats getScanStats(){
+  @Override
+  public ScanStats getScanStats() {
     if (filter == null) {
       return ScanStats.TRIVIAL_TABLE;
     } else {
@@ -101,27 +101,22 @@ public class InfoSchemaGroupScan extends AbstractGroupScan{
   }
 
   @Override
-  public PhysicalOperator getNewWithChildren(List<PhysicalOperator> children) throws ExecutionSetupException {
-    return new InfoSchemaGroupScan (this);
+  public PhysicalOperator getNewWithChildren(List<PhysicalOperator> children) {
+    return new InfoSchemaGroupScan(this);
   }
 
   @Override
   public String getDigest() {
-    return this.table.toString() + ", filter=" + filter;
+    return table.toString() + ", filter=" + filter;
   }
 
   @Override
   public GroupScan clone(List<SchemaPath> columns) {
-    InfoSchemaGroupScan  newScan = new InfoSchemaGroupScan (this);
-    return newScan;
-  }
-
-  public void setFilterPushedDown(boolean status) {
-    this.isFilterPushedDown = status;
+    return new InfoSchemaGroupScan(this);
   }
 
   @JsonIgnore
   public boolean isFilterPushedDown() {
-    return isFilterPushedDown;
+    return filter != null;
   }
 }

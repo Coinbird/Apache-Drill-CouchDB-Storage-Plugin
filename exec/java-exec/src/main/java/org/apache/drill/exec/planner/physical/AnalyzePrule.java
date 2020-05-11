@@ -30,7 +30,7 @@ import org.apache.calcite.rex.RexBuilder;
 import org.apache.calcite.rex.RexNode;
 import org.apache.calcite.sql.fun.SqlStdOperatorTable;
 import org.apache.drill.exec.ExecConstants;
-import org.apache.drill.exec.physical.impl.statistics.Statistic;
+import org.apache.drill.metastore.statistics.Statistic;
 import org.apache.drill.exec.planner.logical.DrillAnalyzeRel;
 import org.apache.drill.exec.planner.logical.DrillRel;
 import org.apache.drill.exec.planner.logical.RelOptHelper;
@@ -47,7 +47,8 @@ public class AnalyzePrule extends Prule {
       Statistic.NNROWCOUNT,  // total number of non-null entries in table fragment
       Statistic.SUM_WIDTH,   // total column width across all entries in table fragment
       Statistic.CNT_DUPS,    // total count of non-singletons in table fragment
-      Statistic.HLL          // total distinct values in table fragment
+      Statistic.HLL,         // total distinct values in table fragment
+      Statistic.TDIGEST      // quantile distribution of values in table fragment
     );
 
   // Mapping between output functions (from StatsMergeBatch) and
@@ -60,6 +61,7 @@ public class AnalyzePrule extends Prule {
     PHASE_2_FUNCTIONS.put(Statistic.SUM_DUPS, Statistic.CNT_DUPS);
     PHASE_2_FUNCTIONS.put(Statistic.HLL_MERGE, Statistic.HLL);
     PHASE_2_FUNCTIONS.put(Statistic.NDV, Statistic.HLL);
+    PHASE_2_FUNCTIONS.put(Statistic.TDIGEST_MERGE, Statistic.TDIGEST);
   }
 
   // List of input functions (from StatsMergeBatch) to UnpivotMapsBatch
@@ -69,7 +71,8 @@ public class AnalyzePrule extends Prule {
       Statistic.AVG_WIDTH,   // average column width across all entries in the table
       Statistic.HLL_MERGE,   // total distinct values(computed using hll) in the table
       Statistic.SUM_DUPS,    // total count of duplicate values across all entries in the table
-      Statistic.NDV          // total distinct values across all entries in the table
+      Statistic.NDV,         // total distinct values across all entries in the table
+      Statistic.TDIGEST_MERGE // quantile distribution of all values in the table
   );
 
   public AnalyzePrule() {

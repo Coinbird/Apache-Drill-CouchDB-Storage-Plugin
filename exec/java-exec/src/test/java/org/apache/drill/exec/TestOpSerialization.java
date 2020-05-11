@@ -38,18 +38,20 @@ import org.apache.drill.exec.physical.config.Screen;
 import org.apache.drill.exec.physical.config.UnionExchange;
 import org.apache.drill.exec.planner.PhysicalPlanReader;
 import org.apache.drill.exec.planner.PhysicalPlanReaderTestFactory;
+import org.apache.drill.exec.planner.cost.PrelCostEstimates;
 import org.apache.drill.exec.proto.CoordinationProtos;
 import org.apache.drill.exec.store.direct.DirectSubScan;
 import org.apache.drill.exec.store.mock.MockSubScanPOP;
 import org.apache.drill.exec.store.pojo.DynamicPojoRecordReader;
 
+import org.apache.drill.test.BaseTest;
 import org.junit.Before;
 import org.junit.Test;
 
 import com.fasterxml.jackson.databind.ObjectWriter;
 import org.apache.drill.shaded.guava.com.google.common.collect.Lists;
 
-public class TestOpSerialization {
+public class TestOpSerialization extends BaseTest {
   static final org.slf4j.Logger logger = org.slf4j.LoggerFactory.getLogger(TestOpSerialization.class);
   private DrillConfig config;
   private PhysicalPlanReader reader;
@@ -58,7 +60,7 @@ public class TestOpSerialization {
   private static PhysicalOperator setupPhysicalOperator(PhysicalOperator operator)
   {
     operator.setOperatorId(1);
-    operator.setCost(1.0);
+    operator.setCost(new PrelCostEstimates(1.0, 1.0));
     operator.setMaxAllocation(1000);
     return operator;
   }
@@ -66,7 +68,7 @@ public class TestOpSerialization {
   private static void assertOperator(PhysicalOperator operator)
   {
     assertEquals(1, operator.getOperatorId());
-    assertEquals(1.0, operator.getCost(), 0.00001);
+    assertEquals(1.0, operator.getCost().getOutputRowCount(), 0.00001);
     assertEquals(1000, operator.getMaxAllocation());
   }
 

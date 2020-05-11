@@ -22,8 +22,8 @@ import java.lang.management.ManagementFactory;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import org.apache.drill.exec.ZookeeperTestUtil;
-import org.apache.drill.exec.util.GuavaPatcher;
 import org.apache.drill.hbase.test.Drill2130StorageHBaseHamcrestConfigurationTest;
+import org.apache.drill.test.BaseTest;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.HBaseConfiguration;
 import org.apache.hadoop.hbase.HBaseTestingUtility;
@@ -52,12 +52,8 @@ import org.junit.runners.Suite.SuiteClasses;
   TestHBaseTableProvider.class,
   TestOrderedBytesConvertFunctions.class
 })
-public class HBaseTestsSuite {
+public class HBaseTestsSuite extends BaseTest {
   static final org.slf4j.Logger logger = org.slf4j.LoggerFactory.getLogger(HBaseTestsSuite.class);
-
-  static {
-    GuavaPatcher.patch();
-  }
 
   private static final boolean IS_DEBUG = ManagementFactory.getRuntimeMXBean().getInputArguments().toString().indexOf("-agentlib:jdwp") > 0;
 

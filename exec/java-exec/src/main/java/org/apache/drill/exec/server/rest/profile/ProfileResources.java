@@ -27,6 +27,7 @@ import java.util.concurrent.TimeUnit;
 
 import javax.annotation.security.RolesAllowed;
 import javax.inject.Inject;
+import javax.servlet.http.HttpServletRequest;
 import javax.ws.rs.GET;
 import javax.ws.rs.Path;
 import javax.ws.rs.PathParam;
@@ -57,18 +58,30 @@ import org.apache.drill.exec.store.sys.PersistentStoreProvider;
 import org.apache.drill.exec.work.WorkManager;
 import org.apache.drill.exec.work.foreman.Foreman;
 import org.glassfish.jersey.server.mvc.Viewable;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.apache.drill.shaded.guava.com.google.common.base.Joiner;
 import org.apache.drill.shaded.guava.com.google.common.collect.Lists;
 
 @Path("/")
 @RolesAllowed(DrillUserPrincipal.AUTHENTICATED_ROLE)
 public class ProfileResources {
-  private static final org.slf4j.Logger logger = org.slf4j.LoggerFactory.getLogger(ProfileResources.class);
+  private static final Logger logger = LoggerFactory.getLogger(ProfileResources.class);
 
-  @Inject UserAuthEnabled authEnabled;
-  @Inject WorkManager work;
-  @Inject DrillUserPrincipal principal;
-  @Inject SecurityContext sc;
+  @Inject
+  UserAuthEnabled authEnabled;
+
+  @Inject
+  WorkManager work;
+
+  @Inject
+  DrillUserPrincipal principal;
+
+  @Inject
+  SecurityContext sc;
+
+  @Inject
+  HttpServletRequest request;
 
   public static class ProfileInfo implements Comparable<ProfileInfo> {
     private static final int QUERY_SNIPPET_MAX_CHAR = 150;
@@ -197,9 +210,9 @@ public class ProfileResources {
 
   @XmlRootElement
   public class QProfiles {
-    private List<ProfileInfo> runningQueries;
-    private List<ProfileInfo> finishedQueries;
-    private List<String> errors;
+    private final List<ProfileInfo> runningQueries;
+    private final List<ProfileInfo> finishedQueries;
+    private final List<String> errors;
 
     public QProfiles(List<ProfileInfo> runningQueries, List<ProfileInfo> finishedQueries, List<String> errors) {
       this.runningQueries = runningQueries;
@@ -231,7 +244,6 @@ public class ProfileResources {
   //max Param to cap listing of profiles
   private static final String MAX_QPROFILES_PARAM = "max";
 
-  @SuppressWarnings("resource")
   @GET
   @Path("/profiles.json")
   @Produces(MediaType.APPLICATION_JSON)
@@ -313,7 +325,6 @@ public class ProfileResources {
     return ViewableWithPermissions.create(authEnabled.get(), "/rest/profile/list.ftl", sc, profiles);
   }
 
-  @SuppressWarnings("resource")
   private QueryProfile getQueryProfile(String queryId) {
     QueryId id = QueryIdHelper.getQueryIdFromString(queryId);
 
@@ -359,7 +370,6 @@ public class ProfileResources {
     .build(logger);
   }
 
-
   @GET
   @Path("/profiles/{queryid}.json")
   @Produces(MediaType.APPLICATION_JSON)
@@ -377,7 +387,7 @@ public class ProfileResources {
   @Produces(MediaType.TEXT_HTML)
   public Viewable getProfile(@PathParam("queryid") String queryId){
     try {
-      ProfileWrapper wrapper = new ProfileWrapper(getQueryProfile(queryId), work.getContext().getConfig());
+      ProfileWrapper wrapper = new ProfileWrapper(getQueryProfile(queryId), work.getContext().getConfig(), request);
       return ViewableWithPermissions.create(authEnabled.get(), "/rest/profile/profile.ftl", sc, wrapper);
     } catch (Exception | Error e) {
       logger.error("Exception was thrown when fetching profile {} :\n{}", queryId, e);
@@ -385,7 +395,6 @@ public class ProfileResources {
     }
   }
 
-  @SuppressWarnings("resource")
   @GET
   @Path("/profiles/cancel/{queryid}")
   @Produces(MediaType.TEXT_PLAIN)
@@ -432,4 +441,3 @@ public class ProfileResources {
     }
   }
 }
-

@@ -18,14 +18,8 @@
 package org.apache.drill.exec.planner.sql.handlers;
 
 import java.io.IOException;
-import java.util.ArrayList;
-import java.util.List;
 import org.apache.calcite.rel.RelNode;
 import org.apache.calcite.rel.type.RelDataType;
-import org.apache.calcite.rel.type.RelDataTypeField;
-import org.apache.calcite.rex.RexBuilder;
-import org.apache.calcite.rex.RexNode;
-import org.apache.calcite.rex.RexUtil;
 import org.apache.calcite.schema.Table;
 import org.apache.calcite.sql.SqlIdentifier;
 import org.apache.calcite.sql.SqlNode;
@@ -42,11 +36,9 @@ import org.apache.drill.exec.physical.PhysicalPlan;
 import org.apache.drill.exec.physical.base.PhysicalOperator;
 import org.apache.drill.exec.planner.common.DrillStatsTable;
 import org.apache.drill.exec.planner.logical.DrillAnalyzeRel;
-import org.apache.drill.exec.planner.logical.DrillProjectRel;
 import org.apache.drill.exec.planner.logical.DrillRel;
 import org.apache.drill.exec.planner.logical.DrillScanRel;
 import org.apache.drill.exec.planner.logical.DrillScreenRel;
-import org.apache.drill.exec.planner.logical.DrillStoreRel;
 import org.apache.drill.exec.planner.logical.DrillTable;
 import org.apache.drill.exec.planner.logical.DrillWriterRel;
 import org.apache.drill.exec.planner.physical.Prel;
@@ -61,7 +53,6 @@ import org.apache.drill.exec.store.parquet.ParquetFormatConfig;
 import org.apache.drill.exec.util.Pointer;
 import org.apache.drill.exec.work.foreman.ForemanSetupException;
 import org.apache.drill.exec.work.foreman.SqlUnsupportedException;
-import org.apache.drill.shaded.guava.com.google.common.collect.Lists;
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.Path;
 
@@ -79,12 +70,12 @@ public class AnalyzeTableHandler extends DefaultSqlHandler {
 
     verifyNoUnsupportedFunctions(sqlAnalyzeTable);
 
-    SqlIdentifier tableIdentifier = sqlAnalyzeTable.getTableIdentifier();
+    SqlNode tableRef = sqlAnalyzeTable.getTableRef();
     SqlSelect scanSql = new SqlSelect(
         SqlParserPos.ZERO,              /* position */
         SqlNodeList.EMPTY,              /* keyword list */
         getColumnList(sqlAnalyzeTable), /* select list */
-        tableIdentifier,                /* from */
+        tableRef,                       /* from */
         null,                           /* where */
         null,                           /* group by */
         null,                           /* having */
@@ -94,13 +85,14 @@ public class AnalyzeTableHandler extends DefaultSqlHandler {
         null                            /* fetch */
     );
 
-    final ConvertedRelNode convertedRelNode = validateAndConvert(rewrite(scanSql));
-    final RelDataType validatedRowType = convertedRelNode.getValidatedRowType();
+    ConvertedRelNode convertedRelNode = validateAndConvert(rewrite(scanSql));
+    RelDataType validatedRowType = convertedRelNode.getValidatedRowType();
 
-    final RelNode relScan = convertedRelNode.getConvertedNode();
-    final String tableName = sqlAnalyzeTable.getName();
-    final AbstractSchema drillSchema = SchemaUtilites.resolveToDrillSchema(
-        config.getConverter().getDefaultSchema(), sqlAnalyzeTable.getSchemaPath());
+    RelNode relScan = convertedRelNode.getConvertedNode();
+    DrillTableInfo drillTableInfo = DrillTableInfo.getTableInfoHolder(sqlAnalyzeTable.getTableRef(), config);
+    String tableName = drillTableInfo.tableName();
+    AbstractSchema drillSchema = SchemaUtilites.resolveToDrillSchema(
+        config.getConverter().getDefaultSchema(), drillTableInfo.schemaPath());
     Table table = SqlHandlerUtil.getTableFromSchema(drillSchema, tableName);
 
     if (table == null) {
@@ -108,42 +100,36 @@ public class AnalyzeTableHandler extends DefaultSqlHandler {
           .message("No table with given name [%s] exists in schema [%s]", tableName,
               drillSchema.getFullSchemaName())
           .build(logger);
-    }
-
-    if(! (table instanceof DrillTable)) {
+    } else if (!(table instanceof DrillTable)) {
       return DrillStatsTable.notSupported(context, tableName);
     }
 
-    if (table instanceof DrillTable) {
-      DrillTable drillTable = (DrillTable) table;
-      final Object selection = drillTable.getSelection();
-      if (!(selection instanceof FormatSelection)) {
-        return DrillStatsTable.notSupported(context, tableName);
-      }
-      // Do not support non-parquet tables
-      FormatSelection formatSelection = (FormatSelection) selection;
-      FormatPluginConfig formatConfig = formatSelection.getFormat();
-      if (!((formatConfig instanceof ParquetFormatConfig)
-            || ((formatConfig instanceof NamedFormatPluginConfig)
-                 && ((NamedFormatPluginConfig) formatConfig).name.equals("parquet")))) {
-        return DrillStatsTable.notSupported(context, tableName);
-      }
+    DrillTable drillTable = (DrillTable) table;
+    final Object selection = drillTable.getSelection();
+    if (!(selection instanceof FormatSelection)) {
+      return DrillStatsTable.notSupported(context, tableName);
+    }
+    // Do not support non-parquet tables
+    FormatSelection formatSelection = (FormatSelection) selection;
+    FormatPluginConfig formatConfig = formatSelection.getFormat();
+    if (!((formatConfig instanceof ParquetFormatConfig)
+          || ((formatConfig instanceof NamedFormatPluginConfig)
+               && ((NamedFormatPluginConfig) formatConfig).getName().equals("parquet")))) {
+      return DrillStatsTable.notSupported(context, tableName);
+    }
 
-      FileSystemPlugin plugin = (FileSystemPlugin) drillTable.getPlugin();
-      DrillFileSystem fs = new DrillFileSystem(plugin.getFormatPlugin(
-          formatSelection.getFormat()).getFsConf());
+    FileSystemPlugin plugin = (FileSystemPlugin) drillTable.getPlugin();
+    DrillFileSystem fs = new DrillFileSystem(plugin.getFormatPlugin(
+        formatSelection.getFormat()).getFsConf());
 
-      String selectionRoot = formatSelection.getSelection().getSelectionRoot();
-      if (!selectionRoot.contains(tableName)
-          || !fs.getFileStatus(new Path(selectionRoot)).isDirectory()) {
-        return DrillStatsTable.notSupported(context, tableName);
-      }
-      // Do not recompute statistics, if stale
-      Path statsFilePath = new Path(new Path(selectionRoot), DotDrillType.STATS.getEnding());
-      if (fs.exists(statsFilePath)
-          && !isStatsStale(fs, statsFilePath)) {
-       return DrillStatsTable.notRequired(context, tableName);
-      }
+    Path selectionRoot = formatSelection.getSelection().getSelectionRoot();
+    if (!selectionRoot.toUri().getPath().endsWith(tableName) || !fs.getFileStatus(selectionRoot).isDirectory()) {
+      return DrillStatsTable.notSupported(context, tableName);
+    }
+    // Do not recompute statistics, if stale
+    Path statsFilePath = new Path(selectionRoot, DotDrillType.STATS.getEnding());
+    if (fs.exists(statsFilePath) && !isStatsStale(fs, statsFilePath)) {
+     return DrillStatsTable.notRequired(context, tableName);
     }
     // Convert the query to Drill Logical plan and insert a writer operator on top.
     DrillRel drel = convertToDrel(relScan, drillSchema, tableName, sqlAnalyzeTable.getSamplePercent());
@@ -165,13 +151,8 @@ public class AnalyzeTableHandler extends DefaultSqlHandler {
     Path parentPath = statsFilePath.getParent();
     FileStatus directoryStatus = fs.getFileStatus(parentPath);
     // Parent directory modified after stats collection?
-    if (directoryStatus.getModificationTime() > statsFileModifyTime) {
-      return true;
-    }
-    if (tableModified(fs, parentPath, statsFileModifyTime)) {
-      return true;
-    }
-    return false;
+    return directoryStatus.getModificationTime() > statsFileModifyTime ||
+        tableModified(fs, parentPath, statsFileModifyTime);
   }
 
   /* Determines if the table was modified after computing statistics based on
@@ -185,10 +166,8 @@ public class AnalyzeTableHandler extends DefaultSqlHandler {
         return true;
       }
       // For a directory, we should recursively check sub-directories
-      if (file.isDirectory()) {
-        if (tableModified(fs, file.getPath(), statsModificationTime)) {
-          return true;
-        }
+      if (file.isDirectory() && tableModified(fs, file.getPath(), statsModificationTime)) {
+        return true;
       }
     }
     return false;
@@ -215,36 +194,8 @@ public class AnalyzeTableHandler extends DefaultSqlHandler {
 
   /* Converts to Drill logical plan */
   protected DrillRel convertToDrel(RelNode relNode, AbstractSchema schema, String analyzeTableName,
-      double samplePercent)
-      throws RelConversionException, SqlUnsupportedException {
+      double samplePercent) throws SqlUnsupportedException {
     DrillRel convertedRelNode = convertToRawDrel(relNode);
-
-    if (convertedRelNode instanceof DrillStoreRel) {
-      throw new UnsupportedOperationException();
-    }
-
-    if (convertedRelNode instanceof DrillProjectRel) {
-      DrillProjectRel projectRel = (DrillProjectRel) convertedRelNode;
-      DrillScanRel scanRel = findScan(projectRel);
-      List<RelDataTypeField> fields = Lists.newArrayList();
-      RexBuilder b = projectRel.getCluster().getRexBuilder();
-      List<RexNode> projections = Lists.newArrayList();
-      // Get the original scan column names - after projection pushdown they should refer to the full col names
-      List<String> fieldNames = new ArrayList<>();
-      List<RelDataTypeField> fieldTypes = projectRel.getRowType().getFieldList();
-      for (SchemaPath colPath : scanRel.getGroupScan().getColumns()) {
-        fieldNames.add(colPath.toString());
-      }
-      for (int i =0; i < fieldTypes.size(); i++) {
-        projections.add(b.makeInputRef(projectRel, i));
-      }
-      // Get the projection row-types
-      RelDataType newRowType = RexUtil.createStructType(projectRel.getCluster().getTypeFactory(),
-              projections, fieldNames, null);
-      DrillProjectRel renamedProject = DrillProjectRel.create(convertedRelNode.getCluster(),
-              convertedRelNode.getTraitSet(), convertedRelNode, projections, newRowType);
-      convertedRelNode = renamedProject;
-    }
 
     final RelNode analyzeRel = new DrillAnalyzeRel(
         convertedRelNode.getCluster(), convertedRelNode.getTraitSet(), convertedRelNode, samplePercent);
@@ -259,12 +210,15 @@ public class AnalyzeTableHandler extends DefaultSqlHandler {
     return new DrillScreenRel(writerRel.getCluster(), writerRel.getTraitSet(), writerRel);
   }
 
-  private DrillScanRel findScan(RelNode rel) {
-    if (rel instanceof DrillScanRel) {
-      return (DrillScanRel) rel;
-    } else {
-      return findScan(rel.getInput(0));
+  public static DrillScanRel findScan(RelNode... rels) {
+    for (RelNode rel : rels) {
+      if (rel instanceof DrillScanRel) {
+        return (DrillScanRel) rel;
+      } else {
+        return findScan(rel.getInputs().toArray(new RelNode[0]));
+      }
     }
+    return null;
   }
   // Make sure no unsupported features in ANALYZE statement are used
   private static void verifyNoUnsupportedFunctions(final SqlAnalyzeTable analyzeTable) {

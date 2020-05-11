@@ -17,6 +17,7 @@
  */
 package org.apache.drill.exec.physical.impl.join;
 
+import org.apache.drill.exec.record.metadata.TupleMetadata;
 import org.apache.drill.shaded.guava.com.google.common.collect.Lists;
 import org.apache.calcite.rel.core.JoinRelType;
 import org.apache.calcite.sql.SqlKind;
@@ -33,9 +34,8 @@ import org.apache.drill.exec.record.BatchSchema;
 import org.apache.drill.exec.record.RecordBatch;
 import org.apache.drill.exec.record.VectorContainer;
 import org.apache.drill.exec.record.metadata.SchemaBuilder;
-import org.apache.drill.exec.record.metadata.TupleSchema;
 import org.apache.drill.exec.store.mock.MockStorePOP;
-import org.apache.drill.test.rowSet.RowSet;
+import org.apache.drill.exec.physical.rowSet.RowSet;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.BeforeClass;
@@ -45,7 +45,7 @@ import org.junit.experimental.categories.Category;
 import java.util.ArrayList;
 import java.util.List;
 
-import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.assertSame;
 
 /**
  *  Unit tests of the Hash Join getting various outcomes as input
@@ -56,14 +56,14 @@ public class TestHashJoinOutcome extends PhysicalOpUnitTestBase {
   // private static final org.slf4j.Logger logger = org.slf4j.LoggerFactory.getLogger(TestHashJoinOutcome.class);
 
   // input batch schemas
-  private static TupleSchema inputSchemaRight;
-  private static TupleSchema inputSchemaLeft;
+  private static TupleMetadata inputSchemaRight;
+  private static TupleMetadata inputSchemaLeft;
   private static BatchSchema batchSchemaRight;
   private static BatchSchema batchSchemaLeft;
 
   // Input containers -- where row count is not set for the 2nd container !!
-  private List<VectorContainer> uninitialized2ndInputContainersRight = new ArrayList<>(5);
-  private List<VectorContainer> uninitialized2ndInputContainersLeft = new ArrayList<>(5);
+  private final List<VectorContainer> uninitialized2ndInputContainersRight = new ArrayList<>(5);
+  private final List<VectorContainer> uninitialized2ndInputContainersLeft = new ArrayList<>(5);
 
   private RowSet.SingleRowSet emptyInputRowSetRight;
   private RowSet.SingleRowSet emptyInputRowSetLeft;
@@ -82,14 +82,14 @@ public class TestHashJoinOutcome extends PhysicalOpUnitTestBase {
 
   @BeforeClass
   public static void setUpBeforeClass() {
-    inputSchemaRight = (TupleSchema) new SchemaBuilder()
+    inputSchemaRight = new SchemaBuilder()
       .add("rightcol", TypeProtos.MinorType.INT)
       .buildSchema();
-    batchSchemaRight = inputSchemaRight.toBatchSchema(BatchSchema.SelectionVectorMode.NONE);
-    inputSchemaLeft = (TupleSchema) new SchemaBuilder()
+    batchSchemaRight = new BatchSchema(BatchSchema.SelectionVectorMode.NONE, inputSchemaRight.toFieldList());
+    inputSchemaLeft = new SchemaBuilder()
       .add("leftcol", TypeProtos.MinorType.INT)
       .buildSchema();
-    batchSchemaLeft = inputSchemaLeft.toBatchSchema(BatchSchema.SelectionVectorMode.NONE);
+    batchSchemaLeft = new BatchSchema(BatchSchema.SelectionVectorMode.NONE, inputSchemaLeft.toFieldList());
   }
 
   private void prepareUninitContainers(List<VectorContainer> emptyInputContainers,
@@ -184,20 +184,10 @@ public class TestHashJoinOutcome extends PhysicalOpUnitTestBase {
     HashJoinBatch hjBatch = new HashJoinBatch(hjConf,operatorFixture.getFragmentContext(), mockInputBatchLeft, mockInputBatchRight );
 
     RecordBatch.IterOutcome gotOutcome = hjBatch.next();
-    assertTrue(gotOutcome == RecordBatch.IterOutcome.OK_NEW_SCHEMA );
+    assertSame(gotOutcome, RecordBatch.IterOutcome.OK_NEW_SCHEMA);
 
     gotOutcome = hjBatch.next();
-    assertTrue(gotOutcome == expectedOutcome); // verify returned outcome
-  }
-
-  @Test
-  public void testHashJoinStopOutcomeUninitRightSide() {
-    testHashJoinOutcomes(UninitializedSide.Right, RecordBatch.IterOutcome.STOP, RecordBatch.IterOutcome.STOP);
-  }
-
-  @Test
-  public void testHashJoinStopOutcomeUninitLeftSide() {
-    testHashJoinOutcomes(UninitializedSide.Left, RecordBatch.IterOutcome.STOP, RecordBatch.IterOutcome.STOP);
+    assertSame(gotOutcome, expectedOutcome); // verify returned outcome
   }
 
   @Test
@@ -243,10 +233,10 @@ public class TestHashJoinOutcome extends PhysicalOpUnitTestBase {
     HashJoinBatch hjBatch = new HashJoinBatch(hjConf, operatorFixture.getFragmentContext(), mockInputBatchLeft, mockInputBatchRight);
 
     RecordBatch.IterOutcome gotOutcome = hjBatch.next();
-    assertTrue(gotOutcome == RecordBatch.IterOutcome.OK_NEW_SCHEMA);
+    assertSame(gotOutcome, RecordBatch.IterOutcome.OK_NEW_SCHEMA);
 
     gotOutcome = hjBatch.next();
-    assertTrue(gotOutcome == RecordBatch.IterOutcome.NONE);
+    assertSame(gotOutcome, RecordBatch.IterOutcome.NONE);
 
     secondInputRowSetRight.clear();
     thirdInputRowSetRight.clear();

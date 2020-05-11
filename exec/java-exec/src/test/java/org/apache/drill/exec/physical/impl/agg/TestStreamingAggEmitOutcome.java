@@ -24,12 +24,11 @@ import org.apache.drill.exec.physical.config.StreamingAggregate;
 import org.apache.drill.exec.physical.impl.BaseTestOpBatchEmitOutcome;
 import org.apache.drill.exec.physical.impl.MockRecordBatch;
 import org.apache.drill.exec.physical.impl.aggregate.StreamingAggBatch;
-import org.apache.drill.exec.record.BatchSchema;
 import org.apache.drill.exec.record.RecordBatch;
 import org.apache.drill.exec.record.metadata.SchemaBuilder;
 import org.apache.drill.exec.record.metadata.TupleMetadata;
-import org.apache.drill.test.rowSet.DirectRowSet;
-import org.apache.drill.test.rowSet.RowSet;
+import org.apache.drill.exec.physical.rowSet.DirectRowSet;
+import org.apache.drill.exec.physical.rowSet.RowSet;
 import org.apache.drill.test.rowSet.RowSetComparison;
 import org.junit.BeforeClass;
 import org.junit.Test;
@@ -78,8 +77,7 @@ public class TestStreamingAggEmitOutcome extends BaseTestOpBatchEmitOutcome {
 
     final StreamingAggregate streamAggrConfig = new StreamingAggregate(null,
       parseExprs("name_left", "name"),
-      parseExprs("sum(id_left+cost_left)", "total_sum"),
-      1.0f);
+      parseExprs("sum(id_left+cost_left)", "total_sum"));
 
     final StreamingAggBatch strAggBatch = new StreamingAggBatch(streamAggrConfig, mockInputBatch,
       operatorFixture.getFragmentContext());
@@ -126,8 +124,7 @@ public class TestStreamingAggEmitOutcome extends BaseTestOpBatchEmitOutcome {
 
     final StreamingAggregate streamAggrConfig = new StreamingAggregate(null,
       parseExprs("name_left", "name"),
-      parseExprs("sum(id_left+cost_left)", "total_sum"),
-      1.0f);
+      parseExprs("sum(id_left+cost_left)", "total_sum"));
 
     final StreamingAggBatch strAggBatch = new StreamingAggBatch(streamAggrConfig, mockInputBatch,
       operatorFixture.getFragmentContext());
@@ -182,8 +179,7 @@ public class TestStreamingAggEmitOutcome extends BaseTestOpBatchEmitOutcome {
 
     final StreamingAggregate streamAggrConfig = new StreamingAggregate(null,
       parseExprs("name_left", "name"),
-      parseExprs("sum(id_left+cost_left)", "total_sum"),
-      1.0f);
+      parseExprs("sum(id_left+cost_left)", "total_sum"));
 
     final StreamingAggBatch strAggBatch = new StreamingAggBatch(streamAggrConfig, mockInputBatch,
       operatorFixture.getFragmentContext());
@@ -242,8 +238,7 @@ public class TestStreamingAggEmitOutcome extends BaseTestOpBatchEmitOutcome {
 
     final StreamingAggregate streamAggrConfig = new StreamingAggregate(null,
       parseExprs("name_left", "name"),
-      parseExprs("sum(id_left+cost_left)", "total_sum"),
-      1.0f);
+      parseExprs("sum(id_left+cost_left)", "total_sum"));
 
     final StreamingAggBatch strAggBatch = new StreamingAggBatch(streamAggrConfig, mockInputBatch,
       operatorFixture.getFragmentContext());
@@ -321,8 +316,7 @@ public class TestStreamingAggEmitOutcome extends BaseTestOpBatchEmitOutcome {
 
     final StreamingAggregate streamAggrConfig = new StreamingAggregate(null,
       parseExprs("name_left", "name"),
-      parseExprs("sum(id_left+cost_left)", "total_sum"),
-      1.0f);
+      parseExprs("sum(id_left+cost_left)", "total_sum"));
 
     final StreamingAggBatch strAggBatch = new StreamingAggBatch(streamAggrConfig, mockInputBatch,
       operatorFixture.getFragmentContext());
@@ -397,8 +391,7 @@ public class TestStreamingAggEmitOutcome extends BaseTestOpBatchEmitOutcome {
 
     final StreamingAggregate streamAggrConfig = new StreamingAggregate(null,
       parseExprs("name_left", "name"),
-      parseExprs("sum(id_left+cost_left)", "total_sum"),
-      1.0f);
+      parseExprs("sum(id_left+cost_left)", "total_sum"));
 
     final StreamingAggBatch strAggBatch = new StreamingAggBatch(streamAggrConfig, mockInputBatch,
       operatorFixture.getFragmentContext());
@@ -454,8 +447,7 @@ public class TestStreamingAggEmitOutcome extends BaseTestOpBatchEmitOutcome {
 
     final StreamingAggregate streamAggrConfig = new StreamingAggregate(null,
       parseExprs("name_left", "name"),
-      parseExprs("sum(id_left+cost_left)", "total_sum"),
-      1.0f);
+      parseExprs("sum(id_left+cost_left)", "total_sum"));
 
     final StreamingAggBatch strAggBatch = new StreamingAggBatch(streamAggrConfig, mockInputBatch,
       operatorFixture.getFragmentContext());
@@ -506,8 +498,7 @@ public class TestStreamingAggEmitOutcome extends BaseTestOpBatchEmitOutcome {
 
     final StreamingAggregate streamAggrConfig = new StreamingAggregate(null,
       parseExprs("name_left", "name"),
-      parseExprs("sum(id_left+cost_left)", "total_sum"),
-      1.0f);
+      parseExprs("sum(id_left+cost_left)", "total_sum"));
 
     final StreamingAggBatch strAggBatch = new StreamingAggBatch(streamAggrConfig, mockInputBatch,
       operatorFixture.getFragmentContext());
@@ -585,8 +576,7 @@ public class TestStreamingAggEmitOutcome extends BaseTestOpBatchEmitOutcome {
 
     final StreamingAggregate streamAggrConfig = new StreamingAggregate(null,
       parseExprs("name_left", "name", "id_left", "id"),
-      parseExprs("count(cost_left)", "total_count"),
-      1.0f);
+      parseExprs("count(cost_left)", "total_count"));
 
     final StreamingAggBatch strAggBatch = new StreamingAggBatch(streamAggrConfig, mockInputBatch,
       operatorFixture.getFragmentContext());
@@ -705,8 +695,7 @@ public class TestStreamingAggEmitOutcome extends BaseTestOpBatchEmitOutcome {
 
     final StreamingAggregate streamAggrConfig = new StreamingAggregate(null,
       parseExprs("name_left", "name", "id_left", "id"),
-      parseExprs("count(cost_left)", "total_count"),
-      1.0f);
+      parseExprs("count(cost_left)", "total_count"));
 
     final StreamingAggBatch strAggBatch = new StreamingAggBatch(streamAggrConfig, mockInputBatch,
       operatorFixture.getFragmentContext());
@@ -805,8 +794,7 @@ public class TestStreamingAggEmitOutcome extends BaseTestOpBatchEmitOutcome {
 
     final StreamingAggregate streamAggrConfig = new StreamingAggregate(null,
       parseExprs("name_left", "name"),
-      parseExprs("sum(id_left+cost_left)", "total_sum"),
-      1.0f);
+      parseExprs("sum(id_left+cost_left)", "total_sum"));
 
     final StreamingAggBatch strAggBatch = new StreamingAggBatch(streamAggrConfig, mockInputBatch,
       operatorFixture.getFragmentContext());
@@ -836,8 +824,7 @@ public class TestStreamingAggEmitOutcome extends BaseTestOpBatchEmitOutcome {
 
     final StreamingAggregate streamAggrConfig = new StreamingAggregate(null,
         parseExprs("name_left", "name"),
-        parseExprs("sum(id_left+cost_left)", "total_sum"),
-      1.0f);
+        parseExprs("sum(id_left+cost_left)", "total_sum"));
 
     final StreamingAggBatch strAggBatch = new StreamingAggBatch(streamAggrConfig, mockInputBatch,
       operatorFixture.getFragmentContext());
@@ -899,8 +886,7 @@ public class TestStreamingAggEmitOutcome extends BaseTestOpBatchEmitOutcome {
 
     final StreamingAggregate streamAggrConfig = new StreamingAggregate(null,
       parseExprs("name_left", "name", "id_left", "id"),
-      parseExprs("count(cost_left)", "total_count"),
-      1.0f);
+      parseExprs("count(cost_left)", "total_count"));
 
     final StreamingAggBatch strAggBatch = new StreamingAggBatch(streamAggrConfig, mockInputBatch,
       operatorFixture.getFragmentContext());
@@ -952,8 +938,7 @@ public class TestStreamingAggEmitOutcome extends BaseTestOpBatchEmitOutcome {
 
     final StreamingAggregate streamAggrConfig = new StreamingAggregate(null,
         new ArrayList<NamedExpression>(),
-        parseExprs("sum(id_left+cost_left)", "total_sum"),
-        1.0f);
+        parseExprs("sum(id_left+cost_left)", "total_sum"));
 
     final StreamingAggBatch strAggBatch = new StreamingAggBatch(streamAggrConfig, mockInputBatch,
         operatorFixture.getFragmentContext());
@@ -995,8 +980,7 @@ public class TestStreamingAggEmitOutcome extends BaseTestOpBatchEmitOutcome {
 
     final StreamingAggregate streamAggrConfig = new StreamingAggregate(null,
         new ArrayList<NamedExpression>(),
-        parseExprs("sum(id_left+cost_left)", "total_sum"),
-        1.0f);
+        parseExprs("sum(id_left+cost_left)", "total_sum"));
 
     final StreamingAggBatch strAggBatch = new StreamingAggBatch(streamAggrConfig, mockInputBatch,
         operatorFixture.getFragmentContext());
@@ -1052,8 +1036,7 @@ public class TestStreamingAggEmitOutcome extends BaseTestOpBatchEmitOutcome {
 
     final StreamingAggregate streamAggrConfig = new StreamingAggregate(null,
         new ArrayList<NamedExpression>(),
-        parseExprs("sum(id_left+cost_left)", "total_sum"),
-        1.0f);
+        parseExprs("sum(id_left+cost_left)", "total_sum"));
 
     final StreamingAggBatch strAggBatch = new StreamingAggBatch(streamAggrConfig, mockInputBatch,
         operatorFixture.getFragmentContext());
@@ -1113,8 +1096,7 @@ public class TestStreamingAggEmitOutcome extends BaseTestOpBatchEmitOutcome {
 
     final StreamingAggregate streamAggrConfig = new StreamingAggregate(null,
         new ArrayList<NamedExpression>(),
-        parseExprs("sum(id_left+cost_left)", "total_sum"),
-        1.0f);
+        parseExprs("sum(id_left+cost_left)", "total_sum"));
 
     final StreamingAggBatch strAggBatch = new StreamingAggBatch(streamAggrConfig, mockInputBatch,
         operatorFixture.getFragmentContext());
@@ -1186,8 +1168,7 @@ public class TestStreamingAggEmitOutcome extends BaseTestOpBatchEmitOutcome {
 
     final StreamingAggregate streamAggrConfig = new StreamingAggregate(null,
         new ArrayList<NamedExpression>(),
-        parseExprs("sum(id_left+cost_left)", "total_sum"),
-        1.0f);
+        parseExprs("sum(id_left+cost_left)", "total_sum"));
 
     final StreamingAggBatch strAggBatch = new StreamingAggBatch(streamAggrConfig, mockInputBatch,
         operatorFixture.getFragmentContext());
@@ -1253,8 +1234,7 @@ public class TestStreamingAggEmitOutcome extends BaseTestOpBatchEmitOutcome {
 
     final StreamingAggregate streamAggrConfig = new StreamingAggregate(null,
         new ArrayList<NamedExpression>(),
-        parseExprs("sum(id_left+cost_left)", "total_sum"),
-        1.0f);
+        parseExprs("sum(id_left+cost_left)", "total_sum"));
 
     final StreamingAggBatch strAggBatch = new StreamingAggBatch(streamAggrConfig, mockInputBatch,
         operatorFixture.getFragmentContext());
@@ -1310,8 +1290,7 @@ public class TestStreamingAggEmitOutcome extends BaseTestOpBatchEmitOutcome {
 
     final StreamingAggregate streamAggrConfig = new StreamingAggregate(null,
         new ArrayList<NamedExpression>(),
-        parseExprs("sum(id_left+cost_left)", "total_sum"),
-        1.0f);
+        parseExprs("sum(id_left+cost_left)", "total_sum"));
 
     final StreamingAggBatch strAggBatch = new StreamingAggBatch(streamAggrConfig, mockInputBatch,
         operatorFixture.getFragmentContext());
@@ -1360,9 +1339,8 @@ public class TestStreamingAggEmitOutcome extends BaseTestOpBatchEmitOutcome {
         inputContainer, inputOutcomes, emptyInputRowSet.container().getSchema());
 
     final StreamingAggregate streamAggrConfig = new StreamingAggregate(null,
-        new ArrayList<NamedExpression>(),
-        parseExprs("sum(id_left+cost_left)", "total_sum"),
-        1.0f);
+        new ArrayList<>(),
+        parseExprs("sum(id_left+cost_left)", "total_sum"));
 
     final StreamingAggBatch strAggBatch = new StreamingAggBatch(streamAggrConfig, mockInputBatch,
         operatorFixture.getFragmentContext());
@@ -1428,9 +1406,8 @@ public class TestStreamingAggEmitOutcome extends BaseTestOpBatchEmitOutcome {
         inputContainer, inputOutcomes, emptyInputRowSet.container().getSchema());
 
     final StreamingAggregate streamAggrConfig = new StreamingAggregate(null,
-        new ArrayList<NamedExpression>(),
-        parseExprs("sum(id_left+cost_left)", "total_sum"),
-        1.0f);
+        new ArrayList<>(),
+        parseExprs("sum(id_left+cost_left)", "total_sum"));
 
     final StreamingAggBatch strAggBatch = new StreamingAggBatch(streamAggrConfig, mockInputBatch,
         operatorFixture.getFragmentContext());
@@ -1462,9 +1439,8 @@ public class TestStreamingAggEmitOutcome extends BaseTestOpBatchEmitOutcome {
         inputContainer, inputOutcomes, emptyInputRowSet.container().getSchema());
 
     final StreamingAggregate streamAggrConfig = new StreamingAggregate(null,
-        new ArrayList<NamedExpression>(),
-        parseExprs("sum(id_left+cost_left)", "total_sum"),
-        1.0f);
+        new ArrayList<>(),
+        parseExprs("sum(id_left+cost_left)", "total_sum"));
 
     final StreamingAggBatch strAggBatch = new StreamingAggBatch(streamAggrConfig, mockInputBatch,
         operatorFixture.getFragmentContext());
@@ -1483,7 +1459,6 @@ public class TestStreamingAggEmitOutcome extends BaseTestOpBatchEmitOutcome {
       .add("id_left", TypeProtos.MinorType.INT)
       .add("cost_left", TypeProtos.MinorType.INT)
       .add("name_left", TypeProtos.MinorType.VARCHAR)
-      .withSVMode(BatchSchema.SelectionVectorMode.TWO_BYTE)
       .buildSchema();
 
     final RowSet.SingleRowSet emptyRowSet_Sv2 = operatorFixture.rowSetBuilder(inputSchema_sv2)
@@ -1521,9 +1496,8 @@ public class TestStreamingAggEmitOutcome extends BaseTestOpBatchEmitOutcome {
       inputContainer, inputOutcomes, inputContainerSv2, inputContainer.get(0).getSchema());
 
     final StreamingAggregate streamAggrConfig = new StreamingAggregate(null,
-      new ArrayList<NamedExpression>(),
-      parseExprs("sum(id_left+cost_left)", "total_sum"),
-      1.0f);
+      new ArrayList<>(),
+      parseExprs("sum(id_left+cost_left)", "total_sum"));
 
     final StreamingAggBatch strAggBatch = new StreamingAggBatch(streamAggrConfig, mockInputBatch,
       operatorFixture.getFragmentContext());
@@ -1581,9 +1555,8 @@ public class TestStreamingAggEmitOutcome extends BaseTestOpBatchEmitOutcome {
       inputContainer, inputOutcomes, inputContainer.get(0).getSchema());
 
     final StreamingAggregate streamAggrConfig = new StreamingAggregate(null,
-      new ArrayList<NamedExpression>(),
-      parseExprs("sum(id_left+cost_left)", "total_sum"),
-      1.0f);
+      new ArrayList<>(),
+      parseExprs("sum(id_left+cost_left)", "total_sum"));
 
     final StreamingAggBatch strAggBatch = new StreamingAggBatch(streamAggrConfig, mockInputBatch,
       operatorFixture.getFragmentContext());

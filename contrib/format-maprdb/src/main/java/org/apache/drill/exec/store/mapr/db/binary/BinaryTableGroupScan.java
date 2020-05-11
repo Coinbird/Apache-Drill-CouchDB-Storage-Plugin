@@ -19,10 +19,10 @@ package org.apache.drill.exec.store.mapr.db.binary;
 
 import static org.apache.drill.exec.store.mapr.db.util.CommonFns.isNullOrEmpty;
 
-import java.io.IOException;
 import java.util.List;
 import java.util.TreeMap;
 
+import com.fasterxml.jackson.annotation.JsonCreator;
 import org.apache.calcite.rel.RelNode;
 import org.apache.calcite.rex.RexNode;
 import org.apache.drill.common.exceptions.DrillRuntimeException;
@@ -32,6 +32,7 @@ import org.apache.drill.exec.physical.base.GroupScan;
 import org.apache.drill.exec.physical.base.PhysicalOperator;
 import org.apache.drill.exec.physical.base.ScanStats;
 import org.apache.drill.exec.physical.base.ScanStats.GroupScanProperty;
+import org.apache.drill.exec.record.metadata.TupleMetadata;
 import org.apache.drill.exec.store.AbstractStoragePlugin;
 import org.apache.drill.exec.planner.index.Statistics;
 import org.apache.drill.exec.store.StoragePluginRegistry;
@@ -46,6 +47,9 @@ import org.apache.drill.exec.store.mapr.db.MapRDBSubScan;
 import org.apache.drill.exec.store.mapr.db.MapRDBSubScanSpec;
 import org.apache.drill.exec.store.mapr.db.MapRDBTableStats;
 import org.apache.drill.exec.store.mapr.db.TabletFragmentInfo;
+import org.apache.drill.exec.metastore.store.FileSystemMetadataProviderManager;
+import org.apache.drill.exec.metastore.MetadataProviderManager;
+import org.apache.drill.metastore.metadata.TableMetadataProvider;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.HRegionInfo;
 import org.apache.hadoop.hbase.HRegionLocation;
@@ -53,21 +57,22 @@ import org.apache.hadoop.hbase.HTableDescriptor;
 import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.client.Admin;
 import org.apache.hadoop.hbase.client.RegionLocator;
-import org.codehaus.jackson.annotate.JsonCreator;
 
 import com.fasterxml.jackson.annotation.JacksonInject;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.annotation.JsonTypeName;
 import org.apache.drill.shaded.guava.com.google.common.base.Preconditions;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 @JsonTypeName("maprdb-binary-scan")
 public class BinaryTableGroupScan extends MapRDBGroupScan implements DrillHBaseConstants {
-  static final org.slf4j.Logger logger = org.slf4j.LoggerFactory.getLogger(BinaryTableGroupScan.class);
+  private static final Logger logger = LoggerFactory.getLogger(BinaryTableGroupScan.class);
 
   public static final String TABLE_BINARY = "binary";
 
-  private HBaseScanSpec hbaseScanSpec;
+  private final HBaseScanSpec hbaseScanSpec;
 
   private HTableDescriptor hTableDesc;
 
@@ -79,24 +84,24 @@ public class BinaryTableGroupScan extends MapRDBGroupScan implements DrillHBaseC
                               @JsonProperty("storage") FileSystemConfig storagePluginConfig,
                               @JsonProperty("format") MapRDBFormatPluginConfig formatPluginConfig,
                               @JsonProperty("columns") List<SchemaPath> columns,
-                              @JacksonInject StoragePluginRegistry pluginRegistry) throws IOException, ExecutionSetupException {
-    this (userName,
-          (AbstractStoragePlugin) pluginRegistry.getPlugin(storagePluginConfig),
-          (MapRDBFormatPlugin) pluginRegistry.getFormatPlugin(storagePluginConfig, formatPluginConfig),
-          scanSpec, columns);
+                              @JsonProperty("schema") TupleMetadata schema,
+                              @JacksonInject StoragePluginRegistry pluginRegistry) throws ExecutionSetupException {
+    this(userName, pluginRegistry.resolve(storagePluginConfig, AbstractStoragePlugin.class),
+        pluginRegistry.resolveFormat(storagePluginConfig, formatPluginConfig, MapRDBFormatPlugin.class),
+        scanSpec, columns, null /* tableStats */, FileSystemMetadataProviderManager.getMetadataProviderForSchema(schema));
   }
 
   public BinaryTableGroupScan(String userName, AbstractStoragePlugin storagePlugin,
-      MapRDBFormatPlugin formatPlugin, HBaseScanSpec scanSpec, List<SchemaPath> columns) {
-    super(storagePlugin, formatPlugin, columns, userName);
-    this.hbaseScanSpec = scanSpec;
-    init();
+      MapRDBFormatPlugin formatPlugin, HBaseScanSpec scanSpec, List<SchemaPath> columns,
+      MetadataProviderManager metadataProviderManager) {
+    this(userName, storagePlugin, formatPlugin, scanSpec,
+        columns, null /* tableStats */, FileSystemMetadataProviderManager.getMetadataProvider(metadataProviderManager));
   }
 
   public BinaryTableGroupScan(String userName, AbstractStoragePlugin storagePlugin,
-                              MapRDBFormatPlugin formatPlugin, HBaseScanSpec scanSpec,
-                              List<SchemaPath> columns, MapRDBTableStats tableStats) {
-    super(storagePlugin, formatPlugin, columns, userName);
+      MapRDBFormatPlugin formatPlugin, HBaseScanSpec scanSpec,
+      List<SchemaPath> columns, MapRDBTableStats tableStats, TableMetadataProvider metadataProvider) {
+    super(storagePlugin, formatPlugin, columns, userName, metadataProvider);
     this.hbaseScanSpec = scanSpec;
     this.tableStats = tableStats;
     init();
@@ -133,7 +138,7 @@ public class BinaryTableGroupScan extends MapRDBGroupScan implements DrillHBaseC
         tableStats = new MapRDBTableStats(getHBaseConf(), hbaseScanSpec.getTableName());
       }
       boolean foundStartRegion = false;
-      final TreeMap<TabletFragmentInfo, String> regionsToScan = new TreeMap<TabletFragmentInfo, String>();
+      final TreeMap<TabletFragmentInfo, String> regionsToScan = new TreeMap<>();
       List<HRegionLocation> regionLocations = locator.getAllRegionLocations();
       for (HRegionLocation regionLocation : regionLocations) {
         HRegionInfo regionInfo = regionLocation.getRegionInfo();
@@ -154,9 +159,10 @@ public class BinaryTableGroupScan extends MapRDBGroupScan implements DrillHBaseC
   }
 
 
+  @Override
   protected MapRDBSubScanSpec getSubScanSpec(TabletFragmentInfo tfi) {
     HBaseScanSpec spec = hbaseScanSpec;
-    MapRDBSubScanSpec subScanSpec = new MapRDBSubScanSpec(
+    return new MapRDBSubScanSpec(
         spec.getTableName(),
         null /* indexFid */,
         getRegionsToScan().get(tfi),
@@ -165,7 +171,6 @@ public class BinaryTableGroupScan extends MapRDBGroupScan implements DrillHBaseC
         spec.getSerializedFilter(),
         null,
         getUserName());
-    return subScanSpec;
   }
 
   @Override
@@ -173,7 +178,7 @@ public class BinaryTableGroupScan extends MapRDBGroupScan implements DrillHBaseC
     assert minorFragmentId < endpointFragmentMapping.size() : String.format(
         "Mappings length [%d] should be greater than minor fragment id [%d] but it isn't.", endpointFragmentMapping.size(),
         minorFragmentId);
-    return new MapRDBSubScan(getUserName(), formatPlugin, endpointFragmentMapping.get(minorFragmentId), columns, TABLE_BINARY);
+    return new MapRDBSubScan(getUserName(), formatPlugin, endpointFragmentMapping.get(minorFragmentId), columns, TABLE_BINARY, getSchema());
   }
 
   @Override

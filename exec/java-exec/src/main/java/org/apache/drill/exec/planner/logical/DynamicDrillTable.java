@@ -17,6 +17,8 @@
  */
 package org.apache.drill.exec.planner.logical;
 
+import org.apache.calcite.schema.Schema;
+import org.apache.drill.exec.metastore.MetadataProviderManager;
 import org.apache.drill.exec.planner.types.RelDataTypeDrillImpl;
 import org.apache.drill.exec.planner.types.RelDataTypeHolder;
 import org.apache.drill.exec.store.StoragePlugin;
@@ -24,18 +26,22 @@ import org.apache.calcite.rel.type.RelDataType;
 import org.apache.calcite.rel.type.RelDataTypeFactory;
 
 public class DynamicDrillTable extends DrillTable{
-  static final org.slf4j.Logger logger = org.slf4j.LoggerFactory.getLogger(DynamicDrillTable.class);
 
-  private RelDataTypeHolder holder = new RelDataTypeHolder();
+  private final RelDataTypeHolder holder = new RelDataTypeHolder();
 
   public DynamicDrillTable(StoragePlugin plugin, String storageEngineName, String userName, Object selection) {
     super(storageEngineName, plugin, userName, selection);
   }
 
+  public DynamicDrillTable(StoragePlugin plugin, String storageEngineName, String userName, Object selection, MetadataProviderManager metadataProviderManager) {
+    super(storageEngineName, plugin, Schema.TableType.TABLE, userName, selection, metadataProviderManager);
+  }
+
   /**
-   * TODO: Same purpose as other constructor except the impersonation user is the user who is running the Drillbit
-   * process. Once we add impersonation to non-FileSystem storage plugins such as Hive, HBase etc,
-   * we can remove this constructor.
+   * TODO: Same purpose as other constructor except the impersonation user is
+   * the user who is running the Drillbit process. Once we add impersonation to
+   * non-FileSystem storage plugins such as Hive, HBase etc, we can remove this
+   * constructor.
    */
   public DynamicDrillTable(StoragePlugin plugin, String storageEngineName, Object selection) {
     super(storageEngineName, plugin, selection);

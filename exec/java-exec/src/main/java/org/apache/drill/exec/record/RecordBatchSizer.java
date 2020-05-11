@@ -37,8 +37,8 @@ import org.apache.drill.exec.vector.UInt4Vector;
 import org.apache.drill.exec.vector.UntypedNullVector;
 import org.apache.drill.exec.vector.ValueVector;
 import org.apache.drill.exec.vector.complex.AbstractMapVector;
+import org.apache.drill.exec.vector.complex.AbstractRepeatedMapVector;
 import org.apache.drill.exec.vector.complex.RepeatedListVector;
-import org.apache.drill.exec.vector.complex.RepeatedMapVector;
 import org.apache.drill.exec.vector.complex.RepeatedValueVector;
 import org.apache.drill.exec.vector.VariableWidthVector;
 
@@ -59,7 +59,7 @@ public class RecordBatchSizer {
 
   public static long multiplyByFactors(long size, double... factors)
   {
-    double doubleSize = (double) size;
+    double doubleSize = size;
 
     for (double factor: factors) {
       doubleSize *= factor;
@@ -70,7 +70,7 @@ public class RecordBatchSizer {
 
   public static long multiplyByFactor(long size, double factor)
   {
-    return (long) (((double) size) * factor);
+    return (long) ((size) * factor);
   }
 
   /**
@@ -145,7 +145,7 @@ public class RecordBatchSizer {
     /**
      * Child columns if this is a map column.
      */
-    private Map<String, ColumnSize> children = CaseInsensitiveMap.newHashMap();
+    private final Map<String, ColumnSize> children = CaseInsensitiveMap.newHashMap();
 
     /**
      * Returns true if there is an accurate std size. Otherwise it returns false.
@@ -249,6 +249,7 @@ public class RecordBatchSizer {
           case VARDECIMAL:
             stdNetSize = 4 + 8;
             break;
+          default:
         }
       } catch (Exception e) {
         stdNetSize = 0;
@@ -326,9 +327,15 @@ public class RecordBatchSizer {
     }
 
     public boolean isComplex() {
-      return metadata.getType().getMinorType() == MinorType.MAP ||
-        metadata.getType().getMinorType() == MinorType.UNION ||
-        metadata.getType().getMinorType() == MinorType.LIST;
+      switch (metadata.getType().getMinorType()) {
+        case LIST:
+        case MAP:
+        case DICT:
+        case UNION:
+          return true;
+        default:
+          return false;
+      }
     }
 
     public boolean isRepeatedList() {
@@ -447,7 +454,6 @@ public class RecordBatchSizer {
       }
     }
 
-    @SuppressWarnings("resource")
     private int getElementCount(ValueVector v) {
       // Repeated vectors are special: they have an associated offset vector
       // that changes the value count of the contained vectors.
@@ -458,8 +464,8 @@ public class RecordBatchSizer {
     }
 
     private void allocateMap(AbstractMapVector map, int recordCount) {
-      if (map instanceof RepeatedMapVector) {
-        ((RepeatedMapVector) map).allocateOffsetsNew(recordCount);
+      if (map instanceof AbstractRepeatedMapVector) {
+        ((AbstractRepeatedMapVector) map).allocateOffsetsNew(recordCount);
           recordCount *= getEntryCardinalityForAlloc();
         }
 
@@ -633,17 +639,17 @@ public class RecordBatchSizer {
 
   // This keeps information for only top level columns. Information for nested
   // columns can be obtained from children of topColumns.
-  private Map<String, ColumnSize> columnSizes = new QuoteInsensitiveMap(CaseInsensitiveMap.newHashMap());
+  private final Map<String, ColumnSize> columnSizes = new QuoteInsensitiveMap(CaseInsensitiveMap.newHashMap());
 
   /**
    * This field is used by the convenience method {@link #columnsList()}.
    */
-  private List<ColumnSize> columnSizesList = new ArrayList<>();
+  private final List<ColumnSize> columnSizesList = new ArrayList<>();
 
   /**
    * Number of records (rows) in the batch.
    */
-  private int rowCount;
+  private final int rowCount;
   /**
    * Actual batch size summing all buffers used to store data
    * for the batch.
@@ -672,7 +678,7 @@ public class RecordBatchSizer {
 
   private int avgDensity;
 
-  private Set<BufferLedger> ledgers = Sets.newIdentityHashSet();
+  private final Set<BufferLedger> ledgers = Sets.newIdentityHashSet();
 
   private long netBatchSize;
 
@@ -762,9 +768,10 @@ public class RecordBatchSizer {
     ColumnSize colSize = new ColumnSize(v, prefix);
     switch (v.getField().getType().getMinorType()) {
       case MAP:
+      case DICT:
         // Maps consume no size themselves. However, their contained
         // vectors do consume space, so visit columns recursively.
-        expandMap(colSize, (AbstractMapVector) v, prefix + v.getField().getName() + ".");
+        expandMap(colSize, v, prefix + v.getField().getName() + ".");
         break;
       case LIST:
         // complex ListVector cannot be casted to RepeatedListVector.
@@ -784,16 +791,15 @@ public class RecordBatchSizer {
     return colSize;
   }
 
-  private void expandMap(ColumnSize colSize, AbstractMapVector mapVector, String prefix) {
+  private void expandMap(ColumnSize colSize, ValueVector mapVector, String prefix) {
     for (ValueVector vector : mapVector) {
       colSize.children.put(vector.getField().getName(), measureColumn(vector, prefix));
     }
 
     // For a repeated map, we need the memory for the offset vector (only).
     // Map elements are recursively expanded above.
-
     if (mapVector.getField().getDataMode() == DataMode.REPEATED) {
-      ((RepeatedMapVector) mapVector).getOffsetVector().collectLedgers(ledgers);
+      ((RepeatedValueVector) mapVector).getOffsetVector().collectLedgers(ledgers);
     }
   }
 
@@ -829,7 +835,7 @@ public class RecordBatchSizer {
     if (denom == 0) {
       return 0;
     }
-    return (int) Math.ceil((double) num / denom);
+    return (int) Math.ceil(num / denom);
   }
 
   public int rowCount() { return rowCount; }
@@ -958,7 +964,7 @@ public class RecordBatchSizer {
   }
 
   public void allocateVectors(VectorContainer container, int recordCount) {
-    for (VectorWrapper w : container) {
+    for (VectorWrapper<?> w : container) {
       ColumnSize colSize = columnSizes.get(w.getField().getName());
       colSize.allocateVector(w.getValueVector(), recordCount);
     }

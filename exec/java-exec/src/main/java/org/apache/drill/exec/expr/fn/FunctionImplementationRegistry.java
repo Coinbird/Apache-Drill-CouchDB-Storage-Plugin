@@ -39,7 +39,7 @@ import org.apache.drill.shaded.guava.com.google.common.collect.Sets;
 import org.apache.drill.shaded.guava.com.google.common.io.Files;
 import com.typesafe.config.ConfigFactory;
 import org.apache.commons.io.FileUtils;
-import org.apache.drill.common.config.CommonConstants;
+import org.apache.drill.common.config.ConfigConstants;
 import org.apache.drill.common.config.DrillConfig;
 import org.apache.drill.common.exceptions.DrillRuntimeException;
 import org.apache.drill.common.expression.FunctionCall;
@@ -71,21 +71,24 @@ import org.apache.drill.exec.store.sys.store.DataChangeVersion;
 import org.apache.drill.exec.util.JarUtil;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
- * This class offers the registry for functions. Notably, in addition to Drill its functions
- * (in {@link LocalFunctionRegistry}), other PluggableFunctionRegistry (e.g., {@link org.apache.drill.exec.expr.fn.HiveFunctionRegistry})
- * is also registered in this class
+ * Registry for functions. Notably, in addition to Drill its functions (in
+ * {@link LocalFunctionRegistry}), other PluggableFunctionRegistry (e.g.,
+ * {@link org.apache.drill.exec.expr.fn.HiveFunctionRegistry}) is also
+ * registered in this class
  */
 public class FunctionImplementationRegistry implements FunctionLookupContext, AutoCloseable {
-  private static final org.slf4j.Logger logger = org.slf4j.LoggerFactory.getLogger(FunctionImplementationRegistry.class);
+  private static final Logger logger = LoggerFactory.getLogger(FunctionImplementationRegistry.class);
 
   private final LocalFunctionRegistry localFunctionRegistry;
   private final RemoteFunctionRegistry remoteFunctionRegistry;
   private final Path localUdfDir;
-  private boolean deleteTmpDir = false;
+  private boolean deleteTmpDir;
   private File tmpDir;
-  private List<PluggableFunctionRegistry> pluggableFuncRegistries = new ArrayList<>();
+  private final List<PluggableFunctionRegistry> pluggableFuncRegistries = new ArrayList<>();
   private OptionSet optionManager;
   private final boolean useDynamicUdfs;
 
@@ -109,7 +112,7 @@ public class FunctionImplementationRegistry implements FunctionLookupContext, Au
     // rather than a crash, we provide a boot-time option, set only by
     // tests, to disable DUDF lookup.
 
-    useDynamicUdfs = ! config.getBoolean(ExecConstants.UDF_DISABLE_DYNAMIC);
+    useDynamicUdfs = !config.getBoolean(ExecConstants.UDF_DISABLE_DYNAMIC);
     localFunctionRegistry = new LocalFunctionRegistry(classpathScan);
 
     Set<Class<? extends PluggableFunctionRegistry>> registryClasses =
@@ -201,7 +204,7 @@ public class FunctionImplementationRegistry implements FunctionLookupContext, Au
    */
   private String functionReplacement(FunctionCall functionCall) {
     String funcName = functionCall.getName();
-    if (functionCall.args.size() == 0) {
+    if (functionCall.argCount() == 0) {
       return funcName;
     }
     boolean castEmptyStringToNull = optionManager != null &&
@@ -209,7 +212,7 @@ public class FunctionImplementationRegistry implements FunctionLookupContext, Au
     if (!castEmptyStringToNull) {
       return funcName;
     }
-    MajorType majorType =  functionCall.args.get(0).getMajorType();
+    MajorType majorType =  functionCall.arg(0).getMajorType();
     DataMode dataMode = majorType.getMode();
     MinorType minorType = majorType.getMinorType();
     if (FunctionReplacementUtils.isReplacementNeeded(funcName, minorType)) {
@@ -347,7 +350,6 @@ public class FunctionImplementationRegistry implements FunctionLookupContext, Au
    * @param version remote function registry local function registry was based on
    * @return true if remote and local function registries were synchronized after given version
    */
-  @SuppressWarnings("resource")
   public boolean syncWithRemoteRegistry(int version) {
     // Do the version check only if a remote registry exists. It does
     // not exist for some JMockit-based unit tests.
@@ -445,7 +447,7 @@ public class FunctionImplementationRegistry implements FunctionLookupContext, Au
   */
   private ScanResult scan(ClassLoader classLoader, Path path, URL[] urls) throws IOException {
     Enumeration<URL> markerFileEnumeration = classLoader.getResources(
-        CommonConstants.DRILL_JAR_MARKER_FILE_RESOURCE_PATHNAME);
+        ConfigConstants.DRILL_JAR_MARKER_FILE_RESOURCE_PATHNAME);
     while (markerFileEnumeration.hasMoreElements()) {
       URL markerFile = markerFileEnumeration.nextElement();
       if (markerFile.getPath().contains(path.toUri().getPath())) {
@@ -456,13 +458,13 @@ public class FunctionImplementationRegistry implements FunctionLookupContext, Au
           return RunTimeScan.dynamicPackageScan(drillConfig, Sets.newHashSet(urls));
         } finally {
           if (markerFileConnection instanceof JarURLConnection) {
-            ((JarURLConnection) markerFile.openConnection()).getJarFile().close();
+            ((JarURLConnection) markerFileConnection).getJarFile().close();
           }
         }
       }
     }
     throw new JarValidationException(String.format("Marker file %s is missing in %s",
-        CommonConstants.DRILL_JAR_MARKER_FILE_RESOURCE_PATHNAME, path.getName()));
+        ConfigConstants.DRILL_JAR_MARKER_FILE_RESOURCE_PATHNAME, path.getName()));
   }
 
   /**
@@ -561,7 +563,6 @@ public class FunctionImplementationRegistry implements FunctionLookupContext, Au
    * @return local path to jar that was copied
    * @throws IOException in case of problems during jar coping process
    */
-  @SuppressWarnings("resource")
   private Path copyJarToLocal(String jarName, RemoteFunctionRegistry remoteFunctionRegistry) throws IOException {
     Path registryArea = remoteFunctionRegistry.getRegistryArea();
     FileSystem fs = remoteFunctionRegistry.getFs();
@@ -594,6 +595,7 @@ public class FunctionImplementationRegistry implements FunctionLookupContext, Au
    */
   @Override
   public void close() {
+    localFunctionRegistry.close();
     if (deleteTmpDir) {
       FileUtils.deleteQuietly(tmpDir);
     } else {
@@ -624,5 +626,4 @@ public class FunctionImplementationRegistry implements FunctionLookupContext, Au
       FileUtils.deleteQuietly(new File(localDir, JarUtil.getSourceName(jarName)));
     }
   }
-
 }

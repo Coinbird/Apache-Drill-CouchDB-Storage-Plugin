@@ -32,7 +32,6 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 
-import org.apache.drill.common.config.CommonConstants;
 import org.apache.drill.common.config.DrillConfig;
 import org.apache.drill.common.exceptions.UserException;
 import org.apache.drill.common.scanner.persistence.AnnotationDescriptor;
@@ -47,7 +46,8 @@ import org.reflections.adapters.JavassistAdapter;
 import org.reflections.scanners.AbstractScanner;
 import org.reflections.util.ConfigurationBuilder;
 import org.reflections.util.FilterBuilder;
-
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.apache.drill.shaded.guava.com.google.common.base.Stopwatch;
 import org.apache.drill.shaded.guava.com.google.common.collect.HashMultimap;
 import org.apache.drill.shaded.guava.com.google.common.collect.Multimap;
@@ -84,7 +84,7 @@ import javassist.bytecode.annotation.StringMemberValue;
  * At runtime only the locations that have not been scanned yet will be scanned.
  */
 public final class ClassPathScanner {
-  private static final org.slf4j.Logger logger = org.slf4j.LoggerFactory.getLogger(ClassPathScanner.class);
+  private static final Logger logger = LoggerFactory.getLogger(ClassPathScanner.class);
   private static final JavassistAdapter METADATA_ADAPTER = new JavassistAdapter();
 
   /** Configuration pathname to list of names of packages to scan for implementations. */
@@ -97,15 +97,15 @@ public final class ClassPathScanner {
   private static final String IMPLEMENTATIONS_SCAN_ANNOTATIONS = "drill.classpath.scanning.annotations";
 
   /** Configuration pathname to turn off build time caching. */
-  private static final String IMPLEMENTATIONS_SCAN_CACHE = "drill.classpath.scanning.cache.enabled";
+  public static final String IMPLEMENTATIONS_SCAN_CACHE = "drill.classpath.scanning.cache.enabled";
 
   /**
    * scans the inheritance tree
    */
   private static class SubTypesScanner extends AbstractScanner {
 
-    private Multimap<String, ChildClassDescriptor> parentsChildren = HashMultimap.create();
-    private Multimap<String, ChildClassDescriptor> children = HashMultimap.create();
+    private final Multimap<String, ChildClassDescriptor> parentsChildren = HashMultimap.create();
+    private final Multimap<String, ChildClassDescriptor> children = HashMultimap.create();
 
     public SubTypesScanner(List<ParentClassDescriptor> parentImplementations) {
       for (ParentClassDescriptor parentClassDescriptor : parentImplementations) {
@@ -149,7 +149,7 @@ public final class ClassPathScanner {
   }
 
   /**
-   * converts the annotation attribute value into a list of string to simplify
+   * Converts the annotation attribute value into a list of string to simplify
    */
   private static class ListingMemberValueVisitor implements MemberValueVisitor {
     private final List<String> values;
@@ -264,7 +264,6 @@ public final class ClassPathScanner {
         }
         if (isAnnotated) {
           List<AnnotationDescriptor> classAnnotations = getAnnotationDescriptors(annotations);
-          @SuppressWarnings("unchecked")
           List<FieldInfo> classFields = classFile.getFields();
           List<FieldDescriptor> fieldDescriptors = new ArrayList<>(classFields.size());
           for (FieldInfo field : classFields) {
@@ -284,7 +283,6 @@ public final class ClassPathScanner {
       List<AnnotationDescriptor> annotationDescriptors = new ArrayList<>(annotationsAttr.numAnnotations());
       for (javassist.bytecode.annotation.Annotation annotation : annotationsAttr.getAnnotations()) {
         // Sigh: javassist uses raw collections (is this 2002?)
-        @SuppressWarnings("unchecked")
         Set<String> memberNames = annotation.getMemberNames();
         List<AttributeDescriptor> attributes = new ArrayList<>();
         if (memberNames != null) {
@@ -304,12 +302,12 @@ public final class ClassPathScanner {
   /**
    * @return paths that have a drill config file in them
    */
-  static Set<URL> getMarkedPaths() {
-    return forResource(CommonConstants.DRILL_JAR_MARKER_FILE_RESOURCE_PATHNAME, true);
+  static Set<URL> getMarkedPaths(String resourcePathName) {
+    return forResource(resourcePathName, true);
   }
 
-  public static Collection<URL> getConfigURLs() {
-    return forResource(CommonConstants.DRILL_JAR_MARKER_FILE_RESOURCE_PATHNAME, false);
+  public static Collection<URL> getConfigURLs(String resourcePathName) {
+    return forResource(resourcePathName, false);
   }
 
   /**

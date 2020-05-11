@@ -17,13 +17,16 @@
  */
 package org.apache.drill.exec.store.easy.sequencefile;
 
+import java.io.IOException;
+import java.util.List;
+
 import org.apache.drill.common.exceptions.ExecutionSetupException;
 import org.apache.drill.common.expression.SchemaPath;
 import org.apache.drill.common.logical.StoragePluginConfig;
 import org.apache.drill.exec.ops.FragmentContext;
 import org.apache.drill.exec.physical.base.AbstractGroupScan;
-import org.apache.drill.exec.proto.UserBitShared.CoreOperatorType;
 import org.apache.drill.exec.planner.common.DrillStatsTable.TableStatistics;
+import org.apache.drill.exec.proto.UserBitShared.CoreOperatorType;
 import org.apache.drill.exec.server.DrillbitContext;
 import org.apache.drill.exec.store.RecordReader;
 import org.apache.drill.exec.store.RecordWriter;
@@ -38,13 +41,10 @@ import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.mapred.FileSplit;
 
-import java.io.IOException;
-import java.util.List;
-
 public class SequenceFileFormatPlugin extends EasyFormatPlugin<SequenceFileFormatConfig> {
   public SequenceFileFormatPlugin(String name, DrillbitContext context, Configuration fsConf,
                                   StoragePluginConfig storageConfig) {
-    this(name, context, fsConf, storageConfig, new SequenceFileFormatConfig());
+    this(name, context, fsConf, storageConfig, new SequenceFileFormatConfig(null));
   }
 
   public SequenceFileFormatPlugin(String name, DrillbitContext context, Configuration fsConf,
@@ -59,11 +59,10 @@ public class SequenceFileFormatPlugin extends EasyFormatPlugin<SequenceFileForma
     return true;
   }
 
-
   @Override
   public AbstractGroupScan getGroupScan(String userName, FileSelection selection, List<SchemaPath> columns)
     throws IOException {
-    return new EasyGroupScan(userName, selection, this, columns, selection.selectionRoot);
+    return new EasyGroupScan(userName, selection, this, columns, selection.selectionRoot, null);
   }
 
   @Override
@@ -87,7 +86,7 @@ public class SequenceFileFormatPlugin extends EasyFormatPlugin<SequenceFileForma
                                       FileWork fileWork,
                                       List<SchemaPath> columns,
                                       String userName) throws ExecutionSetupException {
-    final Path path = dfs.makeQualified(new Path(fileWork.getPath()));
+    final Path path = dfs.makeQualified(fileWork.getPath());
     final FileSplit split = new FileSplit(path, fileWork.getStart(), fileWork.getLength(), new String[]{""});
     return new SequenceFileRecordReader(split, dfs, context.getQueryUserName(), userName);
   }

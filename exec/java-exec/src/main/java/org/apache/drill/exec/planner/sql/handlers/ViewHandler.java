@@ -27,6 +27,7 @@ import org.apache.calcite.tools.RelConversionException;
 import org.apache.calcite.tools.ValidationException;
 
 import org.apache.drill.common.exceptions.UserException;
+import org.apache.drill.common.util.DrillStringUtils;
 import org.apache.drill.exec.dotdrill.View;
 import org.apache.drill.exec.ops.QueryContext;
 import org.apache.drill.exec.physical.PhysicalPlan;
@@ -35,7 +36,6 @@ import org.apache.drill.exec.planner.sql.SchemaUtilites;
 import org.apache.drill.exec.planner.sql.parser.SqlCreateView;
 import org.apache.drill.exec.planner.sql.parser.SqlDropView;
 import org.apache.drill.exec.store.AbstractSchema;
-import org.apache.drill.exec.store.dfs.FileSelection;
 import org.apache.drill.exec.work.foreman.ForemanSetupException;
 import org.apache.calcite.rel.RelNode;
 import org.apache.calcite.sql.SqlNode;
@@ -61,12 +61,13 @@ public abstract class ViewHandler extends DefaultSqlHandler {
     public PhysicalPlan getPlan(SqlNode sqlNode) throws ValidationException, RelConversionException, IOException, ForemanSetupException {
       SqlCreateView createView = unwrap(sqlNode, SqlCreateView.class);
 
-      final String newViewName = FileSelection.removeLeadingSlash(createView.getName());
+      final String newViewName = DrillStringUtils.removeLeadingSlash(createView.getName());
 
       // Disallow temporary tables usage in view definition
       config.getConverter().disallowTemporaryTables();
       // Store the viewSql as view def SqlNode is modified as part of the resolving the new table definition below.
-      final String viewSql = createView.getQuery().toString();
+      // Use of parentheses is forced to ensure expressions are read correctly.
+      final String viewSql = createView.getQuery().toSqlString(null, true).getSql();
       final ConvertedRelNode convertedRelNode = validateAndConvert(createView.getQuery());
       final RelDataType validatedRowType = convertedRelNode.getValidatedRowType();
       final RelNode queryRelNode = convertedRelNode.getConvertedNode();
@@ -156,7 +157,7 @@ public abstract class ViewHandler extends DefaultSqlHandler {
     @Override
     public PhysicalPlan getPlan(SqlNode sqlNode) throws IOException, ForemanSetupException {
       SqlDropView dropView = unwrap(sqlNode, SqlDropView.class);
-      final String viewName = FileSelection.removeLeadingSlash(dropView.getName());
+      final String viewName = DrillStringUtils.removeLeadingSlash(dropView.getName());
       final AbstractSchema drillSchema =
           SchemaUtilites.resolveToMutableDrillSchema(context.getNewDefaultSchema(), dropView.getSchemaPath());
 

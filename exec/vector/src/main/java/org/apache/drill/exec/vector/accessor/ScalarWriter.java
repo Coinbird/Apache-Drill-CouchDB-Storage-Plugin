@@ -17,10 +17,6 @@
  */
 package org.apache.drill.exec.vector.accessor;
 
-import java.math.BigDecimal;
-
-import org.joda.time.Period;
-
 /**
  * Represents a scalar value: a required column, a nullable column,
  * or one element within an array of scalars.
@@ -42,7 +38,7 @@ import org.joda.time.Period;
  * {@see ScalarElementReader}
  */
 
-public interface ScalarWriter extends ColumnWriter {
+public interface ScalarWriter extends ColumnWriter, ValueWriter {
 
   /**
    * Describe the type of the value. This is a compression of the
@@ -51,13 +47,22 @@ public interface ScalarWriter extends ColumnWriter {
    * @return the value type which indicates which get method
    * is valid for the column
    */
-
   ValueType valueType();
-  void setInt(int value);
-  void setLong(long value);
-  void setDouble(double value);
-  void setString(String value);
-  void setBytes(byte[] value, int len);
-  void setDecimal(BigDecimal value);
-  void setPeriod(Period value);
+
+  /**
+   * The extended type of the value, describes the secondary type
+   * for DATE, TIME and TIMESTAMP for which the value type is
+   * int or long.
+   */
+  ValueType extendedType();
+
+  /**
+   * Set the default value to be used to fill empties for this writer.
+   * Only valid for required writers: null writers set this is-set bit
+   * to 0 and set the data value to 0.
+   *
+   * @param value the value to set. Cannot be null. The type of the value
+   * must match that legal for {@link #setValue(Object)}
+   */
+  void setDefaultValue(Object value);
 }

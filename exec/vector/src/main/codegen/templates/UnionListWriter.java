@@ -33,9 +33,9 @@ package org.apache.drill.exec.vector.complex.impl;
 
 public class UnionListWriter extends AbstractFieldWriter {
 
+  protected PromotableWriter writer;
   private ListVector vector;
   private UInt4Vector offsets;
-  private PromotableWriter writer;
   private boolean inMap = false;
 
   public UnionListWriter(ListVector vector) {
@@ -83,12 +83,12 @@ public class UnionListWriter extends AbstractFieldWriter {
 
   <#if minor.class == "VarDecimal">
   @Override
-  public ${name}Writer <#if uncappedName == "int">integer<#else>${uncappedName}</#if>(String name, int scale, int precision) {
+  public ${name}Writer <#if uncappedName == "int">integer<#else>${uncappedName}</#if>(String name, int precision, int scale) {
     assert inMap;
     final int nextOffset = offsets.getAccessor().get(idx() + 1);
     vector.getMutator().setNotNull(idx());
     writer.setPosition(nextOffset);
-    ${name}Writer ${uncappedName}Writer = writer.${uncappedName}(name, scale, precision);
+    ${name}Writer ${uncappedName}Writer = writer.${uncappedName}(name, precision, scale);
     return ${uncappedName}Writer;
   }
   <#else>

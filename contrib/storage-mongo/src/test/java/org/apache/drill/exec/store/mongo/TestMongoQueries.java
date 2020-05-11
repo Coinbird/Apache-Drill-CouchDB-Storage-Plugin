@@ -19,6 +19,7 @@ package org.apache.drill.exec.store.mongo;
 
 import org.apache.drill.categories.MongoStorageTest;
 import org.apache.drill.categories.SlowTest;
+import org.junit.Ignore;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
 
@@ -27,66 +28,81 @@ public class TestMongoQueries extends MongoTestBase {
 
   @Test
   public void testBooleanFilter() throws Exception {
-    String queryString = String.format(TEST_BOOLEAN_FILTER_QUERY_TEMPLATE1,
-        EMPLOYEE_DB, EMPINFO_COLLECTION);
-    runMongoSQLVerifyCount(queryString, 11);
-    queryString = String.format(TEST_BOOLEAN_FILTER_QUERY_TEMPLATE2,
-        EMPLOYEE_DB, EMPINFO_COLLECTION);
-    runMongoSQLVerifyCount(queryString, 8);
+    testBuilder()
+        .sqlQuery(String.format(TEST_BOOLEAN_FILTER_QUERY_TEMPLATE1, EMPLOYEE_DB, EMPINFO_COLLECTION))
+        .unOrdered()
+        .expectsNumRecords(11)
+        .go();
+
+    testBuilder()
+        .sqlQuery(String.format(TEST_BOOLEAN_FILTER_QUERY_TEMPLATE2, EMPLOYEE_DB, EMPINFO_COLLECTION))
+        .unOrdered()
+        .expectsNumRecords(8)
+        .go();
   }
 
   @Test
   public void testWithANDOperator() throws Exception {
-    String queryString = String.format(TEST_BOOLEAN_FILTER_QUERY_TEMPLATE3,
-        EMPLOYEE_DB, EMPINFO_COLLECTION);
-    runMongoSQLVerifyCount(queryString, 4);
+    testBuilder()
+        .sqlQuery(String.format(TEST_BOOLEAN_FILTER_QUERY_TEMPLATE3, EMPLOYEE_DB, EMPINFO_COLLECTION))
+        .unOrdered()
+        .expectsNumRecords(4)
+        .go();
   }
 
   @Test
   public void testWithOROperator() throws Exception {
-    String queryString = String.format(TEST_BOOLEAN_FILTER_QUERY_TEMPLATE3,
-        EMPLOYEE_DB, EMPINFO_COLLECTION);
-    runMongoSQLVerifyCount(queryString, 4);
+    testBuilder()
+        .sqlQuery(String.format(TEST_BOOLEAN_FILTER_QUERY_TEMPLATE3, EMPLOYEE_DB, EMPINFO_COLLECTION))
+        .unOrdered()
+        .expectsNumRecords(4)
+        .go();
   }
 
   @Test
   public void testResultCount() throws Exception {
-    String queryString = String.format(TEST_BOOLEAN_FILTER_QUERY_TEMPLATE4,
-        EMPLOYEE_DB, EMPINFO_COLLECTION);
-    runMongoSQLVerifyCount(queryString, 5);
+    testBuilder()
+        .sqlQuery(String.format(TEST_BOOLEAN_FILTER_QUERY_TEMPLATE4, EMPLOYEE_DB, EMPINFO_COLLECTION))
+        .unOrdered()
+        .expectsNumRecords(5)
+        .go();
   }
 
   @Test
   public void testUnShardedDBInShardedCluster() throws Exception {
-    String queryString = String.format(TEST_STAR_QUERY_UNSHARDED_DB,
-        DONUTS_DB, DONUTS_COLLECTION);
-    runMongoSQLVerifyCount(queryString, 5);
+    testBuilder()
+        .sqlQuery(String.format(TEST_STAR_QUERY_UNSHARDED_DB, DONUTS_DB, DONUTS_COLLECTION))
+        .unOrdered()
+        .expectsNumRecords(5)
+        .go();
   }
 
   @Test
   public void testEmptyCollection() throws Exception {
-    String queryString = String.format(TEST_STAR_QUERY_UNSHARDED_DB, EMPLOYEE_DB, EMPTY_COLLECTION);
-    runMongoSQLVerifyCount(queryString, 0);
+    testBuilder()
+        .sqlQuery(String.format(TEST_STAR_QUERY_UNSHARDED_DB, EMPLOYEE_DB, EMPTY_COLLECTION))
+        .unOrdered()
+        .expectsNumRecords(0)
+        .go();
   }
 
   @Test
+  @Ignore("DRILL-7428") // Query is invalid, Drill bug allows it.
   public void testUnShardedDBInShardedClusterWithProjectionAndFilter() throws Exception {
-    String queryString = String.format(TEST_STAR_QUERY_UNSHARDED_DB_PROJECT_FILTER,
-        DONUTS_DB, DONUTS_COLLECTION);
-    runMongoSQLVerifyCount(queryString, 2);
+    testBuilder()
+        .sqlQuery(String.format(TEST_STAR_QUERY_UNSHARDED_DB_PROJECT_FILTER, DONUTS_DB, DONUTS_COLLECTION))
+        .unOrdered()
+        .expectsNumRecords(2)
+        .go();
   }
 
   @Test
+  @Ignore("DRILL-7428") // Query is invalid, Drill bug allows it.
   public void testUnShardedDBInShardedClusterWithGroupByProjectionAndFilter() throws Exception {
-    String queryString = String.format(TEST_STAR_QUERY_UNSHARDED_DB_GROUP_PROJECT_FILTER,
-        DONUTS_DB, DONUTS_COLLECTION);
-    runMongoSQLVerifyCount(queryString, 5);
-  }
-
-  @Test
-  public void testPhysicalPlanSubmission() throws Exception {
-    String query = String.format(TEST_BOOLEAN_FILTER_QUERY_TEMPLATE1,
-        EMPLOYEE_DB, EMPINFO_COLLECTION);
-    testPhysicalPlanExecutionBasedOnQuery(query);
+    testBuilder()
+        .sqlQuery(String.format(TEST_STAR_QUERY_UNSHARDED_DB_GROUP_PROJECT_FILTER, DONUTS_DB, DONUTS_COLLECTION))
+        .unOrdered()
+        .expectsNumRecords(5)
+        .go();
   }
 }

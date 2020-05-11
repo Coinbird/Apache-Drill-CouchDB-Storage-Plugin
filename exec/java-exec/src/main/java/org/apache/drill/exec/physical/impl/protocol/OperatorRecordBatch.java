@@ -32,6 +32,8 @@ import org.apache.drill.exec.record.VectorWrapper;
 import org.apache.drill.exec.record.WritableBatch;
 import org.apache.drill.exec.record.selection.SelectionVector2;
 import org.apache.drill.exec.record.selection.SelectionVector4;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Modular implementation of the standard Drill record batch iterator
@@ -49,15 +51,15 @@ import org.apache.drill.exec.record.selection.SelectionVector4;
  * batches. The <tt>TransferPair</tt> abstraction fails if different
  * vectors appear across batches.
  */
-
 public class OperatorRecordBatch implements CloseableRecordBatch {
-  static final org.slf4j.Logger logger = org.slf4j.LoggerFactory.getLogger(OperatorRecordBatch.class);
+  static final Logger logger = LoggerFactory.getLogger(OperatorRecordBatch.class);
 
   private final OperatorDriver driver;
   private final BatchAccessor batchAccessor;
   private IterOutcome lastOutcome;
 
-  public OperatorRecordBatch(FragmentContext context, PhysicalOperator config, OperatorExec opExec) {
+  public OperatorRecordBatch(FragmentContext context, PhysicalOperator config,
+      OperatorExec opExec, boolean enableSchemaBatch) {
     OperatorContext opContext = context.newOperatorContext(config);
     opContext.getStats().startProcessing();
 
@@ -66,7 +68,7 @@ public class OperatorRecordBatch implements CloseableRecordBatch {
 
     try {
       opExec.bind(opContext);
-      driver = new OperatorDriver(opContext, opExec);
+      driver = new OperatorDriver(opContext, opExec, enableSchemaBatch);
       batchAccessor = opExec.batchAccessor();
     } catch (UserException e) {
       opContext.close();
@@ -95,14 +97,14 @@ public class OperatorRecordBatch implements CloseableRecordBatch {
   }
 
   @Override
-  public BatchSchema getSchema() { return batchAccessor.getSchema(); }
+  public BatchSchema getSchema() { return batchAccessor.schema(); }
 
   @Override
-  public int getRecordCount() { return batchAccessor.getRowCount(); }
+  public int getRecordCount() { return batchAccessor.rowCount(); }
 
   @Override
   public VectorContainer getOutgoingContainer() {
-    return batchAccessor.getOutgoingContainer();
+    return batchAccessor.container();
   }
 
   @Override
@@ -117,17 +119,17 @@ public class OperatorRecordBatch implements CloseableRecordBatch {
 
   @Override
   public WritableBatch getWritableBatch() {
-    return batchAccessor.getWritableBatch();
+    return batchAccessor.writableBatch();
   }
 
   @Override
   public SelectionVector2 getSelectionVector2() {
-    return batchAccessor.getSelectionVector2();
+    return batchAccessor.selectionVector2();
   }
 
   @Override
   public SelectionVector4 getSelectionVector4() {
-    return batchAccessor.getSelectionVector4();
+    return batchAccessor.selectionVector4();
   }
 
   @Override
@@ -136,7 +138,7 @@ public class OperatorRecordBatch implements CloseableRecordBatch {
   }
 
   @Override
-  public void kill(boolean sendUpstream) {
+  public void cancel() {
     driver.cancel();
   }
 
@@ -146,10 +148,6 @@ public class OperatorRecordBatch implements CloseableRecordBatch {
       driver.operatorContext().getStats().startProcessing();
       lastOutcome = driver.next();
       return lastOutcome;
-    } catch (Exception e) {
-      // mark batch as failed
-      lastOutcome = IterOutcome.STOP;
-      throw e;
     } finally {
       driver.operatorContext().getStats().stopProcessing();
     }
@@ -162,12 +160,7 @@ public class OperatorRecordBatch implements CloseableRecordBatch {
 
   @Override
   public VectorContainer getContainer() {
-    return batchAccessor.getOutgoingContainer();
-  }
-
-  @Override
-  public boolean hasFailed() {
-    return lastOutcome == IterOutcome.STOP;
+    return batchAccessor.container();
   }
 
   @Override

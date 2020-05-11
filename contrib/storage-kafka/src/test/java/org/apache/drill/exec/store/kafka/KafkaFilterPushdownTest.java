@@ -17,25 +17,23 @@
  */
 package org.apache.drill.exec.store.kafka;
 
+import org.apache.drill.PlanTestBase;
 import org.apache.drill.categories.KafkaStorageTest;
 import org.apache.drill.categories.SlowTest;
 import org.apache.kafka.common.serialization.StringSerializer;
-
 import org.junit.BeforeClass;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
 
 import static org.apache.drill.exec.store.kafka.TestKafkaSuit.NUM_JSON_MSG;
 import static org.apache.drill.exec.store.kafka.TestKafkaSuit.embeddedKafkaCluster;
-import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.assertEquals;
 
 @Category({KafkaStorageTest.class, SlowTest.class})
 public class KafkaFilterPushdownTest extends KafkaTestBase {
   private static final int NUM_PARTITIONS = 5;
-  private static final String expectedSubStr = "    \"kafkaScanSpec\" : {\n" +
-                                                   "      \"topicName\" : \"drill-pushdown-topic\"\n" +
-                                                   "    },\n" +
-                                                   "    \"cost\" : %s.0";
+  private static final String EXPECTED_PATTERN = "kafkaScanSpec.*\\n.*\"topicName\" : \"drill-pushdown-topic\"\\n(" +
+    ".*\\n)?(.*\\n)?(.*\\n)?.*cost\"(.*\\n)(.*\\n).*outputRowCount\" : (%s.0)";
 
   @BeforeClass
   public static void setup() throws Exception {
@@ -45,13 +43,11 @@ public class KafkaFilterPushdownTest extends KafkaTestBase {
     generator.populateJsonMsgWithTimestamps(TestQueryConstants.JSON_PUSHDOWN_TOPIC, NUM_JSON_MSG);
     String query = String.format(TestQueryConstants.MSG_SELECT_QUERY, TestQueryConstants.JSON_PUSHDOWN_TOPIC);
     //Ensure messages are present
-    assertTrue("Kafka server does not have expected number of messages",
-        testSql(query) == NUM_PARTITIONS * NUM_JSON_MSG);
+    assertEquals("Kafka server does not have expected number of messages", testSql(query), NUM_PARTITIONS * NUM_JSON_MSG);
   }
 
   /**
    * Test filter pushdown with condition on kafkaMsgOffset.
-   * @throws Exception
    */
   @Test
   public void testPushdownOnOffset() throws Exception {
@@ -63,12 +59,12 @@ public class KafkaFilterPushdownTest extends KafkaTestBase {
         TestQueryConstants.JSON_PUSHDOWN_TOPIC, predicate1, predicate2);
 
     runKafkaSQLVerifyCount(queryString, expectedRowCount);
-    testPhysicalPlan(queryString, String.format(expectedSubStr, expectedRowCount));
+    PlanTestBase.testPlanMatchingPatterns(queryString, JSON_FORMAT,
+        new String[] {String.format(EXPECTED_PATTERN, expectedRowCount)}, null);
   }
 
   /**
    * Test filter pushdown with condition on kafkaPartitionId.
-   * @throws Exception
    */
   @Test
   public void testPushdownOnPartition() throws Exception {
@@ -79,12 +75,12 @@ public class KafkaFilterPushdownTest extends KafkaTestBase {
         TestQueryConstants.JSON_PUSHDOWN_TOPIC, predicate);
 
     runKafkaSQLVerifyCount(queryString, expectedRowCount);
-    testPhysicalPlan(queryString, String.format(expectedSubStr, expectedRowCount));
+    PlanTestBase.testPlanMatchingPatterns(queryString, JSON_FORMAT,
+        new String[] {String.format(EXPECTED_PATTERN, expectedRowCount)}, null);
   }
 
   /**
    * Test filter pushdown with condition on kafkaPartitionId.
-   * @throws Exception
    */
   @Test
   public void testPushdownOnTimestamp() throws Exception {
@@ -95,12 +91,12 @@ public class KafkaFilterPushdownTest extends KafkaTestBase {
         TestQueryConstants.JSON_PUSHDOWN_TOPIC, predicate);
 
     runKafkaSQLVerifyCount(queryString,expectedRowCount);
-    testPhysicalPlan(queryString, String.format(expectedSubStr, expectedRowCount));
+    PlanTestBase.testPlanMatchingPatterns(queryString, JSON_FORMAT,
+        new String[] {String.format(EXPECTED_PATTERN, expectedRowCount)}, null);
   }
 
   /**
    * Test filter pushdown when timestamp is not ordered.
-   * @throws Exception
    */
   @Test
   public void testPushdownUnorderedTimestamp() throws Exception {
@@ -112,12 +108,12 @@ public class KafkaFilterPushdownTest extends KafkaTestBase {
         TestQueryConstants.JSON_PUSHDOWN_TOPIC, predicate);
 
     runKafkaSQLVerifyCount(queryString,expectedRowCount);
-    testPhysicalPlan(queryString, String.format(expectedSubStr, expectedRowInPlan));
+    PlanTestBase.testPlanMatchingPatterns(queryString, JSON_FORMAT,
+        new String[] {String.format(EXPECTED_PATTERN, expectedRowInPlan)}, null);
   }
 
   /**
    * Test filter pushdown when timestamp value specified does not exist.
-   * @throws Exception
    */
   @Test
   public void testPushdownWhenTimestampDoesNotExist() throws Exception {
@@ -128,12 +124,12 @@ public class KafkaFilterPushdownTest extends KafkaTestBase {
         TestQueryConstants.JSON_PUSHDOWN_TOPIC, predicate);
 
     runKafkaSQLVerifyCount(queryString,expectedRowCount);
-    testPhysicalPlan(queryString, String.format(expectedSubStr, expectedRowCount));
+    PlanTestBase.testPlanMatchingPatterns(queryString, JSON_FORMAT,
+        new String[] {String.format(EXPECTED_PATTERN, expectedRowCount)}, null);
   }
 
   /**
    * Test filter pushdown when partition value specified does not exist.
-   * @throws Exception
    */
   @Test
   public void testPushdownWhenPartitionDoesNotExist() throws Exception {
@@ -144,12 +140,12 @@ public class KafkaFilterPushdownTest extends KafkaTestBase {
         TestQueryConstants.JSON_PUSHDOWN_TOPIC, predicate);
 
     runKafkaSQLVerifyCount(queryString,expectedRowCount);
-    testPhysicalPlan(queryString, String.format(expectedSubStr, expectedRowCount));
+    PlanTestBase.testPlanMatchingPatterns(queryString, JSON_FORMAT,
+        new String[] {String.format(EXPECTED_PATTERN, expectedRowCount)}, null);
   }
 
   /**
    * Test filter pushdown when timestamp exist but partition does not exist.
-   * @throws Exception
    */
   @Test
   public void testPushdownForEmptyScanSpec() throws Exception {
@@ -161,13 +157,13 @@ public class KafkaFilterPushdownTest extends KafkaTestBase {
         TestQueryConstants.JSON_PUSHDOWN_TOPIC, predicate1, predicate2);
 
     runKafkaSQLVerifyCount(queryString,expectedRowCount);
-    testPhysicalPlan(queryString, String.format(expectedSubStr, expectedRowCount));
+    PlanTestBase.testPlanMatchingPatterns(queryString, JSON_FORMAT,
+        new String[] {String.format(EXPECTED_PATTERN, expectedRowCount)}, null);
   }
 
   /**
    * Test filter pushdown on kafkaMsgOffset with boundary conditions.
    * In every case, the number of records returned is 0.
-   * @throws Exception
    */
   @Test
   public void testPushdownOffsetNoRecordsReturnedWithBoundaryConditions() throws Exception {
@@ -178,48 +174,53 @@ public class KafkaFilterPushdownTest extends KafkaTestBase {
         TestQueryConstants.JSON_PUSHDOWN_TOPIC, "kafkaMsgOffset = 10");
 
     runKafkaSQLVerifyCount(queryString,expectedRowCount);
-    testPhysicalPlan(queryString, String.format(expectedSubStr, expectedRowCount));
+    PlanTestBase.testPlanMatchingPatterns(queryString, JSON_FORMAT,
+        new String[] {String.format(EXPECTED_PATTERN, expectedRowCount)}, null);
 
     //"equal" such that value < startOffset
     queryString = String.format(TestQueryConstants.QUERY_TEMPLATE_BASIC,
         TestQueryConstants.JSON_PUSHDOWN_TOPIC, "kafkaMsgOffset = -1");
 
     runKafkaSQLVerifyCount(queryString,expectedRowCount);
-    testPhysicalPlan(queryString, String.format(expectedSubStr, expectedRowCount));
+    PlanTestBase.testPlanMatchingPatterns(queryString, JSON_FORMAT,
+        new String[] {String.format(EXPECTED_PATTERN, expectedRowCount)}, null);
 
     //"greater_than" such that value = endOffset-1
     queryString = String.format(TestQueryConstants.QUERY_TEMPLATE_BASIC,
         TestQueryConstants.JSON_PUSHDOWN_TOPIC, "kafkaMsgOffset > 9");
 
     runKafkaSQLVerifyCount(queryString,expectedRowCount);
-    testPhysicalPlan(queryString, String.format(expectedSubStr, expectedRowCount));
+    PlanTestBase.testPlanMatchingPatterns(queryString, JSON_FORMAT,
+        new String[] {String.format(EXPECTED_PATTERN, expectedRowCount)}, null);
 
     //"greater_than_or_equal" such that value = endOffset
     queryString = String.format(TestQueryConstants.QUERY_TEMPLATE_BASIC,
         TestQueryConstants.JSON_PUSHDOWN_TOPIC, "kafkaMsgOffset >= 10");
 
     runKafkaSQLVerifyCount(queryString,expectedRowCount);
-    testPhysicalPlan(queryString, String.format(expectedSubStr, expectedRowCount));
+    PlanTestBase.testPlanMatchingPatterns(queryString, JSON_FORMAT,
+        new String[] {String.format(EXPECTED_PATTERN, expectedRowCount)}, null);
 
     //"less_than" such that value = startOffset
     queryString = String.format(TestQueryConstants.QUERY_TEMPLATE_BASIC,
         TestQueryConstants.JSON_PUSHDOWN_TOPIC, "kafkaMsgOffset < 0");
 
     runKafkaSQLVerifyCount(queryString,expectedRowCount);
-    testPhysicalPlan(queryString, String.format(expectedSubStr, expectedRowCount));
+    PlanTestBase.testPlanMatchingPatterns(queryString, JSON_FORMAT,
+        new String[] {String.format(EXPECTED_PATTERN, expectedRowCount)}, null);
 
     //"less_than_or_equal" such that value < startOffset
     queryString = String.format(TestQueryConstants.QUERY_TEMPLATE_BASIC,
         TestQueryConstants.JSON_PUSHDOWN_TOPIC, "kafkaMsgOffset <= -1");
 
     runKafkaSQLVerifyCount(queryString,expectedRowCount);
-    testPhysicalPlan(queryString, String.format(expectedSubStr, expectedRowCount));
+    PlanTestBase.testPlanMatchingPatterns(queryString, JSON_FORMAT,
+        new String[] {String.format(EXPECTED_PATTERN, expectedRowCount)}, null);
   }
 
   /**
    * Test filter pushdown on kafkaMsgOffset with boundary conditions.
    * In every case, the number of records returned is 5 (1 per topic-partition).
-   * @throws Exception
    */
   @Test
   public void testPushdownOffsetOneRecordReturnedWithBoundaryConditions() throws Exception {
@@ -230,27 +231,29 @@ public class KafkaFilterPushdownTest extends KafkaTestBase {
         TestQueryConstants.JSON_PUSHDOWN_TOPIC, "kafkaMsgOffset = 9");
 
     runKafkaSQLVerifyCount(queryString, expectedRowCount);
-    testPhysicalPlan(queryString, String.format(expectedSubStr, expectedRowCount));
+    PlanTestBase.testPlanMatchingPatterns(queryString, JSON_FORMAT,
+        new String[] {String.format(EXPECTED_PATTERN, expectedRowCount)}, null);
 
     //"greater_than" such that value = endOffset-2
     queryString = String.format(TestQueryConstants.QUERY_TEMPLATE_BASIC,
         TestQueryConstants.JSON_PUSHDOWN_TOPIC, "kafkaMsgOffset > 8");
 
     runKafkaSQLVerifyCount(queryString,expectedRowCount);
-    testPhysicalPlan(queryString, String.format(expectedSubStr, expectedRowCount));
+    PlanTestBase.testPlanMatchingPatterns(queryString, JSON_FORMAT,
+        new String[] {String.format(EXPECTED_PATTERN, expectedRowCount)}, null);
 
     //"greater_than_or_equal" such that value = endOffset-1
     queryString = String.format(TestQueryConstants.QUERY_TEMPLATE_BASIC,
         TestQueryConstants.JSON_PUSHDOWN_TOPIC, "kafkaMsgOffset >= 9");
 
     runKafkaSQLVerifyCount(queryString,expectedRowCount);
-    testPhysicalPlan(queryString, String.format(expectedSubStr, expectedRowCount));
+    PlanTestBase.testPlanMatchingPatterns(queryString, JSON_FORMAT,
+        new String[] {String.format(EXPECTED_PATTERN, expectedRowCount)}, null);
   }
 
   /**
    * Test filter pushdown with OR.
    * Pushdown is possible if all the predicates are on metadata fields.
-   * @throws Exception
    */
   @Test
   public void testPushdownWithOr() throws Exception {
@@ -262,12 +265,12 @@ public class KafkaFilterPushdownTest extends KafkaTestBase {
         TestQueryConstants.JSON_PUSHDOWN_TOPIC, predicate1, predicate2);
 
     runKafkaSQLVerifyCount(queryString,expectedRowCount);
-    testPhysicalPlan(queryString, String.format(expectedSubStr, expectedRowCount));
+    PlanTestBase.testPlanMatchingPatterns(queryString, JSON_FORMAT,
+        new String[] {String.format(EXPECTED_PATTERN, expectedRowCount)}, null);
   }
 
   /**
    * Test filter pushdown with OR on kafkaMsgTimestamp and kafkaMsgOffset.
-   * @throws Exception
    */
   @Test
   public void testPushdownWithOr1() throws Exception {
@@ -280,13 +283,12 @@ public class KafkaFilterPushdownTest extends KafkaTestBase {
         TestQueryConstants.JSON_PUSHDOWN_TOPIC, predicate1, predicate2);
 
     runKafkaSQLVerifyCount(queryString,expectedRowCount);
-    testPhysicalPlan(queryString, String.format(expectedSubStr, expectedRowInPlan));
+    PlanTestBase.testPlanMatchingPatterns(queryString, JSON_FORMAT,
+        new String[] {String.format(EXPECTED_PATTERN, expectedRowInPlan)}, null);
   }
 
   /**
    * Test pushdown for a combination of AND and OR.
-   *
-   * @throws Exception
    */
   @Test
   public void testPushdownWithAndOrCombo() throws Exception {
@@ -299,12 +301,12 @@ public class KafkaFilterPushdownTest extends KafkaTestBase {
         TestQueryConstants.JSON_PUSHDOWN_TOPIC, predicate1, predicate2, predicate3);
 
     runKafkaSQLVerifyCount(queryString,expectedRowCount);
-    testPhysicalPlan(queryString, String.format(expectedSubStr, expectedRowCount));
+    PlanTestBase.testPlanMatchingPatterns(queryString, JSON_FORMAT,
+        new String[] {String.format(EXPECTED_PATTERN, expectedRowCount)}, null);
   }
 
   /**
    * Test pushdown for a combination of AND and OR.
-   * @throws Exception
    */
   @Test
   public void testPushdownWithAndOrCombo2() throws Exception {
@@ -319,13 +321,13 @@ public class KafkaFilterPushdownTest extends KafkaTestBase {
         TestQueryConstants.JSON_PUSHDOWN_TOPIC, predicate1, predicate2, predicate3, predicate4);
 
     runKafkaSQLVerifyCount(queryString,expectedRowCount);
-    testPhysicalPlan(queryString, String.format(expectedSubStr, expectedRowCountInPlan));
+    PlanTestBase.testPlanMatchingPatterns(queryString, JSON_FORMAT,
+        new String[] {String.format(EXPECTED_PATTERN, expectedRowCountInPlan)}, null);
   }
 
   /**
    * Test pushdown for predicate1 AND predicate2.
    * Where predicate1 is on metadata field and and predicate2 is on user fields.
-   * @throws Exception
    */
   @Test
   public void testPushdownTimestampWithNonMetaField() throws Exception {
@@ -338,13 +340,13 @@ public class KafkaFilterPushdownTest extends KafkaTestBase {
         TestQueryConstants.JSON_PUSHDOWN_TOPIC, predicate1, predicate2);
 
     runKafkaSQLVerifyCount(queryString,expectedRowCount);
-    testPhysicalPlan(queryString, String.format(expectedSubStr, expectedRowCountInPlan));
+    PlanTestBase.testPlanMatchingPatterns(queryString, JSON_FORMAT,
+        new String[] {String.format(EXPECTED_PATTERN, expectedRowCountInPlan)}, null);
   }
 
   /**
    * Tests that pushdown does not happen for predicates such as
    * non-metadata-field = val1 OR (kafkaMsgTimestamp > val2 AND kafkaMsgTimestamp < val4)
-   * @throws Exception
    */
   @Test
   public void testNoPushdownOfOffsetWithNonMetadataField() throws Exception {
@@ -358,7 +360,7 @@ public class KafkaFilterPushdownTest extends KafkaTestBase {
         TestQueryConstants.JSON_PUSHDOWN_TOPIC, predicate1, predicate2, predicate3);
 
     runKafkaSQLVerifyCount(queryString,expectedRowCount);
-    testPhysicalPlan(queryString, String.format(expectedSubStr, expectedRowCountInPlan));
+    PlanTestBase.testPlanMatchingPatterns(queryString, JSON_FORMAT,
+        new String[] {String.format(EXPECTED_PATTERN, expectedRowCountInPlan)}, null);
   }
-
 }

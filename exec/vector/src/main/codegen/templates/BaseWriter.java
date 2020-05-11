@@ -54,7 +54,7 @@ package org.apache.drill.exec.vector.complex.writer;
     <#assign upperName = minor.class?upper_case />
     <#assign capName = minor.class?cap_first />
     <#if minor.class?contains("Decimal") >
-    ${capName}Writer ${lowerName}(String name, int scale, int precision);
+    ${capName}Writer ${lowerName}(String name, int precision, int scale);
     </#if>
     ${capName}Writer ${lowerName}(String name);
     </#list></#list>
@@ -62,15 +62,35 @@ package org.apache.drill.exec.vector.complex.writer;
     void copyReaderToField(String name, FieldReader reader);
     MapWriter map(String name);
     ListWriter list(String name);
+    UnionVectorWriter union(String name);
     void start();
     void end();
+    DictWriter dict(String name);
+  }
+
+  public interface DictWriter extends MapWriter {
+    /**
+     * Prepares key and value writers to write new values.
+     * Must be invoked before writing data to these fields.
+     */
+    void startKeyValuePair();
+
+    /**
+     * Finalizes writing values to key and value writers.
+     * Must be invoked after the values for the fields are written.
+     */
+    void endKeyValuePair();
+    FieldWriter getKeyWriter();
+    FieldWriter getValueWriter();
   }
 
   public interface ListWriter extends BaseWriter {
     void startList();
     void endList();
     MapWriter map();
+    DictWriter dict();
     ListWriter list();
+    UnionVectorWriter union();
     void copyReader(FieldReader reader);
 
     <#list vv.types as type><#list type.minor as minor>
@@ -79,7 +99,7 @@ package org.apache.drill.exec.vector.complex.writer;
     <#assign upperName = minor.class?upper_case />
     <#assign capName = minor.class?cap_first />
     <#if minor.class?contains("Decimal") >
-    ${capName}Writer ${lowerName}(int scale, int precision);
+    ${capName}Writer ${lowerName}(int precision, int scale);
     </#if>
     ${capName}Writer ${lowerName}();
     </#list></#list>
@@ -105,6 +125,8 @@ package org.apache.drill.exec.vector.complex.writer;
     void end();
     MapOrListWriter map(String name);
     MapOrListWriter listoftmap(String name);
+    MapOrListWriter dict(String name);
+    MapOrListWriter listOfDict();
     MapOrListWriter list(String name);
     boolean isMapWriter();
     boolean isListWriter();
@@ -115,7 +137,7 @@ package org.apache.drill.exec.vector.complex.writer;
     VarCharWriter varChar(String name);
     Var16CharWriter var16Char(String name);
     VarDecimalWriter varDecimal(String name);
-    VarDecimalWriter varDecimal(String name, int scale, int precision);
+    VarDecimalWriter varDecimal(String name, int precision, int scale);
     TinyIntWriter tinyInt(String name);
     SmallIntWriter smallInt(String name);
     IntWriter integer(String name);

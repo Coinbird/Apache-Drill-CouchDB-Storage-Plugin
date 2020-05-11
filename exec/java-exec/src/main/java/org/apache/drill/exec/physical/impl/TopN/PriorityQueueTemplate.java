@@ -36,9 +36,19 @@ import org.apache.drill.exec.record.selection.SelectionVector2;
 import org.apache.drill.exec.record.selection.SelectionVector4;
 
 import org.apache.drill.shaded.guava.com.google.common.base.Stopwatch;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 public abstract class PriorityQueueTemplate implements PriorityQueue {
-  private static final org.slf4j.Logger logger = org.slf4j.LoggerFactory.getLogger(PriorityQueueTemplate.class);
+  private static final Logger logger = LoggerFactory.getLogger(PriorityQueueTemplate.class);
+
+  /**
+   * The estimated maximum queue size used with allocating the SV4
+   * for the queue. If the queue is larger, then a) we should probably
+   * be using a sort instead of top N, and b) the code will automatically
+   * grow the SV4 as needed up to the max supported size.
+   */
+  public static final int EST_MAX_QUEUE_SIZE = 4000;
 
   // This holds the min heap of the record indexes. Heapify condition is based on actual record though. Only records
   // meeting the heap condition have their indexes in this heap. Actual record are stored inside the hyperBatch. Since
@@ -53,15 +63,14 @@ public abstract class PriorityQueueTemplate implements PriorityQueue {
 
   // Limit determines the number of record to output and hold in queue.
   private int limit;
-  private int queueSize = 0;
-  private int batchCount = 0;
+  private int queueSize;
+  private int batchCount;
   private boolean hasSv2;
 
   @Override
   public void init(int limit, BufferAllocator allocator,  boolean hasSv2) throws SchemaChangeException {
     this.limit = limit;
     this.allocator = allocator;
-    @SuppressWarnings("resource")
     // It's allocating memory to store (limit+1) indexes. When first limit number of record indexes are stored then all
     // the other record indexes are kept at (limit+1) and evaluated with the root element of heap to determine if
     // this new element will reside in heap or not.
@@ -85,7 +94,6 @@ public abstract class PriorityQueueTemplate implements PriorityQueue {
     cleanup();
     hyperBatch = new ExpandableHyperContainer(newContainer);
     batchCount = hyperBatch.iterator().next().getValueVectors().length;
-    @SuppressWarnings("resource")
     final DrillBuf drillBuf = allocator.buffer(4 * (limit + 1));
     heapSv4 = new SelectionVector4(drillBuf, limit, Character.MAX_VALUE);
     // Reset queue size (most likely to be set to limit).
@@ -98,7 +106,6 @@ public abstract class PriorityQueueTemplate implements PriorityQueue {
     doSetup(hyperBatch, null);
   }
 
-  @SuppressWarnings("resource")
   @Override
   public void add(RecordBatchData batch) throws SchemaChangeException{
     Stopwatch watch = Stopwatch.createStarted();
@@ -141,11 +148,10 @@ public abstract class PriorityQueueTemplate implements PriorityQueue {
   }
 
   @Override
-  public void generate() throws SchemaChangeException {
+  public void generate() {
     Stopwatch watch = Stopwatch.createStarted();
-    @SuppressWarnings("resource")
     final DrillBuf drillBuf = allocator.buffer(4 * queueSize);
-    finalSv4 = new SelectionVector4(drillBuf, queueSize, 4000);
+    finalSv4 = new SelectionVector4(drillBuf, queueSize, EST_MAX_QUEUE_SIZE);
     for (int i = queueSize - 1; i >= 0; i--) {
       finalSv4.set(i, pop());
     }
@@ -190,6 +196,7 @@ public abstract class PriorityQueueTemplate implements PriorityQueue {
    * @return - true - queue is still initialized
    *           false - queue is not yet initialized and before using queue init should be called
    */
+  @Override
   public boolean isInitialized() {
     return (heapSv4 != null);
   }

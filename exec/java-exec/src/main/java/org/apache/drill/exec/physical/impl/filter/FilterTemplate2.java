@@ -19,8 +19,8 @@ package org.apache.drill.exec.physical.impl.filter;
 
 import javax.inject.Named;
 
-import org.apache.drill.exec.exception.SchemaChangeException;
 import org.apache.drill.exec.exception.OutOfMemoryException;
+import org.apache.drill.exec.exception.SchemaChangeException;
 import org.apache.drill.exec.ops.FragmentContext;
 import org.apache.drill.exec.record.BatchSchema.SelectionVectorMode;
 import org.apache.drill.exec.record.RecordBatch;
@@ -32,18 +32,21 @@ public abstract class FilterTemplate2 implements Filterer {
   private SelectionVector2 incomingSelectionVector;
   private SelectionVectorMode svMode;
   private TransferPair[] transfers;
+  private RecordBatch outgoing;
 
   @Override
-  public void setup(FragmentContext context, RecordBatch incoming, RecordBatch outgoing, TransferPair[] transfers) throws SchemaChangeException {
+  public void setup(FragmentContext context, RecordBatch incoming,
+      RecordBatch outgoing, TransferPair[] transfers) throws SchemaChangeException {
     this.transfers = transfers;
     this.outgoingSelectionVector = outgoing.getSelectionVector2();
     this.svMode = incoming.getSchema().getSelectionVectorMode();
+    this.outgoing = outgoing;
 
-    switch(svMode){
+    switch(svMode) {
     case NONE:
       break;
     case TWO_BYTE:
-      this.incomingSelectionVector = incoming.getSelectionVector2();
+      incomingSelectionVector = incoming.getSelectionVector2();
       break;
     default:
       // SV4 is handled in FilterTemplate4
@@ -52,47 +55,52 @@ public abstract class FilterTemplate2 implements Filterer {
     doSetup(context, incoming, outgoing);
   }
 
-  private void doTransfers(){
-    for(TransferPair t : transfers){
+  private void doTransfers() {
+    for (TransferPair t : transfers) {
       t.transfer();
     }
   }
 
   @Override
-  public void filterBatch(int recordCount) throws SchemaChangeException{
+  public void filterBatch(int recordCount) throws SchemaChangeException {
     if (recordCount == 0) {
       outgoingSelectionVector.setRecordCount(0);
+      outgoingSelectionVector.setBatchActualRecordCount(0);
+      outgoing.getContainer().setEmpty();
       return;
     }
     if (! outgoingSelectionVector.allocateNewSafe(recordCount)) {
       throw new OutOfMemoryException("Unable to allocate filter batch");
     }
 
-    switch(svMode){
+    switch(svMode) {
     case NONE:
       // Set the actual recordCount in outgoing selection vector to help SVRemover copy the entire
       // batch if possible at once rather than row-by-row
       outgoingSelectionVector.setBatchActualRecordCount(recordCount);
       filterBatchNoSV(recordCount);
+      doTransfers();
+      outgoing.getContainer().setRecordCount(recordCount);
       break;
     case TWO_BYTE:
       // Set the actual recordCount in outgoing selection vector to help SVRemover copy the entire
       // batch if possible at once rather than row-by-row
-      outgoingSelectionVector.setBatchActualRecordCount(incomingSelectionVector.getBatchActualRecordCount());
+      int actualRowCount = incomingSelectionVector.getBatchActualRecordCount();
+      outgoingSelectionVector.setBatchActualRecordCount(actualRowCount);
       filterBatchSV2(recordCount);
+      doTransfers();
+      outgoing.getContainer().setRecordCount(actualRowCount);
       break;
     default:
       throw new UnsupportedOperationException();
     }
-    doTransfers();
   }
 
   private void filterBatchSV2(int recordCount) throws SchemaChangeException {
     int svIndex = 0;
-    final int count = recordCount;
-    for(int i = 0; i < count; i++){
-      char index = incomingSelectionVector.getIndex(i);
-      if(doEval(index, 0)){
+    for (int i = 0; i < recordCount; i++) {
+      int index = incomingSelectionVector.getIndex(i);
+      if (doEval(index, 0)) {
         outgoingSelectionVector.setIndex(svIndex, index);
         svIndex++;
       }
@@ -102,8 +110,8 @@ public abstract class FilterTemplate2 implements Filterer {
 
   private void filterBatchNoSV(int recordCount) throws SchemaChangeException {
     int svIndex = 0;
-    for(int i = 0; i < recordCount; i++){
-      if(doEval(i, 0)){
+    for (int i = 0; i < recordCount; i++) {
+      if (doEval(i, 0)) {
         outgoingSelectionVector.setIndex(svIndex, (char)i);
         svIndex++;
       }

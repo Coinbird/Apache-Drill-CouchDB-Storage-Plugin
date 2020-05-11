@@ -19,6 +19,7 @@ package org.apache.drill.exec.vector.accessor.writer;
 
 import java.lang.reflect.Constructor;
 import java.lang.reflect.InvocationTargetException;
+
 import org.apache.drill.common.types.TypeProtos.MajorType;
 import org.apache.drill.common.types.TypeProtos.MinorType;
 import org.apache.drill.exec.record.metadata.ColumnMetadata;
@@ -42,7 +43,6 @@ import org.apache.drill.exec.vector.complex.RepeatedValueVector;
  * it is cleaner to put the factory methods here rather than in the various
  * writers, as is done in the case of the readers.
  */
-
 @SuppressWarnings("unchecked")
 public class ColumnWriterFactory {
 
@@ -53,55 +53,56 @@ public class ColumnWriterFactory {
     ColumnAccessorUtils.defineRequiredWriters(requiredWriters);
   }
 
-  public static AbstractObjectWriter buildColumnWriter(ColumnMetadata schema, ValueVector vector) {
+  public static AbstractObjectWriter buildColumnWriter(ColumnMetadata schema,
+      ValueVector vector) {
     if (vector == null) {
       return buildDummyColumnWriter(schema);
     }
 
     // Build a writer for a materialized column.
-
     assert schema.type() == vector.getField().getType().getMinorType();
     assert schema.mode() == vector.getField().getType().getMode();
 
     switch (schema.type()) {
-    case GENERIC_OBJECT:
-    case LATE:
-    case NULL:
-    case LIST:
-    case MAP:
-    case UNION:
-      throw new UnsupportedOperationException(schema.type().toString());
-    default:
-      switch (schema.mode()) {
-      case OPTIONAL:
-        return nullableScalarWriter(schema, (NullableVector) vector);
-      case REQUIRED:
-        return requiredScalarWriter(schema, vector);
-      case REPEATED:
-        return repeatedScalarWriter(schema, (RepeatedValueVector) vector);
+      case GENERIC_OBJECT:
+      case LATE:
+      case NULL:
+      case LIST:
+      case MAP:
+      case DICT:
+      case UNION:
+        throw new UnsupportedOperationException(schema.type().toString());
       default:
-        throw new UnsupportedOperationException(schema.mode().toString());
+        switch (schema.mode()) {
+        case OPTIONAL:
+          return nullableScalarWriter(schema, (NullableVector) vector);
+        case REQUIRED:
+          return requiredScalarWriter(schema, vector);
+        case REPEATED:
+          return repeatedScalarWriter(schema, (RepeatedValueVector) vector);
+        default:
+          throw new UnsupportedOperationException(schema.mode().toString());
       }
     }
   }
 
   private static ScalarObjectWriter requiredScalarWriter(
       ColumnMetadata schema, ValueVector vector) {
-    BaseScalarWriter baseWriter = newWriter(vector);
+    final BaseScalarWriter baseWriter = newWriter(vector);
     baseWriter.bindSchema(schema);
     return new ScalarObjectWriter(baseWriter);
   }
 
   private static ScalarObjectWriter nullableScalarWriter(
       ColumnMetadata schema, NullableVector vector) {
-    BaseScalarWriter baseWriter = newWriter(vector.getValuesVector());
+    final BaseScalarWriter baseWriter = newWriter(vector.getValuesVector());
     baseWriter.bindSchema(schema);
     return NullableScalarWriter.build(schema, vector, baseWriter);
   }
 
   private static AbstractObjectWriter repeatedScalarWriter(
       ColumnMetadata schema, RepeatedValueVector vector) {
-    BaseScalarWriter baseWriter = newWriter(vector.getDataVector());
+    final BaseScalarWriter baseWriter = newWriter(vector.getDataVector());
     baseWriter.bindSchema(schema);
     return ScalarArrayWriter.build(schema, vector, baseWriter);
   }
@@ -111,41 +112,41 @@ public class ColumnWriterFactory {
    * @param schema schema of the column
    * @return a "dummy" writer for the column
    */
-
   public static AbstractObjectWriter buildDummyColumnWriter(ColumnMetadata schema) {
     switch (schema.type()) {
-    case GENERIC_OBJECT:
-    case LATE:
-    case LIST:
-    case MAP:
-    case UNION:
-      throw new UnsupportedOperationException(schema.type().toString());
-    default:
-      ScalarObjectWriter scalarWriter = new ScalarObjectWriter(
-          new DummyScalarWriter(schema));
-      switch (schema.mode()) {
-      case OPTIONAL:
-      case REQUIRED:
-        return scalarWriter;
-      case REPEATED:
-        return new ArrayObjectWriter(
-            new DummyArrayWriter(schema,
-              scalarWriter));
+      case GENERIC_OBJECT:
+      case LATE:
+      case LIST:
+      case MAP:
+      case DICT:
+      case UNION:
+        throw new UnsupportedOperationException(schema.type().toString());
       default:
-        throw new UnsupportedOperationException(schema.mode().toString());
+        final ScalarObjectWriter scalarWriter = new ScalarObjectWriter(
+            new DummyScalarWriter(schema));
+        switch (schema.mode()) {
+        case OPTIONAL:
+        case REQUIRED:
+          return scalarWriter;
+        case REPEATED:
+          return new ArrayObjectWriter(
+              new DummyArrayWriter(schema,
+                scalarWriter));
+        default:
+          throw new UnsupportedOperationException(schema.mode().toString());
       }
     }
   }
 
   public static BaseScalarWriter newWriter(ValueVector vector) {
-    MajorType major = vector.getField().getType();
-    MinorType type = major.getMinorType();
+    final MajorType major = vector.getField().getType();
+    final MinorType type = major.getMinorType();
     try {
-      Class<? extends BaseScalarWriter> accessorClass = requiredWriters[type.ordinal()];
+      final Class<? extends BaseScalarWriter> accessorClass = requiredWriters[type.ordinal()];
       if (accessorClass == null) {
         throw new UnsupportedOperationException(type.toString());
       }
-      Constructor<? extends BaseScalarWriter> ctor = accessorClass.getConstructor(ValueVector.class);
+      final Constructor<? extends BaseScalarWriter> ctor = accessorClass.getConstructor(ValueVector.class);
       return ctor.newInstance(vector);
     } catch (InstantiationException | IllegalAccessException | NoSuchMethodException |
              SecurityException | IllegalArgumentException | InvocationTargetException e) {

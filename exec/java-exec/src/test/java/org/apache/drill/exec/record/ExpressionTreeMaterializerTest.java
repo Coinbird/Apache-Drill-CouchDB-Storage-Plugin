@@ -25,6 +25,7 @@ import static org.mockito.Mockito.when;
 
 import org.apache.drill.categories.VectorTest;
 import org.apache.drill.common.config.DrillConfig;
+import org.apache.drill.common.exceptions.UserException;
 import org.apache.drill.common.expression.ErrorCollector;
 import org.apache.drill.common.expression.ErrorCollectorImpl;
 import org.apache.drill.common.expression.ExpressionPosition;
@@ -48,6 +49,7 @@ import org.junit.Test;
 import org.apache.drill.shaded.guava.com.google.common.collect.ImmutableList;
 import org.apache.drill.shaded.guava.com.google.common.collect.Range;
 import org.junit.experimental.categories.Category;
+import org.slf4j.Logger;
 
 @Category(VectorTest.class)
 public class ExpressionTreeMaterializerTest extends ExecTest {
@@ -75,8 +77,11 @@ public class ExpressionTreeMaterializerTest extends ExecTest {
   @Test
   public void testMaterializingLateboundField() throws SchemaChangeException {
     final RecordBatch batch = mock(RecordBatch.class);
+    TypedFieldId fieldId = new TypedFieldId.Builder().finalType(Types.required(MinorType.BIGINT))
+        .addId(-5)
+        .build();
     when(batch.getValueVectorId(new SchemaPath("test", ExpressionPosition.UNKNOWN)))
-      .thenReturn(new TypedFieldId(Types.required(MinorType.BIGINT), -5));
+      .thenReturn(fieldId);
 
     final SchemaBuilder builder = BatchSchema.newBuilder();
     builder.addField(getField("test", bigIntType));
@@ -93,8 +98,14 @@ public class ExpressionTreeMaterializerTest extends ExecTest {
   public void testMaterializingLateboundTree() throws SchemaChangeException {
     final RecordBatch batch = mock(RecordBatch.class);
 
-    when(batch.getValueVectorId(SchemaPath.getSimplePath("test"))).thenReturn(new TypedFieldId(Types.required(MinorType.BIT), -4));
-    when(batch.getValueVectorId(SchemaPath.getSimplePath("test1"))).thenReturn(new TypedFieldId(Types.required(MinorType.BIGINT), -5));
+    TypedFieldId fieldId = new TypedFieldId.Builder().finalType(Types.required(MinorType.BIT))
+        .addId(-4)
+        .build();
+    TypedFieldId fieldId2 = new TypedFieldId.Builder().finalType(Types.required(MinorType.BIGINT))
+        .addId(-5)
+        .build();
+    when(batch.getValueVectorId(SchemaPath.getSimplePath("test"))).thenReturn(fieldId);
+    when(batch.getValueVectorId(SchemaPath.getSimplePath("test1"))).thenReturn(fieldId2);
 
     ErrorCollector ec = new ErrorCollectorImpl();
 
@@ -121,8 +132,11 @@ public class ExpressionTreeMaterializerTest extends ExecTest {
   public void testMaterializingLateboundTreeValidated() throws SchemaChangeException {
     final RecordBatch batch = mock(RecordBatch.class);
 
+    TypedFieldId fieldId = new TypedFieldId.Builder().finalType(Types.required(MinorType.BIGINT))
+        .addId(-5)
+        .build();
     when(batch.getValueVectorId(new SchemaPath("test", ExpressionPosition.UNKNOWN)))
-      .thenReturn(new TypedFieldId(Types.required(MinorType.BIGINT), -5));
+      .thenReturn(fieldId);
 
     ErrorCollector ec = new ErrorCollector() {
       int errorCount = 0;
@@ -176,6 +190,13 @@ public class ExpressionTreeMaterializerTest extends ExecTest {
       @Override
       public int getErrorCount() {
         return errorCount;
+      }
+
+      @Override
+      public void reportErrors(Logger logger) {
+        throw UserException.internalError(null)
+          .message("Code generation found %d errors", errorCount)
+          .build(logger);
       }
     };
 

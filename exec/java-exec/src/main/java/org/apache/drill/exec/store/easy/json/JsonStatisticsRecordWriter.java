@@ -17,18 +17,14 @@
  */
 package org.apache.drill.exec.store.easy.json;
 
-import com.fasterxml.jackson.core.JsonFactory;
 import java.io.IOException;
-import java.time.LocalDate;
-import java.util.ArrayList;
-import java.util.List;
 import java.util.Map;
-import org.apache.drill.common.types.TypeProtos.MajorType;
-import org.apache.drill.exec.physical.impl.statistics.Statistic;
-import org.apache.drill.exec.planner.common.DrillStatsTable;
-import org.apache.drill.exec.planner.common.DrillStatsTable.STATS_VERSION;
-import org.apache.drill.exec.record.VectorAccessible;
+
 import org.apache.drill.exec.store.EventBasedRecordWriter.FieldConverter;
+import org.apache.drill.exec.store.StatisticsRecordWriter;
+import org.apache.drill.common.exceptions.UserException;
+import org.apache.drill.exec.planner.common.DrillStatsTable;
+import org.apache.drill.exec.record.VectorAccessible;
 import org.apache.drill.exec.store.JSONBaseStatisticsRecordWriter;
 import org.apache.drill.exec.store.dfs.FormatPlugin;
 import org.apache.drill.exec.util.ImpersonationUtil;
@@ -37,46 +33,34 @@ import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 
-public class JsonStatisticsRecordWriter extends JSONBaseStatisticsRecordWriter {
+public class JsonStatisticsRecordWriter extends JSONBaseStatisticsRecordWriter implements StatisticsRecordWriter {
 
   private static final org.slf4j.Logger logger = org.slf4j.LoggerFactory.getLogger(JsonStatisticsRecordWriter.class);
-  private static final String LINE_FEED = String.format("%n");
+
   private String location;
   private String prefix;
-  private String fieldDelimiter;
   private String extension;
-  private boolean useExtendedOutput;
   private FileSystem fs = null;
-  private STATS_VERSION statisticsVersion;
-  private final JsonFactory factory = new JsonFactory();
-  private String lastDirectory = null;
-  private Configuration fsConf = null;
-  private FormatPlugin formatPlugin = null;
-  private String nextField = null;
-  private DrillStatsTable.TableStatistics statistics;
-  private List<DrillStatsTable.ColumnStatistics> columnStatisticsList = new ArrayList<DrillStatsTable.ColumnStatistics>();
-  private DrillStatsTable.ColumnStatistics columnStatistics;
-  private LocalDate dirComputedTime = null;
+  private final Configuration fsConf;
+  private final FormatPlugin formatPlugin;
   private Path fileName = null;
-  private String queryId = null;
-  private long recordsWritten = -1;
-  private boolean errStatus = false;
 
-  public JsonStatisticsRecordWriter(Configuration fsConf, FormatPlugin formatPlugin){
+  private long recordsWritten = -1;
+
+  private final StatisticsCollectorImpl statisticsCollector = new StatisticsCollectorImpl();
+
+  public JsonStatisticsRecordWriter(Configuration fsConf, FormatPlugin formatPlugin) {
     this.fsConf = fsConf;
     this.formatPlugin = formatPlugin;
   }
 
   @Override
-  public void init(Map<String, String> writerOptions) throws IOException {
+  public void init(Map<String, String> writerOptions) {
     this.location = writerOptions.get("location");
     this.prefix = writerOptions.get("prefix");
-    this.fieldDelimiter = writerOptions.get("separator");
     this.extension = writerOptions.get("extension");
-    this.useExtendedOutput = Boolean.parseBoolean(writerOptions.get("extended"));
     this.skipNullFields = Boolean.parseBoolean(writerOptions.get("skipnulls"));
-    this.statisticsVersion = DrillStatsTable.CURRENT_VERSION;
-    this.queryId = writerOptions.get("queryid");
+    String queryId = writerOptions.get("queryid");
      //Write as DRILL process user
     this.fs = ImpersonationUtil.createFileSystem(ImpersonationUtil.getProcessUserName(), fsConf);
 
@@ -87,8 +71,9 @@ public class JsonStatisticsRecordWriter extends JSONBaseStatisticsRecordWriter {
         fs.delete(fileName, false);
       }
     } catch (IOException ex) {
-      logger.error("Unable to delete tmp file (corrupt): " + fileName, ex);
-      throw ex;
+      throw UserException.dataWriteError(ex)
+        .addContext("Unable to delete tmp statistics file", fileName)
+        .build(logger);
     }
     try {
       // Delete the tmp file and .stats.drill on exit. After writing out the permanent file
@@ -98,13 +83,14 @@ public class JsonStatisticsRecordWriter extends JSONBaseStatisticsRecordWriter {
       fs.deleteOnExit(new Path(location));
       logger.debug("Created file: {}", fileName);
     } catch (IOException ex) {
-      logger.error("Unable to create file: " + fileName, ex);
-      throw ex;
+      throw UserException.dataWriteError(ex)
+        .addContext("Unable to create stistics file", fileName)
+        .build(logger);
     }
   }
 
   @Override
-  public void updateSchema(VectorAccessible batch) throws IOException {
+  public void updateSchema(VectorAccessible batch) {
     // no op
   }
 
@@ -120,325 +106,73 @@ public class JsonStatisticsRecordWriter extends JSONBaseStatisticsRecordWriter {
 
   @Override
   public FieldConverter getNewBigIntConverter(int fieldId, String fieldName, FieldReader reader) {
-    return new BigIntJsonConverter(fieldId, fieldName, reader);
-  }
-
-  public class BigIntJsonConverter extends FieldConverter {
-
-    public BigIntJsonConverter(int fieldId, String fieldName, FieldReader reader) {
-      super(fieldId, fieldName, reader);
-    }
-
-    @Override
-    public void startField() throws IOException {
-      if (fieldName.equals(Statistic.SCHEMA)) {
-        nextField = fieldName;
-      } else if (fieldName.equals(Statistic.ROWCOUNT)
-            || fieldName.equals(Statistic.NNROWCOUNT)
-            || fieldName.equals(Statistic.NDV)
-            || fieldName.equals(Statistic.AVG_WIDTH)
-            || fieldName.equals(Statistic.SUM_DUPS)) {
-        nextField = fieldName;
-      }
-    }
-
-    @Override
-    public void writeField() throws IOException {
-      if (nextField == null) {
-        errStatus = true;
-        throw new IOException("Statistics writer encountered unexpected field");
-      }
-      if (nextField.equals(Statistic.SCHEMA)) {
-        ((DrillStatsTable.ColumnStatistics_v1) columnStatistics).setSchema(reader.readLong());
-      } else if (nextField.equals(Statistic.ROWCOUNT)) {
-        ((DrillStatsTable.ColumnStatistics_v1) columnStatistics).setCount(reader.readLong());
-      } else if (nextField.equals(Statistic.NNROWCOUNT)) {
-        ((DrillStatsTable.ColumnStatistics_v1) columnStatistics).setNonNullCount(reader.readLong());
-      } else if (nextField.equals(Statistic.NDV)) {
-        ((DrillStatsTable.ColumnStatistics_v1) columnStatistics).setNdv(reader.readLong());
-      } else if (nextField.equals(Statistic.AVG_WIDTH)) {
-        ((DrillStatsTable.ColumnStatistics_v1) columnStatistics).setAvgWidth(reader.readLong());
-      } else if (nextField.equals(Statistic.SUM_DUPS)) {
-        // Ignore Count_Approx_Dups statistic
-      }
-    }
-
-    @Override
-    public void endField() throws IOException {
-      nextField = null;
-    }
+    return statisticsCollector.getNewBigIntConverter(fieldId, fieldName, reader);
   }
 
   @Override
   public FieldConverter getNewIntConverter(int fieldId, String fieldName, FieldReader reader) {
-    return new IntJsonConverter(fieldId, fieldName, reader);
-  }
-
-  public class IntJsonConverter extends FieldConverter {
-
-    public IntJsonConverter(int fieldId, String fieldName, FieldReader reader) {
-      super(fieldId, fieldName, reader);
-    }
-
-    @Override
-    public void startField() throws IOException {
-      if (fieldName.equals(Statistic.COLTYPE)) {
-        nextField = fieldName;
-      }
-    }
-
-    @Override
-    public void writeField() throws IOException {
-      if (nextField == null) {
-        errStatus = true;
-        throw new IOException("Statistics writer encountered unexpected field");
-      }
-      if (nextField.equals(Statistic.COLTYPE)) {
-        // Do not write out the type
-      }
-    }
-
-    @Override
-    public void endField() throws IOException {
-      nextField = null;
-    }
+    return statisticsCollector.getNewIntConverter(fieldId, fieldName, reader);
   }
 
   @Override
   public FieldConverter getNewDateConverter(int fieldId, String fieldName, FieldReader reader) {
-    return new DateJsonConverter(fieldId, fieldName, reader);
-  }
-
-  public class DateJsonConverter extends FieldConverter {
-
-    public DateJsonConverter(int fieldId, String fieldName, FieldReader reader) {
-      super(fieldId, fieldName, reader);
-    }
-
-    @Override
-    public void startField() throws IOException {
-      if (fieldName.equals(Statistic.COMPUTED)) {
-        nextField = fieldName;
-      }
-    }
-
-    @Override
-    public void writeField() throws IOException {
-      if (nextField == null) {
-        errStatus = true;
-        throw new IOException("Statistics writer encountered unexpected field");
-      }
-      if (nextField.equals((Statistic.COMPUTED))) {
-        LocalDate computedTime = reader.readLocalDate();
-        if (dirComputedTime == null
-               || computedTime.compareTo(dirComputedTime) > 0) {
-          dirComputedTime = computedTime;
-        }
-      }
-    }
-
-    @Override
-    public void endField() throws IOException {
-      nextField = null;
-    }
+    return statisticsCollector.getNewDateConverter(fieldId, fieldName, reader);
   }
 
   @Override
   public FieldConverter getNewVarCharConverter(int fieldId, String fieldName, FieldReader reader) {
-    return new VarCharJsonConverter(fieldId, fieldName, reader);
-  }
-
-  public class VarCharJsonConverter extends FieldConverter {
-
-    public VarCharJsonConverter(int fieldId, String fieldName, FieldReader reader) {
-      super(fieldId, fieldName, reader);
-    }
-
-    @Override
-    public void startField() throws IOException {
-      if (fieldName.equals(Statistic.COLNAME)) {
-        nextField = fieldName;
-      } else if (fieldName.equals(Statistic.COLTYPE)) {
-        nextField = fieldName;
-      }
-    }
-
-    @Override
-    public void writeField() throws IOException {
-      if (nextField == null) {
-        errStatus = true;
-        throw new IOException("Statistics writer encountered unexpected field");
-      }
-      if (nextField.equals(Statistic.COLNAME)) {
-        ((DrillStatsTable.ColumnStatistics_v1) columnStatistics).setName(reader.readText().toString());
-      } else if (nextField.equals(Statistic.COLTYPE)) {
-        MajorType fieldType = DrillStatsTable.getMapper().readValue(reader.readText().toString(), MajorType.class);
-        ((DrillStatsTable.ColumnStatistics_v1) columnStatistics).setType(fieldType);
-      }
-    }
-
-    @Override
-    public void endField() throws IOException {
-      nextField = null;
-    }
+    return statisticsCollector.getNewVarCharConverter(fieldId, fieldName, reader);
   }
 
   @Override
   public FieldConverter getNewNullableBigIntConverter(int fieldId, String fieldName, FieldReader reader) {
-    return new NullableBigIntJsonConverter(fieldId, fieldName, reader);
-  }
-
-  public class NullableBigIntJsonConverter extends FieldConverter {
-
-    public NullableBigIntJsonConverter(int fieldId, String fieldName, FieldReader reader) {
-      super(fieldId, fieldName, reader);
-    }
-
-    @Override
-    public void startField() throws IOException {
-      if (!skipNullFields || this.reader.isSet()) {
-        if (fieldName.equals(Statistic.ROWCOUNT)
-            || fieldName.equals(Statistic.NNROWCOUNT)
-            || fieldName.equals(Statistic.NDV)
-            || fieldName.equals(Statistic.SUM_DUPS)) {
-          nextField = fieldName;
-        }
-      }
-    }
-
-    @Override
-    public void writeField() throws IOException {
-      if (!skipNullFields || this.reader.isSet()) {
-        if (nextField == null) {
-          errStatus = true;
-          throw new IOException("Statistics writer encountered unexpected field");
-        }
-        if (nextField.equals(Statistic.ROWCOUNT)) {
-          ((DrillStatsTable.ColumnStatistics_v1) columnStatistics).setCount(reader.readLong());
-        } else if (nextField.equals(Statistic.NNROWCOUNT)) {
-          ((DrillStatsTable.ColumnStatistics_v1) columnStatistics).setNonNullCount(reader.readLong());
-        } else if (nextField.equals(Statistic.NDV)) {
-          ((DrillStatsTable.ColumnStatistics_v1) columnStatistics).setNdv(reader.readLong());
-        } else if (nextField.equals(Statistic.SUM_DUPS)) {
-          // Ignore Count_Approx_Dups statistic
-        }
-      }
-    }
-
-    @Override
-    public void endField() throws IOException {
-      nextField = null;
-    }
+    return statisticsCollector.getNewNullableBigIntConverter(fieldId, fieldName, reader);
   }
 
   @Override
   public FieldConverter getNewNullableVarBinaryConverter(int fieldId, String fieldName, FieldReader reader) {
-    return new NullableVarBinaryJsonConverter(fieldId, fieldName, reader);
-  }
-
-  public class NullableVarBinaryJsonConverter extends FieldConverter {
-
-    public NullableVarBinaryJsonConverter(int fieldId, String fieldName, FieldReader reader) {
-      super(fieldId, fieldName, reader);
-    }
-
-    @Override
-    public void startField() throws IOException {
-      if (!skipNullFields || this.reader.isSet()) {
-        if (fieldName.equals(Statistic.HLL)
-            || fieldName.equals(Statistic.HLL_MERGE)) {
-          nextField = fieldName;
-        }
-      }
-    }
-
-    @Override
-    public void writeField() throws IOException {
-      if (!skipNullFields || this.reader.isSet()) {
-        if (nextField == null) {
-          errStatus = true;
-          throw new IOException("Statistics writer encountered unexpected field");
-        }
-        if (nextField.equals(Statistic.HLL)
-            || nextField.equals(Statistic.HLL_MERGE)) {
-          // Do NOT write out the HLL output, since it is not used yet for computing statistics for a
-          // subset of partitions in the query OR for computing NDV with incremental statistics.
-        }
-      }
-    }
-
-    @Override
-    public void endField() throws IOException {
-      nextField = null;
-    }
+    return statisticsCollector.getNewNullableVarBinaryConverter(fieldId, fieldName, reader);
   }
 
   @Override
   public FieldConverter getNewNullableFloat8Converter(int fieldId, String fieldName, FieldReader reader) {
-    return new NullableFloat8JsonConverter(fieldId, fieldName, reader);
-  }
-
-  public class NullableFloat8JsonConverter extends FieldConverter {
-
-    public NullableFloat8JsonConverter(int fieldId, String fieldName, FieldReader reader) {
-      super(fieldId, fieldName, reader);
-    }
-
-    @Override
-    public void startField() throws IOException {
-      if (!skipNullFields || this.reader.isSet()) {
-        if (fieldName.equals(Statistic.AVG_WIDTH)) {
-          nextField = fieldName;
-        }
-      }
-    }
-
-    @Override
-    public void writeField() throws IOException {
-      if (!skipNullFields || this.reader.isSet()) {
-        if (nextField == null) {
-          errStatus = true;
-          throw new IOException("Statistics writer encountered unexpected field");
-        }
-        if (nextField.equals(Statistic.AVG_WIDTH)) {
-          ((DrillStatsTable.ColumnStatistics_v1) columnStatistics).setAvgWidth(reader.readDouble());
-        }
-      }
-    }
-
-    @Override
-    public void endField() throws IOException {
-      nextField = null;
-    }
+    return statisticsCollector.getNewNullableFloat8Converter(fieldId, fieldName, reader);
   }
 
   @Override
-  public void startStatisticsRecord() throws IOException {
-    columnStatistics = new DrillStatsTable.ColumnStatistics_v1();
+  public void startStatisticsRecord() {
+    statisticsCollector.startStatisticsRecord();
   }
 
   @Override
-  public void endStatisticsRecord() throws IOException {
-    columnStatisticsList.add(columnStatistics);
+  public void endStatisticsRecord() {
+    statisticsCollector.endStatisticsRecord();
     ++recordsWritten;
+  }
+
+  @Override
+  public boolean hasStatistics() {
+    return recordsWritten > 0;
+  }
+
+  @Override
+  public DrillStatsTable.TableStatistics getStatistics() {
+    return statisticsCollector.getStatistics();
   }
 
   @Override
   public void flushBlockingWriter() throws IOException {
     Path permFileName = new Path(location, prefix + "." + extension);
     try {
-      if (errStatus) {
+      if (statisticsCollector.hasErrors()) {
         // Encountered some error
         throw new IOException("Statistics writer encountered unexpected field");
       } else if (recordsWritten < 0) {
         throw new IOException("Statistics writer did not have data");
       }
-      // Generated the statistics data structure to be serialized
-      statistics = DrillStatsTable.generateDirectoryStructure(dirComputedTime.toString(),
-          columnStatisticsList);
       if (formatPlugin.supportsStatistics()) {
         // Invoke the format plugin stats API to write out the stats
-        formatPlugin.writeStatistics(statistics, fs, fileName);
+        formatPlugin.writeStatistics(statisticsCollector.getStatistics(), fs, fileName);
         // Delete existing permanent file and rename .tmp file to permanent file
         // If failed to do so then delete the .tmp file
         fs.delete(permFileName, false);
@@ -455,13 +189,13 @@ public class JsonStatisticsRecordWriter extends JSONBaseStatisticsRecordWriter {
   }
 
   @Override
-  public void abort() throws IOException {
+  public void abort() {
     // Invoke cleanup to clear any .tmp files and/or empty statistics directory
     cleanup();
   }
 
   @Override
-  public void cleanup() throws IOException {
+  public void cleanup() {
     Path permFileName = new Path(location, prefix + "." + extension);
     try {
       // Remove the .tmp file, if any
@@ -475,8 +209,8 @@ public class JsonStatisticsRecordWriter extends JSONBaseStatisticsRecordWriter {
         logger.debug("Deleted directory: {}", location);
       }
     } catch (IOException ex) {
-      logger.error("Unable to delete tmp file: " + fileName, ex);
-      throw ex;
+      // Warn but continue
+      logger.warn("Unable to delete tmp satistics file: " + fileName, ex);
     }
   }
 }

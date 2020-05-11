@@ -30,8 +30,8 @@ import org.apache.drill.test.ClusterFixture;
 import org.apache.drill.test.ClusterFixtureBuilder;
 import org.apache.drill.test.ClusterTest;
 import org.apache.drill.test.QueryBuilder.QuerySummary;
-import org.apache.drill.test.rowSet.RowSet;
-import org.apache.drill.test.rowSet.RowSetReader;
+import org.apache.drill.exec.physical.rowSet.RowSet;
+import org.apache.drill.exec.physical.rowSet.RowSetReader;
 import org.apache.drill.categories.PlannerTest;
 import org.apache.drill.categories.SlowTest;
 import org.apache.drill.exec.proto.BitControl.PlanFragment;
@@ -47,10 +47,11 @@ import org.apache.drill.shaded.guava.com.google.common.collect.Lists;
 
 /**
  * Class to test different planning use cases (separate from query execution)
- *
+ * (Though, despite the above, this test does execute queries.)
  */
 @Category({SlowTest.class, PlannerTest.class})
 public class DrillSeparatePlanningTest extends ClusterTest {
+
   @BeforeClass
   public static void setupFiles() {
     dirTestWatcher.copyResourceToRoot(Paths.get("multilevel", "json"));

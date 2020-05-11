@@ -17,13 +17,17 @@
  */
 package org.apache.drill.exec.physical.impl.scan.file;
 
+import java.util.HashSet;
+import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 import org.apache.drill.exec.physical.impl.scan.project.ColumnProjection;
 import org.apache.drill.exec.physical.impl.scan.project.ScanLevelProjection;
 import org.apache.drill.exec.physical.impl.scan.project.ScanLevelProjection.ScanProjectionParser;
-import org.apache.drill.exec.physical.rowSet.project.RequestedTuple.RequestedColumn;
+import org.apache.drill.exec.physical.resultSet.project.RequestedColumn;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Parses the implicit file metadata columns out of a project list,
@@ -31,19 +35,20 @@ import org.apache.drill.exec.physical.rowSet.project.RequestedTuple.RequestedCol
  */
 
 public class FileMetadataColumnsParser implements ScanProjectionParser {
-  static final org.slf4j.Logger logger = org.slf4j.LoggerFactory.getLogger(FileMetadataColumnsParser.class);
+  private static final Logger logger = LoggerFactory.getLogger(FileMetadataColumnsParser.class);
 
   // Internal
 
-  private final FileMetadataManager metadataManager;
+  private final ImplicitColumnManager metadataManager;
   private final Pattern partitionPattern;
   private ScanLevelProjection builder;
+  private final Set<Integer> referencedPartitions = new HashSet<>();
 
   // Output
 
   private boolean hasImplicitCols;
 
-  public FileMetadataColumnsParser(FileMetadataManager metadataManager) {
+  public FileMetadataColumnsParser(ImplicitColumnManager metadataManager) {
     this.metadataManager = metadataManager;
     partitionPattern = Pattern.compile(metadataManager.partitionDesignator + "(\\d+)", Pattern.CASE_INSENSITIVE);
   }
@@ -71,20 +76,24 @@ public class FileMetadataColumnsParser implements ScanProjectionParser {
 
     // If the projected column is a map or array, then it shadows the
     // partition column. Example: dir0.x, dir0[2].
-
     if (! inCol.isSimple()) {
       logger.warn("Partition column {} is shadowed by a projected {}",
-          inCol.name(), inCol.summary());
+          inCol.name(), inCol.toString());
       return false;
     }
 
     // Partition column
+    int partitionIndex = Integer.parseInt(m.group(1));
+    if (! referencedPartitions.contains(partitionIndex)) {
+      builder.addMetadataColumn(
+          new PartitionColumn(
+            inCol.name(),
+            partitionIndex));
 
-    builder.addMetadataColumn(
-        new PartitionColumn(
-          inCol.name(),
-          Integer.parseInt(m.group(1))));
-    hasImplicitCols = true;
+      // Remember the partition for later wildcard expansion
+      referencedPartitions.add(partitionIndex);
+      hasImplicitCols = true;
+    }
     return true;
   }
 
@@ -93,22 +102,46 @@ public class FileMetadataColumnsParser implements ScanProjectionParser {
 
     // If the projected column is a map or array, then it shadows the
     // metadata column. Example: filename.x, filename[2].
-
     if (! inCol.isSimple()) {
       logger.warn("File metadata column {} is shadowed by a projected {}",
-          inCol.name(), inCol.summary());
+          inCol.name(), inCol.toString());
       return false;
     }
 
     // File metadata (implicit) column
-
     builder.addMetadataColumn(new FileMetadataColumn(inCol.name(), defn));
     hasImplicitCols = true;
     return true;
   }
 
   @Override
-  public void validate() { }
+  public void validate() {
+
+    // Expand partitions when the projection includes a wildcard
+    // and when "legacy" partition expansion is enabled.
+    if (builder.projectAll() && metadataManager.options().useLegacyWildcardExpansion) {
+      expandPartitions();
+    }
+  }
+
+  private void expandPartitions() {
+
+    // Legacy wildcard expansion: include the file partitions for this file.
+    // This is a disadvantage for a * query: files at different directory
+    // levels will have different numbers of columns. Would be better to
+    // return this data as an array at some point.
+    // Append this after the *, keeping the * for later expansion.
+
+    for (int i = 0; i < metadataManager.partitionCount(); i++) {
+      if (referencedPartitions.contains(i)) {
+        continue;
+      }
+      builder.addMetadataColumn(new PartitionColumn(
+          metadataManager.partitionName(i), i));
+      referencedPartitions.add(i);
+    }
+    hasImplicitCols = true;
+  }
 
   @Override
   public void validateColumn(ColumnProjection outCol) { }

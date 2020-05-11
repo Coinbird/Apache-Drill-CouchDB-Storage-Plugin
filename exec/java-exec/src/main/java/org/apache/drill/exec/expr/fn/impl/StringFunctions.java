@@ -19,6 +19,8 @@ package org.apache.drill.exec.expr.fn.impl;
 
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.DrillBuf;
+
+import org.apache.drill.common.FunctionNames;
 import org.apache.drill.exec.expr.DrillSimpleFunc;
 import org.apache.drill.exec.expr.annotations.FunctionTemplate;
 import org.apache.drill.exec.expr.annotations.FunctionTemplate.FunctionScope;
@@ -40,7 +42,6 @@ import javax.inject.Inject;
 import java.nio.charset.Charset;
 
 public class StringFunctions{
-  static final org.slf4j.Logger logger = org.slf4j.LoggerFactory.getLogger(StringFunctions.class);
 
   private StringFunctions() {}
 
@@ -48,7 +49,7 @@ public class StringFunctions{
    * String Function Implementation.
    */
 
-  @FunctionTemplate(name = "like", scope = FunctionScope.SIMPLE, nulls = NullHandling.NULL_IF_NULL)
+  @FunctionTemplate(name = FunctionNames.LIKE, scope = FunctionScope.SIMPLE, nulls = NullHandling.NULL_IF_NULL)
   public static class Like implements DrillSimpleFunc {
 
     @Param VarCharHolder input;
@@ -70,7 +71,7 @@ public class StringFunctions{
     }
   }
 
-  @FunctionTemplate(name = "like", scope = FunctionScope.SIMPLE, nulls = NullHandling.NULL_IF_NULL)
+  @FunctionTemplate(name = FunctionNames.LIKE, scope = FunctionScope.SIMPLE, nulls = NullHandling.NULL_IF_NULL)
   public static class LikeWithEscape implements DrillSimpleFunc {
 
     @Param VarCharHolder input;
@@ -1662,12 +1663,12 @@ public class StringFunctions{
     @Override
     public void eval() {
       byte[] buf = org.apache.drill.common.util.DrillStringUtils.toBinaryString(in.buffer, in.start, in.end).getBytes(charset);
-      buffer.setBytes(0, buf);
-      buffer.setIndex(0, buf.length);
+      out.buffer = buffer.reallocIfNeeded(buf.length);
+      out.buffer.setBytes(0, buf);
+      out.buffer.setIndex(0, buf.length);
 
       out.start = 0;
       out.end = buf.length;
-      out.buffer = buffer;
     }
   }
 

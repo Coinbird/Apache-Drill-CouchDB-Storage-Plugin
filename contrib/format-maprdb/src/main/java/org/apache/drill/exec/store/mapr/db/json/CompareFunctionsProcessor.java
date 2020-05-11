@@ -19,6 +19,7 @@ package org.apache.drill.exec.store.mapr.db.json;
 
 import static com.mapr.db.rowcol.DBValueBuilderImpl.KeyValueBuilder;
 
+import org.apache.drill.common.FunctionNames;
 import org.apache.drill.common.expression.FunctionCall;
 import org.apache.drill.common.expression.LogicalExpression;
 import org.apache.drill.common.expression.SchemaPath;
@@ -35,7 +36,6 @@ import org.apache.drill.common.expression.ValueExpressions.TimeExpression;
 import org.apache.drill.common.expression.ValueExpressions.TimeStampExpression;
 import org.apache.drill.common.expression.ValueExpressions.VarDecimalExpression;
 import org.apache.drill.common.expression.visitors.AbstractExprVisitor;
-import org.apache.drill.exec.expr.fn.impl.DateUtility;
 import org.joda.time.LocalTime;
 import org.ojai.Value;
 import org.ojai.types.ODate;
@@ -46,6 +46,10 @@ import org.apache.drill.shaded.guava.com.google.common.collect.ImmutableSet;
 import com.mapr.db.util.SqlHelper;
 
 import org.ojai.types.OTimestamp;
+
+import java.time.Instant;
+import java.time.ZoneId;
+import java.time.ZonedDateTime;
 
 class CompareFunctionsProcessor extends AbstractExprVisitor<Boolean, LogicalExpression, RuntimeException> {
 
@@ -93,7 +97,11 @@ class CompareFunctionsProcessor extends AbstractExprVisitor<Boolean, LogicalExpr
       protected boolean visitTimestampExpr(SchemaPath path, TimeStampExpression valueArg) {
         // converts timestamp value from local time zone to UTC since the record reader
         // reads the timestamp in local timezone if the readTimestampWithZoneOffset flag is enabled
-        long timeStamp = valueArg.getTimeStamp() - DateUtility.TIMEZONE_OFFSET_MILLIS;
+        Instant localInstant = Instant.ofEpochMilli(valueArg.getTimeStamp());
+        ZonedDateTime utcZonedDateTime = localInstant.atZone(ZoneId.of("UTC"));
+        ZonedDateTime convertedZonedDateTime = utcZonedDateTime.withZoneSameLocal(ZoneId.systemDefault());
+        long timeStamp = convertedZonedDateTime.toInstant().toEpochMilli();
+
         this.value = KeyValueBuilder.initFrom(new OTimestamp(timeStamp));
         this.path = path;
         return true;
@@ -104,16 +112,16 @@ class CompareFunctionsProcessor extends AbstractExprVisitor<Boolean, LogicalExpr
 
   private static CompareFunctionsProcessor processWithEvaluator(FunctionCall call, CompareFunctionsProcessor evaluator) {
     String functionName = call.getName();
-    LogicalExpression nameArg = call.args.get(0);
-    LogicalExpression valueArg = call.args.size() >= 2 ? call.args.get(1) : null;
+    LogicalExpression nameArg = call.arg(0);
+    LogicalExpression valueArg = call.argCount() >= 2 ? call.arg(1) : null;
 
-    if (valueArg != null) {
-      if (VALUE_EXPRESSION_CLASSES.contains(nameArg.getClass())) {
-        LogicalExpression swapArg = valueArg;
-        valueArg = nameArg;
-        nameArg = swapArg;
-        evaluator.functionName = COMPARE_FUNCTIONS_TRANSPOSE_MAP.get(functionName);
-      }
+    if (VALUE_EXPRESSION_CLASSES.contains(nameArg.getClass())) {
+      LogicalExpression swapArg = valueArg;
+      valueArg = nameArg;
+      nameArg = swapArg;
+      evaluator.functionName = COMPARE_FUNCTIONS_TRANSPOSE_MAP.get(functionName);
+    }
+    if (nameArg != null) {
       evaluator.success = nameArg.accept(evaluator, valueArg);
     }
 
@@ -251,20 +259,20 @@ class CompareFunctionsProcessor extends AbstractExprVisitor<Boolean, LogicalExpr
     ImmutableMap.Builder<String, String> builder = ImmutableMap.builder();
     COMPARE_FUNCTIONS_TRANSPOSE_MAP = builder
      // unary functions
-        .put("isnotnull", "isnotnull")
+        .put(FunctionNames.IS_NOT_NULL, FunctionNames.IS_NOT_NULL)
         .put("isNotNull", "isNotNull")
         .put("is not null", "is not null")
-        .put("isnull", "isnull")
+        .put(FunctionNames.IS_NULL, FunctionNames.IS_NULL)
         .put("isNull", "isNull")
         .put("is null", "is null")
         // binary functions
         .put("like", "like")
-        .put("equal", "equal")
-        .put("not_equal", "not_equal")
-        .put("greater_than_or_equal_to", "less_than_or_equal_to")
-        .put("greater_than", "less_than")
-        .put("less_than_or_equal_to", "greater_than_or_equal_to")
-        .put("less_than", "greater_than")
+        .put(FunctionNames.EQ, FunctionNames.EQ)
+        .put(FunctionNames.NE, FunctionNames.NE)
+        .put(FunctionNames.GE, FunctionNames.LE)
+        .put(FunctionNames.GT, FunctionNames.LT)
+        .put(FunctionNames.LE, FunctionNames.GE)
+        .put(FunctionNames.LT, FunctionNames.GT)
         .build();
   }
 

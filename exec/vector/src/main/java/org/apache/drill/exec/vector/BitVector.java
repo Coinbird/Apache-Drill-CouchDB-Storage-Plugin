@@ -17,19 +17,21 @@
  */
 package org.apache.drill.exec.vector;
 
-import org.apache.drill.shaded.guava.com.google.common.base.Preconditions;
-import io.netty.buffer.DrillBuf;
-
+import org.apache.drill.exec.exception.OutOfMemoryException;
 import org.apache.drill.exec.exception.OversizedAllocationException;
 import org.apache.drill.exec.expr.holders.BitHolder;
 import org.apache.drill.exec.expr.holders.NullableBitHolder;
 import org.apache.drill.exec.memory.BufferAllocator;
-import org.apache.drill.exec.exception.OutOfMemoryException;
 import org.apache.drill.exec.proto.UserBitShared.SerializedField;
 import org.apache.drill.exec.record.MaterializedField;
 import org.apache.drill.exec.record.TransferPair;
 import org.apache.drill.exec.vector.complex.impl.BitReaderImpl;
 import org.apache.drill.exec.vector.complex.reader.FieldReader;
+import org.apache.drill.shaded.guava.com.google.common.base.Preconditions;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import io.netty.buffer.DrillBuf;
 
 /**
  * Bit implements a vector of bit-width values. Elements in the vector are accessed by position from the logical start
@@ -37,7 +39,7 @@ import org.apache.drill.exec.vector.complex.reader.FieldReader;
  * or '1'.
  */
 public final class BitVector extends BaseDataValueVector implements FixedWidthVector {
-  static final org.slf4j.Logger logger = org.slf4j.LoggerFactory.getLogger(BitVector.class);
+  static final Logger logger = LoggerFactory.getLogger(BitVector.class);
 
   /**
    * Width of each fixed-width value.
@@ -57,7 +59,7 @@ public final class BitVector extends BaseDataValueVector implements FixedWidthVe
   /**
    * Maximum number of values that this fixed-width vector can hold
    * and stay below the maximum vector size limit and/or stay below
-   * the maximum item count. This lis the limit enforced when the
+   * the maximum item count. This is the limit enforced when the
    * vector is used to hold required or nullable values.
    */
 
@@ -77,7 +79,7 @@ public final class BitVector extends BaseDataValueVector implements FixedWidthVe
 
   private int valueCount;
   private int allocationSizeInBytes = INITIAL_VALUE_ALLOCATION;
-  private int allocationMonitor = 0;
+  private int allocationMonitor;
 
   public BitVector(MaterializedField field, BufferAllocator allocator) {
     super(field, allocator);
@@ -98,17 +100,17 @@ public final class BitVector extends BaseDataValueVector implements FixedWidthVe
     return getSizeFromCount(valueCount);
   }
 
-  private int getSizeFromCount(int valueCount) {
-    return (int) Math.ceil(valueCount / 8.0);
+  public static int getSizeFromCount(int valueCount) {
+    return (valueCount + 7) / 8;
   }
 
   @Override
   public int getValueCapacity() {
-    return (int) Math.min((long)Integer.MAX_VALUE, data.capacity() * 8L);
+    return (int) Math.min(Integer.MAX_VALUE, data.capacity() * 8L);
   }
 
   private int getByteIndex(int index) {
-    return (int) Math.floor(index / 8.0);
+    return index / 8;
   }
 
   @Override
@@ -179,7 +181,14 @@ public final class BitVector extends BaseDataValueVector implements FixedWidthVe
    * Allocate new buffer with double capacity, and copy data into the new buffer. Replace vector's buffer with new buffer, and release old one
    */
   public void reAlloc() {
-    final long newAllocationSize = allocationSizeInBytes * 2L;
+    long newAllocationSize = allocationSizeInBytes * 2L;
+
+    // Some operations, such as Value Vector#exchange, can change DrillBuf data field without corresponding allocation size changes.
+    // Check that the size of the allocation is sufficient to copy the old buffer.
+    while (newAllocationSize < data.capacity()) {
+      newAllocationSize *= 2L;
+    }
+
     if (newAllocationSize > MAX_ALLOCATION_SIZE) {
       throw new OversizedAllocationException("Requested amount of memory is more than max allowed allocation size");
     }
@@ -196,6 +205,7 @@ public final class BitVector extends BaseDataValueVector implements FixedWidthVe
   // This version uses the base version because this vector appears to not be
   // used, so not worth the effort to avoid zero-fill.
 
+  @Override
   public DrillBuf reallocRaw(int newAllocationSize) {
     while (allocationSizeInBytes < newAllocationSize) {
       reAlloc();
@@ -234,8 +244,8 @@ public final class BitVector extends BaseDataValueVector implements FixedWidthVe
 
   @Override
   public void load(SerializedField metadata, DrillBuf buffer) {
-    Preconditions.checkArgument(this.field.getName().equals(metadata.getNamePart().getName()),
-                                "The field %s doesn't match the provided metadata %s.", this.field, metadata);
+    Preconditions.checkArgument(field.getName().equals(metadata.getNamePart().getName()),
+                                "The field %s doesn't match the provided metadata %s.", field, metadata);
     final int valueCount = metadata.getValueCount();
     final int expectedLength = getSizeFromCount(valueCount);
     final int actualLength = metadata.getBufferLength();
@@ -308,7 +318,7 @@ public final class BitVector extends BaseDataValueVector implements FixedWidthVe
       // TODO maybe do this one word at a time, rather than byte?
 
       byte byteI, byteIPlus1 = 0;
-      for(int i = 0; i < numBytesHoldingSourceBits - 1; i++) {
+      for (int i = 0; i < numBytesHoldingSourceBits - 1; i++) {
         byteI = this.data.getByte(firstByteIndex + i);
         byteIPlus1 = this.data.getByte(firstByteIndex + i + 1);
         // Extract higher-X bits from first byte i and lower-Y bits from byte (i + 1), where X + Y = 8 bits
@@ -348,6 +358,14 @@ public final class BitVector extends BaseDataValueVector implements FixedWidthVe
     target.getMutator().setValueCount(length);
   }
 
+  @Override
+  public void exchange(ValueVector other) {
+    super.exchange(other);
+    int temp = valueCount;
+    valueCount = ((BitVector) other).valueCount;
+    ((BitVector) other).valueCount = temp;
+  }
+
   private class TransferImpl implements TransferPair {
     BitVector to;
 
@@ -378,13 +396,6 @@ public final class BitVector extends BaseDataValueVector implements FixedWidthVe
     public void copyValueSafe(int fromIndex, int toIndex) {
       to.copyFromSafe(fromIndex, toIndex, BitVector.this);
     }
-  }
-
-  private void decrementAllocationMonitor() {
-    if (allocationMonitor > 0) {
-      allocationMonitor = 0;
-    }
-    --allocationMonitor;
   }
 
   private void incrementAllocationMonitor() {
@@ -440,8 +451,7 @@ public final class BitVector extends BaseDataValueVector implements FixedWidthVe
    */
   public class Mutator extends BaseMutator {
 
-    private Mutator() {
-    }
+    private Mutator() { }
 
     /**
      * Set the bit at the given index to the specified value.
@@ -474,21 +484,21 @@ public final class BitVector extends BaseDataValueVector implements FixedWidthVe
     }
 
     public void setSafe(int index, int value) {
-      while(index >= getValueCapacity()) {
+      while (index >= getValueCapacity()) {
         reAlloc();
       }
       set(index, value);
     }
 
     public void setSafe(int index, BitHolder holder) {
-      while(index >= getValueCapacity()) {
+      while (index >= getValueCapacity()) {
         reAlloc();
       }
       set(index, holder.value);
     }
 
     public void setSafe(int index, NullableBitHolder holder) {
-      while(index >= getValueCapacity()) {
+      while (index >= getValueCapacity()) {
         reAlloc();
       }
       set(index, holder.value);
@@ -499,7 +509,7 @@ public final class BitVector extends BaseDataValueVector implements FixedWidthVe
       int currentValueCapacity = getValueCapacity();
       BitVector.this.valueCount = valueCount;
       int idx = getSizeFromCount(valueCount);
-      while(valueCount > getValueCapacity()) {
+      while (valueCount > getValueCapacity()) {
         reAlloc();
       }
       if (valueCount > 0 && currentValueCapacity > valueCount * 2) {
@@ -513,7 +523,7 @@ public final class BitVector extends BaseDataValueVector implements FixedWidthVe
     @Override
     public final void generateTestData(int values) {
       boolean even = true;
-      for(int i = 0; i < values; i++, even = !even) {
+      for (int i = 0; i < values; i++, even = !even) {
         if (even) {
           set(i, 1);
         }
@@ -524,7 +534,7 @@ public final class BitVector extends BaseDataValueVector implements FixedWidthVe
 
   @Override
   public void clear() {
-    this.valueCount = 0;
+    valueCount = 0;
     super.clear();
   }
 

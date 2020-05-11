@@ -20,19 +20,24 @@ package org.apache.drill.exec.vector.accessor.writer;
 import java.util.ArrayList;
 import java.util.List;
 
+import org.apache.drill.common.exceptions.UserException;
 import org.apache.drill.exec.record.MaterializedField;
 import org.apache.drill.exec.record.metadata.ColumnMetadata;
-import org.apache.drill.exec.record.metadata.ProjectionType;
 import org.apache.drill.exec.record.metadata.TupleMetadata;
 import org.apache.drill.exec.vector.accessor.ArrayWriter;
+import org.apache.drill.exec.vector.accessor.ColumnReader;
 import org.apache.drill.exec.vector.accessor.ColumnWriter;
 import org.apache.drill.exec.vector.accessor.ColumnWriterIndex;
+import org.apache.drill.exec.vector.accessor.DictWriter;
 import org.apache.drill.exec.vector.accessor.ObjectType;
 import org.apache.drill.exec.vector.accessor.ObjectWriter;
 import org.apache.drill.exec.vector.accessor.ScalarWriter;
 import org.apache.drill.exec.vector.accessor.TupleWriter;
 import org.apache.drill.exec.vector.accessor.VariantWriter;
 import org.apache.drill.exec.vector.accessor.impl.HierarchicalFormatter;
+import org.apache.drill.exec.vector.accessor.reader.MapReader;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Implementation for a writer for a tuple (a row or a map.) Provides access to each
@@ -96,16 +101,14 @@ import org.apache.drill.exec.vector.accessor.impl.HierarchicalFormatter;
  *     then that row's values are discarded. Then, the batch is ended.</li>
  * </ul>
  */
-
 public abstract class AbstractTupleWriter implements TupleWriter, WriterEvents {
 
   /**
    * Generic object wrapper for the tuple writer.
    */
-
   public static class TupleObjectWriter extends AbstractObjectWriter {
 
-    private final AbstractTupleWriter tupleWriter;
+    protected final AbstractTupleWriter tupleWriter;
 
     public TupleObjectWriter(AbstractTupleWriter tupleWriter) {
       this.tupleWriter = tupleWriter;
@@ -136,21 +139,50 @@ public abstract class AbstractTupleWriter implements TupleWriter, WriterEvents {
    * tuple writer. If no listener is bound, then an attempt to add a column
    * throws an exception.
    */
-
   public static interface TupleWriterListener {
 
     ObjectWriter addColumn(TupleWriter tuple, ColumnMetadata column);
 
     ObjectWriter addColumn(TupleWriter tuple, MaterializedField field);
 
-    ProjectionType projectionType(String columnName);
+    boolean isProjected(String columnName);
   }
+
+  /**
+   * Wrap the outer index to avoid incrementing the array index
+   * on the call to <tt>nextElement().</tt> The increment
+   * is done at the tuple level, not the column level.
+   */
+  static class MemberWriterIndex implements ColumnWriterIndex {
+    private final ColumnWriterIndex baseIndex;
+
+    MemberWriterIndex(ColumnWriterIndex baseIndex) {
+      this.baseIndex = baseIndex;
+    }
+
+    @Override public int rowStartIndex() { return baseIndex.rowStartIndex(); }
+    @Override public int vectorIndex() { return baseIndex.vectorIndex(); }
+    @Override public void nextElement() { }
+    @Override public void prevElement() { }
+    @Override public void rollover() { }
+
+    @Override public ColumnWriterIndex outerIndex() {
+      return baseIndex.outerIndex();
+    }
+
+    @Override
+    public String toString() {
+      return "[" + getClass().getSimpleName() + " baseIndex = " + baseIndex.toString() + "]";
+    }
+  }
+
+  protected static final Logger logger = LoggerFactory.getLogger(AbstractTupleWriter.class);
 
   protected final TupleMetadata tupleSchema;
   protected final List<AbstractObjectWriter> writers;
   protected ColumnWriterIndex vectorIndex;
   protected ColumnWriterIndex childIndex;
-  protected AbstractTupleWriter.TupleWriterListener listener;
+  protected TupleWriterListener listener;
   protected State state = State.IDLE;
 
   protected AbstractTupleWriter(TupleMetadata schema, List<AbstractObjectWriter> writers) {
@@ -191,7 +223,6 @@ public abstract class AbstractTupleWriter implements TupleWriter, WriterEvents {
    *
    * @param colWriter the column writer to add
    */
-
   public int addColumnWriter(AbstractObjectWriter colWriter) {
     assert writers.size() == tupleSchema.size();
     final int colIndex = tupleSchema.addColumn(colWriter.schema());
@@ -207,27 +238,36 @@ public abstract class AbstractTupleWriter implements TupleWriter, WriterEvents {
   }
 
   @Override
-  public ProjectionType projectionType(String columnName) {
-    return listener == null ? ProjectionType.UNSPECIFIED
-        : listener.projectionType(columnName);
+  public boolean isProjected(String columnName) {
+    return listener == null ? true
+        : listener.isProjected(columnName);
   }
 
   @Override
   public int addColumn(ColumnMetadata column) {
-    if (listener == null) {
-      throw new UnsupportedOperationException("addColumn");
-    }
-    final AbstractObjectWriter colWriter = (AbstractObjectWriter) listener.addColumn(this, column);
-    return addColumnWriter(colWriter);
+    verifyAddColumn(column.name());
+    return addColumnWriter(
+        (AbstractObjectWriter) listener.addColumn(this, column));
   }
 
   @Override
   public int addColumn(MaterializedField field) {
+    verifyAddColumn(field.getName());
+    return addColumnWriter(
+        (AbstractObjectWriter) listener.addColumn(this, field));
+  }
+
+  private void verifyAddColumn(String colName) {
     if (listener == null) {
       throw new UnsupportedOperationException("addColumn");
     }
-    final AbstractObjectWriter colWriter = (AbstractObjectWriter) listener.addColumn(this, field);
-    return addColumnWriter(colWriter);
+
+    if (tupleSchema().column(colName) != null) {
+      throw UserException
+        .validationError()
+        .message("Duplicate column name: %s", colName)
+        .build(logger);
+    }
   }
 
   @Override
@@ -248,7 +288,7 @@ public abstract class AbstractTupleWriter implements TupleWriter, WriterEvents {
   public void startWrite() {
     assert state == State.IDLE;
     state = State.IN_WRITE;
-    for (int i = 0; i < writers.size();  i++) {
+    for (int i = 0; i < writers.size(); i++) {
       writers.get(i).events().startWrite();
     }
   }
@@ -260,7 +300,7 @@ public abstract class AbstractTupleWriter implements TupleWriter, WriterEvents {
 
     assert state == State.IN_WRITE;
     state = State.IN_ROW;
-    for (int i = 0; i < writers.size();  i++) {
+    for (int i = 0; i < writers.size(); i++) {
       writers.get(i).events().startRow();
     }
   }
@@ -268,7 +308,7 @@ public abstract class AbstractTupleWriter implements TupleWriter, WriterEvents {
   @Override
   public void endArrayValue() {
     assert state == State.IN_ROW;
-    for (int i = 0; i < writers.size();  i++) {
+    for (int i = 0; i < writers.size(); i++) {
       writers.get(i).events().endArrayValue();
     }
   }
@@ -285,7 +325,7 @@ public abstract class AbstractTupleWriter implements TupleWriter, WriterEvents {
     // the current row.
 
     assert state == State.IN_ROW;
-    for (int i = 0; i < writers.size();  i++) {
+    for (int i = 0; i < writers.size(); i++) {
       writers.get(i).events().restartRow();
     }
   }
@@ -293,7 +333,7 @@ public abstract class AbstractTupleWriter implements TupleWriter, WriterEvents {
   @Override
   public void saveRow() {
     assert state == State.IN_ROW;
-    for (int i = 0; i < writers.size();  i++) {
+    for (int i = 0; i < writers.size(); i++) {
       writers.get(i).events().saveRow();
     }
     state = State.IN_WRITE;
@@ -305,7 +345,7 @@ public abstract class AbstractTupleWriter implements TupleWriter, WriterEvents {
     // Rollover can only happen while a row is in progress.
 
     assert state == State.IN_ROW;
-    for (int i = 0; i < writers.size();  i++) {
+    for (int i = 0; i < writers.size(); i++) {
       writers.get(i).events().preRollover();
     }
   }
@@ -316,18 +356,30 @@ public abstract class AbstractTupleWriter implements TupleWriter, WriterEvents {
     // Rollover can only happen while a row is in progress.
 
     assert state == State.IN_ROW;
-    for (int i = 0; i < writers.size();  i++) {
-      writers.get(i).events().postRollover();
+    for (AbstractObjectWriter writer : writers) {
+      writer.events().postRollover();
     }
   }
 
   @Override
   public void endWrite() {
     assert state != State.IDLE;
-    for (int i = 0; i < writers.size();  i++) {
-      writers.get(i).events().endWrite();
+    for (AbstractObjectWriter writer : writers) {
+      writer.events().endWrite();
     }
     state = State.IDLE;
+  }
+
+  @Override
+  public void copy(ColumnReader from) {
+    MapReader source = (MapReader) from;
+    // Assumes a 1:1 correspondence between source and
+    // destination tuples. That is, does not handle the
+    // case of projection: more columns on one side vs.
+    // the other. That must be handled outside this class.
+    for (int i = 0; i < writers.size(); i++) {
+      writers.get(i).writer().copy(source.column(i).reader());
+    }
   }
 
   @Override
@@ -351,7 +403,7 @@ public abstract class AbstractTupleWriter implements TupleWriter, WriterEvents {
 
   @Override
   public void setObject(Object value) {
-    final Object values[] = (Object[]) value;
+    final Object[] values = (Object[]) value;
     if (values.length != tupleSchema.size()) {
       if (schema() == null) {
         throw new IllegalArgumentException(
@@ -412,6 +464,16 @@ public abstract class AbstractTupleWriter implements TupleWriter, WriterEvents {
   }
 
   @Override
+  public DictWriter dict(int colIndex) {
+    return column(colIndex).dict();
+  }
+
+  @Override
+  public DictWriter dict(String colName) {
+    return column(colName).dict();
+  }
+
+  @Override
   public ObjectType type(int colIndex) {
     return column(colIndex).type();
   }
@@ -420,6 +482,9 @@ public abstract class AbstractTupleWriter implements TupleWriter, WriterEvents {
   public ObjectType type(String colName) {
     return column(colName).type();
   }
+
+  @Override
+  public boolean isProjected() { return true; }
 
   @Override
   public int lastWriteIndex() {
@@ -434,6 +499,8 @@ public abstract class AbstractTupleWriter implements TupleWriter, WriterEvents {
   public void bindListener(TupleWriterListener listener) {
     this.listener = listener;
   }
+
+  public TupleWriterListener listener() { return listener; }
 
   @Override
   public void bindListener(ColumnWriterListener listener) { }

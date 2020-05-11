@@ -23,7 +23,13 @@ package org.apache.drill.exec.proto;
 public final class SchemaDefProtos {
   private SchemaDefProtos() {}
   public static void registerAllExtensions(
+      com.google.protobuf.ExtensionRegistryLite registry) {
+  }
+
+  public static void registerAllExtensions(
       com.google.protobuf.ExtensionRegistry registry) {
+    registerAllExtensions(
+        (com.google.protobuf.ExtensionRegistryLite) registry);
   }
   /**
    * Protobuf enum {@code exec.ValueMode}
@@ -33,15 +39,15 @@ public final class SchemaDefProtos {
     /**
      * <code>VALUE_VECTOR = 0;</code>
      */
-    VALUE_VECTOR(0, 0),
+    VALUE_VECTOR(0),
     /**
      * <code>RLE = 1;</code>
      */
-    RLE(1, 1),
+    RLE(1),
     /**
      * <code>DICT = 2;</code>
      */
-    DICT(2, 2),
+    DICT(2),
     ;
 
     /**
@@ -58,9 +64,25 @@ public final class SchemaDefProtos {
     public static final int DICT_VALUE = 2;
 
 
-    public final int getNumber() { return value; }
+    public final int getNumber() {
+      return value;
+    }
 
+    /**
+     * @param value The numeric wire value of the corresponding enum entry.
+     * @return The enum associated with the given numeric wire value.
+     * @deprecated Use {@link #forNumber(int)} instead.
+     */
+    @java.lang.Deprecated
     public static ValueMode valueOf(int value) {
+      return forNumber(value);
+    }
+
+    /**
+     * @param value The numeric wire value of the corresponding enum entry.
+     * @return The enum associated with the given numeric wire value.
+     */
+    public static ValueMode forNumber(int value) {
       switch (value) {
         case 0: return VALUE_VECTOR;
         case 1: return RLE;
@@ -73,17 +95,17 @@ public final class SchemaDefProtos {
         internalGetValueMap() {
       return internalValueMap;
     }
-    private static com.google.protobuf.Internal.EnumLiteMap<ValueMode>
-        internalValueMap =
+    private static final com.google.protobuf.Internal.EnumLiteMap<
+        ValueMode> internalValueMap =
           new com.google.protobuf.Internal.EnumLiteMap<ValueMode>() {
             public ValueMode findValueByNumber(int number) {
-              return ValueMode.valueOf(number);
+              return ValueMode.forNumber(number);
             }
           };
 
     public final com.google.protobuf.Descriptors.EnumValueDescriptor
         getValueDescriptor() {
-      return getDescriptor().getValues().get(index);
+      return getDescriptor().getValues().get(ordinal());
     }
     public final com.google.protobuf.Descriptors.EnumDescriptor
         getDescriptorForType() {
@@ -105,11 +127,9 @@ public final class SchemaDefProtos {
       return VALUES[desc.getIndex()];
     }
 
-    private final int index;
     private final int value;
 
-    private ValueMode(int index, int value) {
-      this.index = index;
+    private ValueMode(int value) {
       this.value = value;
     }
 
@@ -121,7 +141,7 @@ public final class SchemaDefProtos {
       getDescriptor() {
     return descriptor;
   }
-  private static com.google.protobuf.Descriptors.FileDescriptor
+  private static  com.google.protobuf.Descriptors.FileDescriptor
       descriptor;
   static {
     java.lang.String[] descriptorData = {
@@ -130,19 +150,12 @@ public final class SchemaDefProtos {
       "DICT\020\002B0\n\033org.apache.drill.exec.protoB\017S" +
       "chemaDefProtosH\001"
     };
-    com.google.protobuf.Descriptors.FileDescriptor.InternalDescriptorAssigner assigner =
-      new com.google.protobuf.Descriptors.FileDescriptor.InternalDescriptorAssigner() {
-        public com.google.protobuf.ExtensionRegistry assignDescriptors(
-            com.google.protobuf.Descriptors.FileDescriptor root) {
-          descriptor = root;
-          return null;
-        }
-      };
-    com.google.protobuf.Descriptors.FileDescriptor
+    descriptor = com.google.protobuf.Descriptors.FileDescriptor
       .internalBuildGeneratedFileFrom(descriptorData,
         new com.google.protobuf.Descriptors.FileDescriptor[] {
           org.apache.drill.common.types.TypeProtos.getDescriptor(),
-        }, assigner);
+        });
+    org.apache.drill.common.types.TypeProtos.getDescriptor();
   }
 
   // @@protoc_insertion_point(outer_class_scope)

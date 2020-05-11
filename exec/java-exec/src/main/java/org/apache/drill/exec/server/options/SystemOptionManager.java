@@ -17,15 +17,6 @@
  */
 package org.apache.drill.exec.server.options;
 
-import java.util.Arrays;
-import java.util.HashMap;
-import java.util.Iterator;
-import java.util.Map;
-import java.util.Map.Entry;
-import java.util.function.Function;
-import java.util.stream.Collectors;
-import java.util.stream.StreamSupport;
-
 import org.apache.commons.collections.IteratorUtils;
 import org.apache.drill.common.config.DrillConfig;
 import org.apache.drill.common.config.LogicalPlanPersistence;
@@ -39,41 +30,58 @@ import org.apache.drill.exec.store.sys.PersistentStoreConfig;
 import org.apache.drill.exec.store.sys.PersistentStoreProvider;
 import org.apache.drill.exec.store.sys.store.provider.InMemoryStoreProvider;
 import org.apache.drill.exec.util.AssertionUtil;
-
 import org.apache.drill.shaded.guava.com.google.common.annotations.VisibleForTesting;
 import org.apache.drill.shaded.guava.com.google.common.collect.Lists;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import java.util.Arrays;
+import java.util.HashMap;
+import java.util.Iterator;
+import java.util.Map;
+import java.util.Map.Entry;
+import java.util.function.Function;
+import java.util.stream.Collectors;
+import java.util.stream.StreamSupport;
 
 /**
- *  <p> {@link OptionManager} that holds options within {@link org.apache.drill.exec.server.DrillbitContext}.
- * Only one instance of this class exists per drillbit. Options set at the system level affect the entire system and
- * persist between restarts.
- *  </p>
- *
- *  <p> All the system options are externalized into conf file. While adding a new system option
- *  a validator should be added and the default value for the option should be set in
- *  the conf files(example : drill-module.conf) under the namespace drill.exec.options.
- *  </p>
- *
- *  <p>
- *  The SystemOptionManager loads all the validators and the default values for the options are
- *  fetched from the config. The validators are populated with the default values fetched from
- *  the config. If the option is not set in the conf files config option is missing exception
- *  will be thrown.
- *  </p>
- *
- *  <p>
- *  If the option is set using ALTER, the value that is set will be returned. Else the default value
- *  that is loaded into validator from the config will be returned.
- *  </p>
+ * <p>
+ * {@link OptionManager} that holds options within
+ * {@link org.apache.drill.exec.server.DrillbitContext}. Only one instance of
+ * this class exists per drillbit. Options set at the system level affect the
+ * entire system and persist between restarts.
+ * </p>
+ * <p>
+ * All the system options are externalized into conf file. While adding a new
+ * system option a validator should be added and the default value for the
+ * option should be set in the conf files(example : drill-module.conf) under the
+ * namespace drill.exec.options.
+ * </p>
+ * <p>
+ * The SystemOptionManager loads all the validators and the default values for
+ * the options are fetched from the config. The validators are populated with
+ * the default values fetched from the config. If the option is not set in the
+ * conf files config option is missing exception will be thrown.
+ * </p>
+ * <p>
+ * If the option is set using ALTER, the value that is set will be returned.
+ * Else the default value that is loaded into validator from the config will be
+ * returned.
+ * </p>
  */
 public class SystemOptionManager extends BaseOptionManager implements AutoCloseable {
-  private static final org.slf4j.Logger logger = org.slf4j.LoggerFactory.getLogger(SystemOptionManager.class);
+  private static final Logger logger = LoggerFactory.getLogger(SystemOptionManager.class);
 
   /**
-   * Creates all the OptionDefinitions to be registered with the {@link SystemOptionManager}.
+   * Creates the {@code OptionDefinitions} to be registered with the {@link SystemOptionManager}.
    * @return A map
    */
   public static CaseInsensitiveMap<OptionDefinition> createDefaultOptionDefinitions() {
+    // The deprecation says not to use the option in code. But, for backward
+    // compatibility, we need to keep the old options in the table to avoid
+    // failures if users reference the options. So, ignore deprecation warnings
+    // here.
+    @SuppressWarnings("deprecation")
     final OptionDefinition[] definitions = new OptionDefinition[]{
       new OptionDefinition(PlannerSettings.CONSTANT_FOLDING),
       new OptionDefinition(PlannerSettings.EXCHANGE),
@@ -122,6 +130,7 @@ public class SystemOptionManager extends BaseOptionManager implements AutoClosea
       new OptionDefinition(PlannerSettings.ENABLE_UNNEST_LATERAL),
       new OptionDefinition(PlannerSettings.FORCE_2PHASE_AGGR), // for testing
       new OptionDefinition(PlannerSettings.STATISTICS_USE),
+      new OptionDefinition(PlannerSettings.STATISTICS_MULTICOL_NDV_ADJUST_FACTOR),
       new OptionDefinition(ExecConstants.HASHJOIN_NUM_PARTITIONS_VALIDATOR),
       new OptionDefinition(ExecConstants.HASHJOIN_MAX_MEMORY_VALIDATOR, new OptionMetaData(OptionValue.AccessibleScopes.SYSTEM, true, true)),
       new OptionDefinition(ExecConstants.HASHJOIN_NUM_ROWS_IN_BATCH_VALIDATOR),
@@ -179,12 +188,16 @@ public class SystemOptionManager extends BaseOptionManager implements AutoClosea
       new OptionDefinition(ExecConstants.PARQUET_FLAT_BATCH_NUM_RECORDS_VALIDATOR, new OptionMetaData(OptionValue.AccessibleScopes.SYSTEM_AND_SESSION, true, true)),
       new OptionDefinition(ExecConstants.PARQUET_FLAT_BATCH_MEMORY_SIZE_VALIDATOR, new OptionMetaData(OptionValue.AccessibleScopes.SYSTEM_AND_SESSION, true, true)),
       new OptionDefinition(ExecConstants.PARQUET_COMPLEX_BATCH_NUM_RECORDS_VALIDATOR, new OptionMetaData(OptionValue.AccessibleScopes.SYSTEM_AND_SESSION, true, true)),
+      new OptionDefinition(ExecConstants.PARTITIONER_MEMORY_REDUCTION_THRESHOLD_VALIDATOR),
       new OptionDefinition(ExecConstants.JSON_READER_ALL_TEXT_MODE_VALIDATOR),
       new OptionDefinition(ExecConstants.JSON_WRITER_NAN_INF_NUMBERS_VALIDATOR),
       new OptionDefinition(ExecConstants.JSON_READER_NAN_INF_NUMBERS_VALIDATOR),
       new OptionDefinition(ExecConstants.JSON_READER_ESCAPE_ANY_CHAR_VALIDATOR),
+      new OptionDefinition(ExecConstants.STORE_TABLE_USE_SCHEMA_FILE_VALIDATOR),
       new OptionDefinition(ExecConstants.ENABLE_UNION_TYPE),
       new OptionDefinition(ExecConstants.TEXT_ESTIMATED_ROW_SIZE),
+      new OptionDefinition(ExecConstants.TEXT_WRITER_ADD_HEADER_VALIDATOR),
+      new OptionDefinition(ExecConstants.TEXT_WRITER_FORCE_QUOTES_VALIDATOR),
       new OptionDefinition(ExecConstants.JSON_EXTENDED_TYPES),
       new OptionDefinition(ExecConstants.JSON_WRITER_UGLIFY),
       new OptionDefinition(ExecConstants.JSON_WRITER_SKIPNULLFIELDS),
@@ -199,10 +212,14 @@ public class SystemOptionManager extends BaseOptionManager implements AutoClosea
       new OptionDefinition(ExecConstants.KAFKA_RECORD_READER_VALIDATOR),
       new OptionDefinition(ExecConstants.KAFKA_POLL_TIMEOUT_VALIDATOR),
       new OptionDefinition(ExecConstants.KAFKA_READER_READ_NUMBERS_AS_DOUBLE_VALIDATOR),
+      new OptionDefinition(ExecConstants.KAFKA_SKIP_MALFORMED_RECORDS_VALIDATOR),
+      new OptionDefinition(ExecConstants.KAFKA_READER_NAN_INF_NUMBERS_VALIDATOR),
+      new OptionDefinition(ExecConstants.KAFKA_READER_ESCAPE_ANY_CHAR_VALIDATOR),
       new OptionDefinition(ExecConstants.HIVE_OPTIMIZE_SCAN_WITH_NATIVE_READERS_VALIDATOR),
       new OptionDefinition(ExecConstants.HIVE_OPTIMIZE_PARQUET_SCAN_WITH_NATIVE_READER_VALIDATOR),
       new OptionDefinition(ExecConstants.HIVE_OPTIMIZE_MAPRDB_JSON_SCAN_WITH_NATIVE_READER_VALIDATOR),
       new OptionDefinition(ExecConstants.HIVE_READ_MAPRDB_JSON_TIMESTAMP_WITH_TIMEZONE_OFFSET_VALIDATOR),
+      new OptionDefinition(ExecConstants.HIVE_MAPRDB_JSON_ALL_TEXT_MODE_VALIDATOR),
       new OptionDefinition(ExecConstants.HIVE_CONF_PROPERTIES_VALIDATOR),
       new OptionDefinition(ExecConstants.SLICE_TARGET_OPTION),
       new OptionDefinition(ExecConstants.AFFINITY_FACTOR),
@@ -243,6 +260,9 @@ public class SystemOptionManager extends BaseOptionManager implements AutoClosea
       new OptionDefinition(ExecConstants.ENABLE_WINDOW_FUNCTIONS_VALIDATOR),
       new OptionDefinition(ExecConstants.SCALAR_REPLACEMENT_VALIDATOR),
       new OptionDefinition(ExecConstants.ENABLE_NEW_TEXT_READER),
+      new OptionDefinition(ExecConstants.ENABLE_V3_TEXT_READER),
+      new OptionDefinition(ExecConstants.SKIP_RUNTIME_ROWGROUP_PRUNING),
+      new OptionDefinition(ExecConstants.MIN_READER_WIDTH),
       new OptionDefinition(ExecConstants.ENABLE_BULK_LOAD_TABLE_LIST),
       new OptionDefinition(ExecConstants.BULK_LOAD_TABLE_LIST_BULK_SIZE),
       new OptionDefinition(ExecConstants.WEB_LOGS_MAX_LINES_VALIDATOR),
@@ -253,11 +273,17 @@ public class SystemOptionManager extends BaseOptionManager implements AutoClosea
       new OptionDefinition(ExecConstants.IMPLICIT_SUFFIX_COLUMN_LABEL_VALIDATOR),
       new OptionDefinition(ExecConstants.IMPLICIT_FQN_COLUMN_LABEL_VALIDATOR),
       new OptionDefinition(ExecConstants.IMPLICIT_FILEPATH_COLUMN_LABEL_VALIDATOR),
+      new OptionDefinition(ExecConstants.IMPLICIT_ROW_GROUP_INDEX_COLUMN_LABEL_VALIDATOR),
+      new OptionDefinition(ExecConstants.IMPLICIT_ROW_GROUP_START_COLUMN_LABEL_VALIDATOR),
+      new OptionDefinition(ExecConstants.IMPLICIT_ROW_GROUP_LENGTH_COLUMN_LABEL_VALIDATOR),
+      new OptionDefinition(ExecConstants.IMPLICIT_LAST_MODIFIED_TIME_COLUMN_LABEL_VALIDATOR),
+      new OptionDefinition(ExecConstants.IMPLICIT_PROJECT_METADATA_COLUMN_LABEL_VALIDATOR),
       new OptionDefinition(ExecConstants.CODE_GEN_EXP_IN_METHOD_SIZE_VALIDATOR),
       new OptionDefinition(ExecConstants.CREATE_PREPARE_STATEMENT_TIMEOUT_MILLIS_VALIDATOR),
       new OptionDefinition(ExecConstants.DYNAMIC_UDF_SUPPORT_ENABLED_VALIDATOR,  new OptionMetaData(OptionValue.AccessibleScopes.SYSTEM, true, false)),
       new OptionDefinition(ExecConstants.EXTERNAL_SORT_DISABLE_MANAGED_OPTION),
       new OptionDefinition(ExecConstants.ENABLE_QUERY_PROFILE_VALIDATOR),
+      new OptionDefinition(ExecConstants.SKIP_SESSION_QUERY_PROFILE_VALIDATOR),
       new OptionDefinition(ExecConstants.QUERY_PROFILE_DEBUG_VALIDATOR),
       new OptionDefinition(ExecConstants.USE_DYNAMIC_UDFS),
       new OptionDefinition(ExecConstants.QUERY_TRANSIENT_STATE_UPDATE),
@@ -277,7 +303,20 @@ public class SystemOptionManager extends BaseOptionManager implements AutoClosea
       new OptionDefinition(ExecConstants.HLL_ACCURACY_VALIDATOR),
       new OptionDefinition(ExecConstants.DETERMINISTIC_SAMPLING_VALIDATOR),
       new OptionDefinition(ExecConstants.NDV_BLOOM_FILTER_ELEMENTS_VALIDATOR),
-      new OptionDefinition(ExecConstants.NDV_BLOOM_FILTER_FPOS_PROB_VALIDATOR)
+      new OptionDefinition(ExecConstants.NDV_BLOOM_FILTER_FPOS_PROB_VALIDATOR),
+      new OptionDefinition(ExecConstants.RM_QUERY_TAGS_VALIDATOR, new OptionMetaData(OptionValue.AccessibleScopes.SESSION_AND_QUERY, false, false)),
+      new OptionDefinition(ExecConstants.RM_QUEUES_WAIT_FOR_PREFERRED_NODES_VALIDATOR),
+      new OptionDefinition(ExecConstants.TDIGEST_COMPRESSION_VALIDATOR),
+      new OptionDefinition(ExecConstants.QUERY_MAX_ROWS_VALIDATOR, new OptionMetaData(OptionValue.AccessibleScopes.ALL, true, false)),
+      new OptionDefinition(ExecConstants.METASTORE_ENABLED_VALIDATOR),
+      new OptionDefinition(ExecConstants.METASTORE_METADATA_STORE_DEPTH_LEVEL_VALIDATOR),
+      new OptionDefinition(ExecConstants.METASTORE_USE_SCHEMA_METADATA_VALIDATOR),
+      new OptionDefinition(ExecConstants.METASTORE_USE_STATISTICS_METADATA_VALIDATOR),
+      new OptionDefinition(ExecConstants.METASTORE_CTAS_AUTO_COLLECT_METADATA_VALIDATOR),
+      new OptionDefinition(ExecConstants.METASTORE_FALLBACK_TO_FILE_METADATA_VALIDATOR),
+      new OptionDefinition(ExecConstants.METASTORE_RETRIEVAL_RETRY_ATTEMPTS_VALIDATOR),
+      new OptionDefinition(ExecConstants.PARQUET_READER_ENABLE_MAP_SUPPORT_VALIDATOR, new OptionMetaData(OptionValue.AccessibleScopes.SYSTEM_AND_SESSION, false, false)),
+      new OptionDefinition(ExecConstants.ENABLE_DYNAMIC_CREDIT_BASED_FC_VALIDATOR)
     };
 
     CaseInsensitiveMap<OptionDefinition> map = Arrays.stream(definitions)
@@ -304,8 +343,8 @@ public class SystemOptionManager extends BaseOptionManager implements AutoClosea
    * NOTE: CRUD operations must use lowercase keys.
    */
   private PersistentStore<PersistedOptionValue> options;
-  private CaseInsensitiveMap<OptionDefinition> definitions;
-  private CaseInsensitiveMap<OptionValue> defaults;
+  private final CaseInsensitiveMap<OptionDefinition> definitions;
+  private final CaseInsensitiveMap<OptionValue> defaults;
 
   public SystemOptionManager(LogicalPlanPersistence lpPersistence, final PersistentStoreProvider provider,
                              final DrillConfig bootConfig) {
@@ -327,7 +366,6 @@ public class SystemOptionManager extends BaseOptionManager implements AutoClosea
    *
    * @param bootConfig Drill config
    */
-
   @VisibleForTesting
   public SystemOptionManager(final DrillConfig bootConfig) {
     this.provider = new InMemoryStoreProvider(100);

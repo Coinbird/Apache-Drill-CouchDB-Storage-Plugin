@@ -22,6 +22,7 @@ import java.util.Iterator;
 
 import org.apache.drill.common.expression.SchemaPath;
 import org.apache.drill.exec.record.BatchSchema;
+import org.apache.drill.exec.record.RecordBatch;
 import org.apache.drill.exec.record.TypedFieldId;
 import org.apache.drill.exec.record.VectorContainer;
 import org.apache.drill.exec.record.VectorWrapper;
@@ -29,54 +30,49 @@ import org.apache.drill.exec.record.WritableBatch;
 import org.apache.drill.exec.record.selection.SelectionVector2;
 import org.apache.drill.exec.record.selection.SelectionVector4;
 
+/**
+ * Wraps a vector container and optional selection vector in an interface
+ * simpler than the entire {@link RecordBatch}. This implementation hosts
+ * a container only.
+ */
 public class VectorContainerAccessor implements BatchAccessor {
 
-  public static class ContainerAndSv2Accessor extends VectorContainerAccessor {
-
-    private SelectionVector2 sv2;
-
-    public void setSelectionVector(SelectionVector2 sv2) {
-      this.sv2 = sv2;
-    }
-
-    @Override
-    public SelectionVector2 getSelectionVector2() {
-      return sv2;
-    }
-  }
-
-  public static class ContainerAndSv4Accessor extends VectorContainerAccessor {
-
-    private SelectionVector4 sv4;
-
-    @Override
-    public SelectionVector4 getSelectionVector4() {
-      return sv4;
-    }
-  }
-
-  private VectorContainer container;
-  private SchemaTracker schemaTracker = new SchemaTracker();
+  protected VectorContainer container;
+  private final SchemaTracker schemaTracker = new SchemaTracker();
+  private int batchCount;
 
   /**
-   * Set the vector container. Done initially, and any time the schema of
-   * the container may have changed. May be called with the same container
-   * as the previous call, or a different one. A schema change occurs
-   * unless the vectors are identical across the two containers.
-   *
-   * @param container the container that holds vectors to be sent
-   * downstream
+   * Define a schema that does not necessarily contain any data.
+   * Call this to declare a schema when there are no results to
+   * report.
    */
-
-  public void setContainer(VectorContainer container) {
+  public void setSchema(VectorContainer container) {
     this.container = container;
     if (container != null) {
       schemaTracker.trackSchema(container);
     }
   }
 
+  /**
+   * Define an output batch. Called each time a new batch is sent
+   * downstream. Checks if the schema of this batch is the same as
+   * that of any previous batch, and updates the schema version if
+   * the schema changes. May be called with the same container
+   * as the previous call, or a different one. A schema change occurs
+   * unless the vectors are identical across the two containers.
+   *
+   * @param container the container that holds vectors to be sent
+   * downstream
+   */
+  public void addBatch(VectorContainer container) {
+    setSchema(container);
+    batchCount++;
+  }
+
+  public int batchCount() { return batchCount; }
+
   @Override
-  public BatchSchema getSchema() {
+  public BatchSchema schema() {
     return container == null ? null : container.getSchema();
   }
 
@@ -84,12 +80,12 @@ public class VectorContainerAccessor implements BatchAccessor {
   public int schemaVersion() { return schemaTracker.schemaVersion(); }
 
   @Override
-  public int getRowCount() {
+  public int rowCount() {
     return container == null ? 0 : container.getRecordCount();
   }
 
   @Override
-  public VectorContainer getOutgoingContainer() { return container; }
+  public VectorContainer container() { return container; }
 
   @Override
   public TypedFieldId getValueVectorId(SchemaPath path) {
@@ -102,22 +98,22 @@ public class VectorContainerAccessor implements BatchAccessor {
   }
 
   @Override
-  public WritableBatch getWritableBatch() {
+  public WritableBatch writableBatch() {
     return WritableBatch.get(container);
   }
 
   @Override
-  public SelectionVector2 getSelectionVector2() {
+  public SelectionVector2 selectionVector2() {
     // Throws an exception by default because containers
     // do not support selection vectors.
     return container.getSelectionVector2();
   }
 
   @Override
-  public SelectionVector4 getSelectionVector4() {
+  public SelectionVector4 selectionVector4() {
     // Throws an exception by default because containers
     // do not support selection vectors.
-     return container.getSelectionVector4();
+    return container.getSelectionVector4();
   }
 
   @Override
@@ -130,5 +126,9 @@ public class VectorContainerAccessor implements BatchAccessor {
   }
 
   @Override
-  public void release() { container.zeroVectors(); }
+  public void release() {
+    if (container != null) {
+      container.zeroVectors();
+    }
+  }
 }

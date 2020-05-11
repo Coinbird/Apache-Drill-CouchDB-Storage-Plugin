@@ -48,35 +48,37 @@ import java.util.List;
 public abstract class AggPrelBase extends DrillAggregateRelBase implements Prel {
 
   public enum OperatorPhase {
-    PHASE_1of1(false, false, false, "Single"),
-    PHASE_1of2(true, true, false, "1st"),
-    PHASE_2of2(true, false, true, "2nd");
 
-    private boolean hasTwo;
-    private boolean is1st;
-    private boolean is2nd;
+    // Single phase aggregate
+    PHASE_1of1("Single"),
+
+    // Distributed aggregate: partitioned first phase
+    PHASE_1of2("1st"),
+
+    // Distibuted aggregate: non-partitioned overall aggregation
+    // phase
+    PHASE_2of2("2nd");
+
     private String name;
 
-    OperatorPhase(boolean hasTwo,
-                  boolean is1st,
-                  boolean is2nd,
-                  String name) {
-      this.hasTwo = hasTwo;
-      this.is1st = is1st;
-      this.is2nd = is2nd;
+    OperatorPhase(String name) {
       this.name = name;
     }
 
     public boolean hasTwo() {
-      return hasTwo;
+      return this != PHASE_1of1;
     }
 
     public boolean is1st() {
-      return is1st;
+      return this == PHASE_1of2;
     }
 
     public boolean is2nd() {
-      return is2nd;
+      return this == PHASE_2of2;
+    }
+
+    public boolean isFinal() {
+      return this != PHASE_1of2;
     }
 
     public String getName() {
@@ -121,12 +123,11 @@ public abstract class AggPrelBase extends DrillAggregateRelBase implements Prel 
   public AggPrelBase(RelOptCluster cluster,
                      RelTraitSet traits,
                      RelNode child,
-                     boolean indicator,
                      ImmutableBitSet groupSet,
                      List<ImmutableBitSet> groupSets,
                      List<AggregateCall> aggCalls,
                      OperatorPhase phase) throws InvalidRelException {
-    super(cluster, traits, child, indicator, groupSet, groupSets, aggCalls);
+    super(cluster, traits, child, groupSet, groupSets, aggCalls);
     this.operPhase = phase;
     createKeysAndExprs();
   }
@@ -201,8 +202,7 @@ public abstract class AggPrelBase extends DrillAggregateRelBase implements Prel 
       args.add(FieldReference.getWithQuotedRef(fn.get(i)));
     }
 
-    // for count(1).
-    if (args.isEmpty()) {
+    if (SqlKind.COUNT.name().equals(call.getAggregation().getName()) && args.isEmpty()) {
       args.add(new ValueExpressions.LongExpression(1L));
     }
     return new FunctionCall(call.getAggregation().getName().toLowerCase(), args, ExpressionPosition.UNKNOWN);

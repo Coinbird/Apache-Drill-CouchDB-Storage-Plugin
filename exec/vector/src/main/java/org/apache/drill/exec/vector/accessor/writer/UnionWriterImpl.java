@@ -23,12 +23,14 @@ import org.apache.drill.common.types.TypeProtos.MinorType;
 import org.apache.drill.exec.record.metadata.ColumnMetadata;
 import org.apache.drill.exec.record.metadata.VariantMetadata;
 import org.apache.drill.exec.vector.accessor.ArrayWriter;
+import org.apache.drill.exec.vector.accessor.ColumnReader;
 import org.apache.drill.exec.vector.accessor.ColumnWriter;
 import org.apache.drill.exec.vector.accessor.ColumnWriterIndex;
 import org.apache.drill.exec.vector.accessor.ObjectType;
 import org.apache.drill.exec.vector.accessor.ObjectWriter;
 import org.apache.drill.exec.vector.accessor.ScalarWriter;
 import org.apache.drill.exec.vector.accessor.TupleWriter;
+import org.apache.drill.exec.vector.accessor.VariantReader;
 import org.apache.drill.exec.vector.accessor.VariantWriter;
 import org.apache.drill.exec.vector.accessor.WriterPosition;
 import org.apache.drill.exec.vector.accessor.impl.HierarchicalFormatter;
@@ -240,7 +242,7 @@ public class UnionWriterImpl implements VariantWriter, WriterEvents {
     // schema, do so now. (Unfortunately, the default listener
     // does add the schema, while the row set loader does not.)
 
-    if (! variantSchema().hasType(type)) {
+    if (!variantSchema().hasType(type)) {
       variantSchema().addType(writer.schema());
     }
     writer.events().bindIndex(index);
@@ -266,6 +268,9 @@ public class UnionWriterImpl implements VariantWriter, WriterEvents {
   public ArrayWriter array() {
     return member(MinorType.LIST).array();
   }
+
+  @Override
+  public boolean isProjected() { return true; }
 
   @Override
   public void startWrite() {
@@ -330,9 +335,19 @@ public class UnionWriterImpl implements VariantWriter, WriterEvents {
   }
 
   @Override
+  public void copy(ColumnReader from) {
+    if (!from.isNull()) {
+      VariantReader source = (VariantReader) from;
+      member(source.dataType()).copy(source.member());
+    }
+  }
+
+  @Override
   public void setObject(Object value) {
     if (value == null) {
       setNull();
+    } else if (value instanceof Boolean) {
+      scalar(MinorType.BIT).setBoolean((Boolean) value);
     } else if (value instanceof Integer) {
       scalar(MinorType.INT).setInt((Integer) value);
     } else if (value instanceof Long) {
@@ -376,6 +391,5 @@ public class UnionWriterImpl implements VariantWriter, WriterEvents {
   @Override
   public void dump(HierarchicalFormatter format) {
     // TODO Auto-generated method stub
-
   }
 }

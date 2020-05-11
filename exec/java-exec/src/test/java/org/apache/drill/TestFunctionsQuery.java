@@ -18,6 +18,7 @@
 package org.apache.drill;
 
 import static org.apache.drill.exec.expr.fn.impl.DateUtility.formatTimeStamp;
+import static org.hamcrest.CoreMatchers.containsString;
 
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -32,6 +33,7 @@ import org.apache.drill.common.exceptions.UserRemoteException;
 import org.apache.drill.common.types.TypeProtos;
 import org.apache.drill.exec.planner.physical.PlannerSettings;
 import org.apache.drill.exec.record.BatchSchema;
+import org.apache.drill.exec.record.BatchSchemaBuilder;
 import org.apache.drill.exec.record.metadata.SchemaBuilder;
 import org.apache.drill.test.BaseTestQuery;
 import org.hamcrest.CoreMatchers;
@@ -997,8 +999,10 @@ public class TestFunctionsQuery extends BaseTestQuery {
         "isdate(employee_id)",
         "NOT (employee_id IS NULL)");
 
-    BatchSchema expectedSchema = new SchemaBuilder()
-        .add("col1", TypeProtos.MinorType.BIT)
+    SchemaBuilder schemaBuilder = new SchemaBuilder()
+        .add("col1", TypeProtos.MinorType.BIT);
+    BatchSchema expectedSchema = new BatchSchemaBuilder()
+        .withSchemaBuilder(schemaBuilder)
         .build();
 
     for (String condition : conditions) {
@@ -1007,5 +1011,24 @@ public class TestFunctionsQuery extends BaseTestQuery {
           .schemaBaseLine(expectedSchema)
           .go();
     }
+  }
+
+  @Test // DRILL-7297
+  public void testErrorInUdf() throws Exception {
+    expectedException.expect(UserRemoteException.class);
+    expectedException.expectMessage(containsString("Error from UDF"));
+    test("select error_function()");
+  }
+
+  @Test
+  public void testParentPathFunction() throws Exception {
+    testBuilder()
+        .sqlQuery("select parentPath('/a/b/cde/f') as col1," +
+            "parentPath('/a/b/cde/f/') as col2," +
+            "parentPath('/a') as col3")
+        .unOrdered()
+        .baselineColumns("col1", "col2", "col3")
+        .baselineValues("/a/b/cde", "/a/b/cde", "/")
+        .go();
   }
 }

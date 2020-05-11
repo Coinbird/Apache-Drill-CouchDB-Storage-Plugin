@@ -305,14 +305,12 @@ public class SpillSet {
       dir.deleteOnExit();
     }
 
-    @SuppressWarnings("resource")
     @Override
     public WritableByteChannel createForWrite(String fileName) throws IOException {
       return FileChannel.open(new File(baseDir, fileName).toPath(), StandardOpenOption.CREATE, StandardOpenOption.WRITE);
     }
 
-    @SuppressWarnings("resource")
-    @Override
+     @Override
     public InputStream openForInput(String fileName) throws IOException {
       return new CountingInputStream(
                 new BufferedInputStream(
@@ -326,8 +324,11 @@ public class SpillSet {
 
     @Override
     public void deleteDir(String fragmentSpillDir) throws IOException {
-      boolean deleted = new File(baseDir, fragmentSpillDir).delete();
-      if ( ! deleted ) { throw new IOException("Failed to delete: " + fragmentSpillDir);}
+      File spillDir = new File(baseDir, fragmentSpillDir);
+      for (File spillFile : spillDir.listFiles()) {
+        spillFile.delete(); // IO exception if file delete fails
+      }
+      spillDir.delete();// IO exception if dir delete fails
     }
 
     @Override

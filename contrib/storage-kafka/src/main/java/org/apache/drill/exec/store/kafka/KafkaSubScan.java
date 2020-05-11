@@ -53,7 +53,7 @@ public class KafkaSubScan extends AbstractBase implements SubScan {
                       @JsonProperty("partitionSubScanSpecList") LinkedList<KafkaPartitionScanSpec> partitionSubScanSpecList)
       throws ExecutionSetupException {
     this(userName,
-        (KafkaStoragePlugin) registry.getPlugin(kafkaStoragePluginConfig),
+        registry.resolve(kafkaStoragePluginConfig, KafkaStoragePlugin.class),
         columns,
         partitionSubScanSpecList);
   }
@@ -74,7 +74,7 @@ public class KafkaSubScan extends AbstractBase implements SubScan {
   }
 
   @Override
-  public PhysicalOperator getNewWithChildren(List<PhysicalOperator> children) throws ExecutionSetupException {
+  public PhysicalOperator getNewWithChildren(List<PhysicalOperator> children) {
     Preconditions.checkArgument(children.isEmpty());
     return new KafkaSubScan(getUserName(), kafkaStoragePlugin, columns, partitionSubScanSpecList);
   }

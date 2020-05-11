@@ -39,10 +39,10 @@ import org.apache.drill.exec.expr.TypeHelper;
 import org.apache.drill.exec.expr.fn.interpreter.InterpreterEvaluator;
 import org.apache.drill.exec.expr.holders.TimeStampHolder;
 import org.apache.drill.exec.ops.FragmentContextImpl;
-import org.apache.drill.exec.physical.impl.ScanBatch;
 import org.apache.drill.exec.pop.PopUnitTestBase;
 import org.apache.drill.exec.proto.BitControl;
 import org.apache.drill.exec.proto.BitControl.QueryContextInformation;
+import org.apache.drill.exec.record.CloseableRecordBatch;
 import org.apache.drill.exec.record.MaterializedField;
 import org.apache.drill.exec.record.RecordBatch;
 import org.apache.drill.exec.server.Drillbit;
@@ -51,11 +51,10 @@ import org.apache.drill.exec.store.mock.MockScanBatchCreator;
 import org.apache.drill.exec.store.mock.MockSubScanPOP;
 import org.apache.drill.exec.store.mock.MockTableDef;
 import org.apache.drill.exec.vector.ValueVector;
+import org.apache.drill.shaded.guava.com.google.common.collect.Lists;
 import org.joda.time.DateTimeZone;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
-
-import org.apache.drill.shaded.guava.com.google.common.collect.Lists;
 
 @Category({SlowTest.class, SqlTest.class})
 public class ExpressionInterpreterTest  extends PopUnitTestBase {
@@ -156,7 +155,6 @@ public class ExpressionInterpreterTest  extends PopUnitTestBase {
   }
 
   protected void doTest(String expressionStr, String[] colNames, TypeProtos.MajorType[] colTypes, String[] expectFirstTwoValues, BitControl.PlanFragment planFragment) throws Exception {
-    @SuppressWarnings("resource")
     final RemoteServiceSet serviceSet = RemoteServiceSet.getLocalServiceSet();
     final Drillbit bit1 = new Drillbit(CONFIG, serviceSet);
 
@@ -174,11 +172,10 @@ public class ExpressionInterpreterTest  extends PopUnitTestBase {
     final MockTableDef.MockScanEntry entry = new MockTableDef.MockScanEntry(10, false, 0, 1, columns);
     final MockSubScanPOP scanPOP = new MockSubScanPOP("testTable", false, java.util.Collections.singletonList(entry));
 
-    final ScanBatch batch = createMockScanBatch(bit1, scanPOP, planFragment);
+    final CloseableRecordBatch batch = createMockScanBatch(bit1, scanPOP, planFragment);
 
     batch.next();
 
-    @SuppressWarnings("resource")
     final ValueVector vv = evalExprWithInterpreter(expressionStr, batch, bit1);
 
     // Verify the first 2 values in the output of evaluation.
@@ -194,8 +191,7 @@ public class ExpressionInterpreterTest  extends PopUnitTestBase {
     bit1.close();
   }
 
-  @SuppressWarnings("resource")
-  private ScanBatch createMockScanBatch(Drillbit bit, MockSubScanPOP scanPOP, BitControl.PlanFragment planFragment) {
+  private CloseableRecordBatch createMockScanBatch(Drillbit bit, MockSubScanPOP scanPOP, BitControl.PlanFragment planFragment) {
     final List<RecordBatch> children = Lists.newArrayList();
     final MockScanBatchCreator creator = new MockScanBatchCreator();
 

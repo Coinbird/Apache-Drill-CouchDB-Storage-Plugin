@@ -22,13 +22,13 @@ import com.codahale.metrics.servlets.MetricsServlet;
 import com.codahale.metrics.servlets.ThreadDumpServlet;
 
 import org.apache.commons.io.FileUtils;
-import org.apache.commons.lang3.RandomStringUtils;
 import org.apache.commons.lang3.StringEscapeUtils;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.drill.common.config.DrillConfig;
 import org.apache.drill.common.exceptions.DrillException;
 import org.apache.drill.exec.ExecConstants;
-import org.apache.drill.exec.ssl.SSLConfig;
+import org.apache.drill.exec.server.rest.header.ResponseHeadersSettingFilter;
+import org.apache.drill.exec.server.rest.ssl.SslContextFactoryConfigurator;
 import org.apache.drill.exec.exception.DrillbitStartupException;
 import org.apache.drill.exec.expr.fn.registry.FunctionHolder;
 import org.apache.drill.exec.expr.fn.registry.LocalFunctionRegistry;
@@ -40,15 +40,7 @@ import org.apache.drill.exec.server.options.OptionValidator.OptionDescription;
 import org.apache.drill.exec.server.options.OptionValue;
 import org.apache.drill.exec.server.rest.auth.DrillErrorHandler;
 import org.apache.drill.exec.server.rest.auth.DrillHttpSecurityHandlerProvider;
-import org.apache.drill.exec.ssl.SSLConfigBuilder;
 import org.apache.drill.exec.work.WorkManager;
-import org.bouncycastle.asn1.x500.X500NameBuilder;
-import org.bouncycastle.asn1.x500.style.BCStyle;
-import org.bouncycastle.cert.X509v3CertificateBuilder;
-import org.bouncycastle.cert.jcajce.JcaX509CertificateConverter;
-import org.bouncycastle.cert.jcajce.JcaX509v3CertificateBuilder;
-import org.bouncycastle.operator.ContentSigner;
-import org.bouncycastle.operator.jcajce.JcaContentSignerBuilder;
 import org.eclipse.jetty.http.HttpVersion;
 import org.eclipse.jetty.security.SecurityHandler;
 import org.eclipse.jetty.security.authentication.SessionAuthentication;
@@ -71,7 +63,8 @@ import org.eclipse.jetty.util.resource.Resource;
 import org.eclipse.jetty.util.ssl.SslContextFactory;
 import org.eclipse.jetty.util.thread.QueuedThreadPool;
 import org.glassfish.jersey.servlet.ServletContainer;
-import org.joda.time.DateTime;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import javax.servlet.DispatcherType;
 import javax.servlet.http.HttpSession;
@@ -82,19 +75,11 @@ import java.io.File;
 import java.io.FileWriter;
 import java.io.IOException;
 import java.io.InputStream;
-import java.math.BigInteger;
-import java.net.BindException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.security.KeyPair;
-import java.security.KeyPairGenerator;
-import java.security.KeyStore;
-import java.security.SecureRandom;
-import java.security.cert.X509Certificate;
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.Date;
 import java.util.EnumSet;
 import java.util.List;
 import java.util.TreeSet;
@@ -102,9 +87,11 @@ import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 /**
- * Wrapper class around jetty based webserver.
+ * Wrapper class around jetty based web server.
  */
 public class WebServer implements AutoCloseable {
+  private static final Logger logger = LoggerFactory.getLogger(WebServer.class);
+
   private static final String ACE_MODE_SQL_TEMPLATE_JS = "ace.mode-sql.template.js";
   private static final String ACE_MODE_SQL_JS = "mode-sql.js";
   private static final String DRILL_FUNCTIONS_PLACEHOLDER = "__DRILL_FUNCTIONS__";
@@ -112,7 +99,6 @@ public class WebServer implements AutoCloseable {
   private static final String STATUS_THREADS_PATH = "/status/threads";
   private static final String STATUS_METRICS_PATH = "/status/metrics";
 
-  private static final org.slf4j.Logger logger = org.slf4j.LoggerFactory.getLogger(WebServer.class);
   private static final String OPTIONS_DESCRIBE_JS = "options.describe.js";
   private static final String OPTIONS_DESCRIBE_TEMPLATE_JS = "options.describe.template.js";
 
@@ -128,21 +114,6 @@ public class WebServer implements AutoCloseable {
   private Server embeddedJetty;
 
   private File tmpJavaScriptDir;
-
-  public File getTmpJavaScriptDir() {
-    if (tmpJavaScriptDir == null) {
-      tmpJavaScriptDir = org.apache.drill.shaded.guava.com.google.common.io.Files.createTempDir();
-      tmpJavaScriptDir.deleteOnExit();
-      //Perform All auto generated files at this point
-      try {
-        generateOptionsDescriptionJSFile();
-        generateFunctionJS();
-      } catch (IOException e) {
-        logger.error("Unable to create temp dir for JavaScripts. {}", e);
-      }
-    }
-    return tmpJavaScriptDir;
-  }
 
   /**
    * Create Jetty based web server.
@@ -172,38 +143,35 @@ public class WebServer implements AutoCloseable {
   /**
    * Start the web server including setup.
    */
-  @SuppressWarnings("resource")
   public void start() throws Exception {
     if (!config.getBoolean(ExecConstants.HTTP_ENABLE)) {
       return;
     }
 
-    final boolean authEnabled = config.getBoolean(ExecConstants.USER_AUTHENTICATION_ENABLED);
-
-    int port = config.getInt(ExecConstants.HTTP_PORT);
-    final boolean portHunt = config.getBoolean(ExecConstants.HTTP_PORT_HUNT);
-    final int acceptors = config.getInt(ExecConstants.HTTP_JETTY_SERVER_ACCEPTORS);
-    final int selectors = config.getInt(ExecConstants.HTTP_JETTY_SERVER_SELECTORS);
-    final int handlers = config.getInt(ExecConstants.HTTP_JETTY_SERVER_HANDLERS);
     final QueuedThreadPool threadPool = new QueuedThreadPool(2, 2);
     embeddedJetty = new Server(threadPool);
+
+    final boolean authEnabled = config.getBoolean(ExecConstants.USER_AUTHENTICATION_ENABLED);
     ServletContextHandler webServerContext = createServletContextHandler(authEnabled);
-    //Allow for Other Drillbits to make REST calls
-    FilterHolder filterHolder = new FilterHolder(CrossOriginFilter.class);
-    filterHolder.setInitParameter("allowedOrigins", "*");
-    //Allowing CORS for metrics only
-    webServerContext.addFilter(filterHolder, STATUS_METRICS_PATH, null);
     embeddedJetty.setHandler(webServerContext);
 
+    final int acceptors = config.getInt(ExecConstants.HTTP_JETTY_SERVER_ACCEPTORS);
+    final int selectors = config.getInt(ExecConstants.HTTP_JETTY_SERVER_SELECTORS);
+    int port = config.getInt(ExecConstants.HTTP_PORT);
     ServerConnector connector = createConnector(port, acceptors, selectors);
+
+    final int handlers = config.getInt(ExecConstants.HTTP_JETTY_SERVER_HANDLERS);
     threadPool.setMaxThreads(handlers + connector.getAcceptors() + connector.getSelectorManager().getSelectorCount());
     embeddedJetty.addConnector(connector);
+
+    embeddedJetty.setDumpAfterStart(config.getBoolean(ExecConstants.HTTP_JETTY_SERVER_DUMP_AFTER_START));
+    final boolean portHunt = config.getBoolean(ExecConstants.HTTP_PORT_HUNT);
     for (int retry = 0; retry < PORT_HUNT_TRIES; retry++) {
       connector.setPort(port);
       try {
         embeddedJetty.start();
         return;
-      } catch (BindException e) {
+      } catch (IOException e) {
         if (portHunt) {
           logger.info("Failed to start on port {}, trying port {}", port, ++port, e);
         } else {
@@ -234,35 +202,37 @@ public class WebServer implements AutoCloseable {
     servletContextHandler.addServlet(new ServletHolder(new ThreadDumpServlet()), STATUS_THREADS_PATH);
 
     final ServletHolder staticHolder = new ServletHolder("static", DefaultServlet.class);
+
     // Get resource URL for Drill static assets, based on where Drill icon is located
     String drillIconResourcePath =
-        Resource.newClassPathResource(BASE_STATIC_PATH + DRILL_ICON_RESOURCE_RELATIVE_PATH).getURL().toString();
+        Resource.newClassPathResource(BASE_STATIC_PATH + DRILL_ICON_RESOURCE_RELATIVE_PATH).getURI().toString();
     staticHolder.setInitParameter("resourceBase",
         drillIconResourcePath.substring(0, drillIconResourcePath.length() - DRILL_ICON_RESOURCE_RELATIVE_PATH.length()));
     staticHolder.setInitParameter("dirAllowed", "false");
     staticHolder.setInitParameter("pathInfoOnly", "true");
     servletContextHandler.addServlet(staticHolder, "/static/*");
 
-    //Add Local path resource (This will allow access to dynamically created files like JavaScript)
+    // Add Local path resource (This will allow access to dynamically created files like JavaScript)
     final ServletHolder dynamicHolder = new ServletHolder("dynamic", DefaultServlet.class);
-    //Skip if unable to get a temp directory (e.g. during Unit tests)
-    if (getTmpJavaScriptDir() != null) {
-      dynamicHolder.setInitParameter("resourceBase", getTmpJavaScriptDir().getAbsolutePath());
+
+    // Skip if unable to get a temp directory (e.g. during Unit tests)
+    if (getOrCreateTmpJavaScriptDir() != null) {
+      dynamicHolder.setInitParameter("resourceBase", getOrCreateTmpJavaScriptDir().getAbsolutePath());
       dynamicHolder.setInitParameter("dirAllowed", "true");
       dynamicHolder.setInitParameter("pathInfoOnly", "true");
       servletContextHandler.addServlet(dynamicHolder, "/dynamic/*");
     }
 
     if (authEnabled) {
-      //DrillSecurityHandler is used to support SPNEGO and FORM authentication together
+      // DrillSecurityHandler is used to support SPNEGO and FORM authentication together
       servletContextHandler.setSecurityHandler(new DrillHttpSecurityHandlerProvider(config, workManager.getContext()));
       servletContextHandler.setSessionHandler(createSessionHandler(servletContextHandler.getSecurityHandler()));
     }
 
-    if (isOnlyImpersonationEnabled(workManager.getContext().getConfig())) {
-      for (String path : new String[]{"/query", "/query.json"}) {
-        servletContextHandler.addFilter(UserNameFilter.class, path, EnumSet.of(DispatcherType.REQUEST));
-      }
+    // Applying filters for CSRF protection.
+    servletContextHandler.addFilter(CsrfTokenInjectFilter.class, "/*", EnumSet.of(DispatcherType.REQUEST));
+    for (String path : new String[]{"/query", "/storage/create_update", "/option/*"}) {
+      servletContextHandler.addFilter(CsrfTokenValidateFilter.class, path, EnumSet.of(DispatcherType.REQUEST));
     }
 
     if (config.getBoolean(ExecConstants.HTTP_CORS_ENABLED)) {
@@ -281,11 +251,26 @@ public class WebServer implements AutoCloseable {
       }
     }
 
+    // Allow for Other Drillbits to make REST calls
+    FilterHolder filterHolder = new FilterHolder(CrossOriginFilter.class);
+    filterHolder.setInitParameter("allowedOrigins", "*");
+
+    // Allowing CORS for metrics only
+    servletContextHandler.addFilter(filterHolder, STATUS_METRICS_PATH, null);
+
+    FilterHolder responseHeadersSettingFilter = new FilterHolder(ResponseHeadersSettingFilter.class);
+    responseHeadersSettingFilter.setInitParameters(ResponseHeadersSettingFilter.retrieveResponseHeaders(config));
+    servletContextHandler.addFilter(responseHeadersSettingFilter, "/*", EnumSet.of(DispatcherType.REQUEST));
+
+
     return servletContextHandler;
   }
 
   /**
-   * @return A {@link SessionHandler} which contains a {@link HashSessionManager}
+   * It creates A {@link SessionHandler} which contains a {@link HashSessionManager}
+   *
+   * @param securityHandler Set of init parameters that are used by the Authentication
+   * @return session handler
    */
   private SessionHandler createSessionHandler(final SecurityHandler securityHandler) {
     SessionManager sessionManager = new HashSessionManager();
@@ -313,7 +298,6 @@ public class WebServer implements AutoCloseable {
         }
 
         // Clear all the resources allocated for this session
-        @SuppressWarnings("resource")
         final WebSessionResources webSessionResources =
             (WebSessionResources) session.getAttribute(WebSessionResources.class.getSimpleName());
 
@@ -361,80 +345,10 @@ public class WebServer implements AutoCloseable {
    */
   private ServerConnector createHttpsConnector(int port, int acceptors, int selectors) throws Exception {
     logger.info("Setting up HTTPS connector for web server");
-
-    final SslContextFactory sslContextFactory = new SslContextFactory();
-    SSLConfig ssl = new SSLConfigBuilder()
-        .config(config)
-        .mode(SSLConfig.Mode.SERVER)
-        .initializeSSLContext(false)
-        .validateKeyStore(true)
-        .build();
-    if(ssl.isSslValid()){
-      logger.info("Using configured SSL settings for web server");
-
-      sslContextFactory.setKeyStorePath(ssl.getKeyStorePath());
-      sslContextFactory.setKeyStorePassword(ssl.getKeyStorePassword());
-      sslContextFactory.setKeyManagerPassword(ssl.getKeyPassword());
-      if(ssl.hasTrustStorePath()){
-        sslContextFactory.setTrustStorePath(ssl.getTrustStorePath());
-        if(ssl.hasTrustStorePassword()){
-          sslContextFactory.setTrustStorePassword(ssl.getTrustStorePassword());
-        }
-      }
-    } else {
-      logger.info("Using generated self-signed SSL settings for web server");
-      final SecureRandom random = new SecureRandom();
-
-      // Generate a private-public key pair
-      final KeyPairGenerator keyPairGenerator = KeyPairGenerator.getInstance("RSA");
-      keyPairGenerator.initialize(1024, random);
-      final KeyPair keyPair = keyPairGenerator.generateKeyPair();
-
-      final DateTime now = DateTime.now();
-
-      // Create builder for certificate attributes
-      final X500NameBuilder nameBuilder = new X500NameBuilder(BCStyle.INSTANCE)
-          .addRDN(BCStyle.OU, "Apache Drill (auth-generated)")
-          .addRDN(BCStyle.O, "Apache Software Foundation (auto-generated)")
-          .addRDN(BCStyle.CN, workManager.getContext().getEndpoint().getAddress());
-
-      final Date notBefore = now.minusMinutes(1).toDate();
-      final Date notAfter = now.plusYears(5).toDate();
-      final BigInteger serialNumber = new BigInteger(128, random);
-
-      // Create a certificate valid for 5years from now.
-      final X509v3CertificateBuilder certificateBuilder = new JcaX509v3CertificateBuilder(
-          nameBuilder.build(), // attributes
-          serialNumber,
-          notBefore,
-          notAfter,
-          nameBuilder.build(),
-          keyPair.getPublic());
-
-      // Sign the certificate using the private key
-      final ContentSigner contentSigner =
-          new JcaContentSignerBuilder("SHA256WithRSAEncryption").build(keyPair.getPrivate());
-      final X509Certificate certificate =
-          new JcaX509CertificateConverter().getCertificate(certificateBuilder.build(contentSigner));
-
-      // Check the validity
-      certificate.checkValidity(now.toDate());
-
-      // Make sure the certificate is self-signed.
-      certificate.verify(certificate.getPublicKey());
-
-      // Generate a random password for keystore protection
-      final String keyStorePasswd = RandomStringUtils.random(20);
-      final KeyStore keyStore = KeyStore.getInstance("JKS");
-      keyStore.load(null, null);
-      keyStore.setKeyEntry("DrillAutoGeneratedCert", keyPair.getPrivate(),
-          keyStorePasswd.toCharArray(), new java.security.cert.Certificate[]{certificate});
-
-      sslContextFactory.setKeyStore(keyStore);
-      sslContextFactory.setKeyStorePassword(keyStorePasswd);
-    }
-
-    final HttpConfiguration httpsConfig = new HttpConfiguration();
+    SslContextFactory sslContextFactory = new SslContextFactoryConfigurator(config,
+        workManager.getContext().getEndpoint().getAddress())
+        .configureNewSslContextFactory();
+    final HttpConfiguration httpsConfig = baseHttpConfig();
     httpsConfig.addCustomizer(new SecureRequestCustomizer());
 
     // SSL Connector
@@ -454,12 +368,17 @@ public class WebServer implements AutoCloseable {
    */
   private ServerConnector createHttpConnector(int port, int acceptors, int selectors) {
     logger.info("Setting up HTTP connector for web server");
-    final HttpConfiguration httpConfig = new HttpConfiguration();
     final ServerConnector httpConnector =
-        new ServerConnector(embeddedJetty, null, null, null, acceptors, selectors, new HttpConnectionFactory(httpConfig));
+        new ServerConnector(embeddedJetty, null, null, null, acceptors, selectors, new HttpConnectionFactory(baseHttpConfig()));
     httpConnector.setPort(port);
 
     return httpConnector;
+  }
+
+  private HttpConfiguration baseHttpConfig() {
+    HttpConfiguration httpConfig = new HttpConfiguration();
+    httpConfig.setSendServerVersion(false);
+    return httpConfig;
   }
 
   @Override
@@ -467,43 +386,60 @@ public class WebServer implements AutoCloseable {
     if (embeddedJetty != null) {
       embeddedJetty.stop();
     }
-    //Deleting temp directory
-    FileUtils.deleteDirectory(getTmpJavaScriptDir());
+    // Deleting temp directory
+    FileUtils.deleteQuietly(tmpJavaScriptDir);
+  }
+
+  /**
+   * Creates if not exists, and returns File for temporary Javascript directory
+   * @return file handle
+   */
+  public File getOrCreateTmpJavaScriptDir() {
+    if (tmpJavaScriptDir == null && this.drillbit.getContext() != null) {
+      tmpJavaScriptDir = org.apache.drill.shaded.guava.com.google.common.io.Files.createTempDir();
+      // Perform All auto generated files at this point
+      try {
+        generateOptionsDescriptionJSFile();
+        generateFunctionJS();
+      } catch (IOException e) {
+        logger.error("Unable to create temp dir for JavaScripts: {}", tmpJavaScriptDir.getPath(), e);
+      }
+    }
+    return tmpJavaScriptDir;
   }
 
   /**
    * Generate Options Description JavaScript to serve http://drillhost/options ACE library search features
-   * @throws IOException
+   * @throws IOException when unable to generate functions JS file
    */
   private void generateOptionsDescriptionJSFile() throws IOException {
-    //Obtain list of Options & their descriptions
+    // Obtain list of Options & their descriptions
     OptionManager optionManager = this.drillbit.getContext().getOptionManager();
     OptionList publicOptions = optionManager.getPublicOptionList();
     List<OptionValue> options = new ArrayList<>(publicOptions);
-    //Add internal options
+    // Add internal options
     OptionList internalOptions = optionManager.getInternalOptionList();
     options.addAll(internalOptions);
     Collections.sort(options);
     int numLeftToWrite = options.size();
 
-    //Template source Javascript file
-    InputStream optionsDescripTemplateStream = Resource.newClassPathResource(OPTIONS_DESCRIBE_TEMPLATE_JS).getInputStream();
-    //Generated file
-    File optionsDescriptionFile = new File(getTmpJavaScriptDir(), OPTIONS_DESCRIBE_JS);
+    // Template source Javascript file
+    InputStream optionsDescribeTemplateStream = Resource.newClassPathResource(OPTIONS_DESCRIBE_TEMPLATE_JS).getInputStream();
+    // Generated file
+    File optionsDescriptionFile = new File(getOrCreateTmpJavaScriptDir(), OPTIONS_DESCRIBE_JS);
     final String file_content_footer = "};";
-    optionsDescriptionFile.deleteOnExit();
-    //Create a copy of a template and write with that!
-    java.nio.file.Files.copy(optionsDescripTemplateStream, optionsDescriptionFile.toPath());
+    // Create a copy of a template and write with that!
+    java.nio.file.Files.copy(optionsDescribeTemplateStream, optionsDescriptionFile.toPath());
     logger.info("Will write {} descriptions to {}", numLeftToWrite, optionsDescriptionFile.getAbsolutePath());
 
     try (BufferedWriter writer = new BufferedWriter(new FileWriter(optionsDescriptionFile, true))) {
-      //Iterate through options
+      // Iterate through options
       for (OptionValue option : options) {
         numLeftToWrite--;
         String optionName = option.getName();
         OptionDescription optionDescription = optionManager.getOptionDefinition(optionName).getValidator().getOptionDescription();
         if (optionDescription != null) {
-          //Note: We don't need to worry about short descriptions for WebUI, since they will never be explicitly accessed from the map
+          // Note: We don't need to worry about short descriptions for WebUI, since they will never be explicitly accessed from the map
           writer.append("  \"").append(optionName).append("\" : \"")
           .append(StringEscapeUtils.escapeEcmaScript(optionDescription.getDescription()))
           .append( numLeftToWrite > 0 ? "\"," : "\"");
@@ -518,17 +454,17 @@ public class WebServer implements AutoCloseable {
 
   /**
    * Generates ACE library javascript populated with list of available SQL functions
-   * @throws IOException
+   * @throws IOException when unable to generate JS file with functions
    */
   private void generateFunctionJS() throws IOException {
-    //Naturally ordered set of function names
+    // Naturally ordered set of function names
     TreeSet<String> functionSet = new TreeSet<>();
-    //Extracting ONLY builtIn functions (i.e those already available)
+    // Extracting ONLY builtIn functions (i.e those already available)
     List<FunctionHolder> builtInFuncHolderList = this.drillbit.getContext().getFunctionImplementationRegistry().getLocalFunctionRegistry()
         .getAllJarsWithFunctionsHolders().get(LocalFunctionRegistry.BUILT_IN);
 
-    //Build List of 'usable' functions (i.e. functions that start with an alphabet and can be autocompleted by the ACE library)
-    //Example of 'unusable' functions would be operators like '<', '!'
+    // Build List of 'usable' functions (i.e. functions that start with an alphabet and can be auto-completed by the ACE library)
+    // Example of 'unusable' functions would be operators like '<', '!'
     int skipCount = 0;
     for (FunctionHolder builtInFunctionHolder : builtInFuncHolderList) {
       String name = builtInFunctionHolder.getName();
@@ -541,22 +477,21 @@ public class WebServer implements AutoCloseable {
     }
     logger.debug("{} functions will not be available in WebUI", skipCount);
 
-    //Generated file
-    File functionsListFile = new File(getTmpJavaScriptDir(), ACE_MODE_SQL_JS);
-    functionsListFile.deleteOnExit();
-    //Template source Javascript file
+    // Generated file
+    File functionsListFile = new File(getOrCreateTmpJavaScriptDir(), ACE_MODE_SQL_JS);
+    // Template source Javascript file
     try (InputStream aceModeSqlTemplateStream = Resource.newClassPathResource(ACE_MODE_SQL_TEMPLATE_JS).getInputStream()) {
-      //Create a copy of a template and write with that!
+      // Create a copy of a template and write with that!
       java.nio.file.Files.copy(aceModeSqlTemplateStream, functionsListFile.toPath());
     }
 
-    //Construct String
+    // Construct String
     String funcListString = String.join("|", functionSet);
 
     Path path = Paths.get(functionsListFile.getPath());
     try (Stream<String> lines = Files.lines(path)) {
       List <String> replaced =
-          lines //Replacing first occurrence
+          lines // Replacing first occurrence
             .map(line -> line.replaceFirst(DRILL_FUNCTIONS_PLACEHOLDER, funcListString))
             .collect(Collectors.toList());
       Files.write(path, replaced);

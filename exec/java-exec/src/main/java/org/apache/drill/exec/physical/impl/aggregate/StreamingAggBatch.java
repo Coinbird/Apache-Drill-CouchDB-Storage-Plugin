@@ -17,11 +17,13 @@
  */
 package org.apache.drill.exec.physical.impl.aggregate;
 
-import java.io.IOException;
+import static org.apache.drill.exec.record.RecordBatch.IterOutcome.EMIT;
+import static org.apache.drill.exec.record.RecordBatch.IterOutcome.NONE;
+import static org.apache.drill.exec.record.RecordBatch.IterOutcome.OK;
+import static org.apache.drill.exec.record.RecordBatch.IterOutcome.OK_NEW_SCHEMA;
+
 import java.util.List;
 
-import org.apache.drill.shaded.guava.com.google.common.annotations.VisibleForTesting;
-import org.apache.drill.shaded.guava.com.google.common.collect.Lists;
 import org.apache.drill.common.exceptions.DrillRuntimeException;
 import org.apache.drill.common.exceptions.UserException;
 import org.apache.drill.common.expression.ErrorCollector;
@@ -32,7 +34,6 @@ import org.apache.drill.common.logical.data.NamedExpression;
 import org.apache.drill.common.types.TypeProtos;
 import org.apache.drill.exec.compile.sig.GeneratorMapping;
 import org.apache.drill.exec.compile.sig.MappingSet;
-import org.apache.drill.exec.exception.ClassTransformationException;
 import org.apache.drill.exec.exception.OutOfMemoryException;
 import org.apache.drill.exec.exception.SchemaChangeException;
 import org.apache.drill.exec.expr.ClassGenerator;
@@ -41,13 +42,12 @@ import org.apache.drill.exec.expr.CodeGenerator;
 import org.apache.drill.exec.expr.DrillFuncHolderExpr;
 import org.apache.drill.exec.expr.ExpressionTreeMaterializer;
 import org.apache.drill.exec.expr.HoldingContainerExpression;
-import org.apache.drill.exec.expr.TypeHelper;
 import org.apache.drill.exec.expr.ValueVectorWriteExpression;
 import org.apache.drill.exec.expr.fn.FunctionGenerationHelper;
 import org.apache.drill.exec.ops.FragmentContext;
 import org.apache.drill.exec.physical.config.StreamingAggregate;
 import org.apache.drill.exec.physical.impl.aggregate.StreamingAggregator.AggOutcome;
-import org.apache.drill.exec.physical.impl.xsort.managed.ExternalSortBatch;
+import org.apache.drill.exec.physical.impl.xsort.ExternalSortBatch;
 import org.apache.drill.exec.record.AbstractRecordBatch;
 import org.apache.drill.exec.record.BatchSchema;
 import org.apache.drill.exec.record.BatchSchema.SelectionVectorMode;
@@ -63,24 +63,22 @@ import org.apache.drill.exec.vector.FixedWidthVector;
 import org.apache.drill.exec.vector.UntypedNullHolder;
 import org.apache.drill.exec.vector.UntypedNullVector;
 import org.apache.drill.exec.vector.ValueVector;
+import org.apache.drill.exec.vector.complex.writer.BaseWriter;
+import org.apache.drill.shaded.guava.com.google.common.annotations.VisibleForTesting;
+import org.apache.drill.shaded.guava.com.google.common.collect.Lists;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import com.sun.codemodel.JExpr;
 import com.sun.codemodel.JVar;
-import org.apache.drill.exec.vector.complex.writer.BaseWriter;
-
-import static org.apache.drill.exec.record.RecordBatch.IterOutcome.EMIT;
-import static org.apache.drill.exec.record.RecordBatch.IterOutcome.NONE;
-import static org.apache.drill.exec.record.RecordBatch.IterOutcome.OK;
-import static org.apache.drill.exec.record.RecordBatch.IterOutcome.OK_NEW_SCHEMA;
-import static org.apache.drill.exec.record.RecordBatch.IterOutcome.STOP;
 
 public class StreamingAggBatch extends AbstractRecordBatch<StreamingAggregate> {
-  static final org.slf4j.Logger logger = org.slf4j.LoggerFactory.getLogger(StreamingAggBatch.class);
+  static final Logger logger = LoggerFactory.getLogger(StreamingAggBatch.class);
 
   protected StreamingAggregator aggregator;
   protected final RecordBatch incoming;
   private List<BaseWriter.ComplexWriter> complexWriters;
-  //
+
   // Streaming agg can be in (a) a normal pipeline or (b) it may be in a pipeline that is part of a subquery involving
   // lateral and unnest. In case(a), the aggregator proceeds normally until it sees a group change or a NONE. If a
   // group has changed, the aggregated data is sent downstream and the aggregation continues with the next group. If
@@ -100,33 +98,37 @@ public class StreamingAggBatch extends AbstractRecordBatch<StreamingAggregate> {
   //   Schema change within a Data Set is not supported.
   //
   //   We will define some states for internal management
-  //
-  private boolean done = false;  // END of all data
+
+  private boolean done;          // END of all data
   private boolean first = true;  // Beginning of new data set. True during the build schema phase. False once the first
                                  // call to inner next is made.
-  private boolean sendEmit = false; // In the case where we see an OK_NEW_SCHEMA along with the end of a data set
-                                    // we send out a batch with OK_NEW_SCHEMA first, then in the next iteration,
-                                    // we send out an empty batch with EMIT.
+  private boolean sendEmit;      // In the case where we see an OK_NEW_SCHEMA along with the end of a data set
+                                 // we send out a batch with OK_NEW_SCHEMA first, then in the next iteration,
+                                 // we send out an empty batch with EMIT.
   private IterOutcome lastKnownOutcome = OK; // keep track of the outcome from the previous call to incoming.next
   private boolean firstBatchForSchema = true; // true if the current batch came in with an OK_NEW_SCHEMA
   private boolean firstBatchForDataSet = true; // true if the current batch is the first batch in a data set
-  private int recordCount = 0;  // number of records output in the current data set
+  private int recordCount;         // number of records output in the current data set
 
   private BatchSchema incomingSchema;
 
   /*
-   * DRILL-2277, DRILL-2411: For straight aggregates without a group by clause we need to perform special handling when
-   * the incoming batch is empty. In the case of the empty input into the streaming aggregate we need
-   * to return a single batch with one row. For count we need to return 0 and for all other aggregate
-   * functions like sum, avg etc we need to return an explicit row with NULL. Since we correctly allocate the type of
-   * the outgoing vectors (required for count and nullable for other aggregate functions) all we really need to do
-   * is simply set the record count to be 1 in such cases. For nullable vectors we don't need to do anything because
-   * if we don't set anything the output will be NULL, however for required vectors we explicitly zero out the vector
-   * since we don't zero it out while allocating it.
+   * DRILL-2277, DRILL-2411: For straight aggregates without a group by clause
+   * we need to perform special handling when the incoming batch is empty. In
+   * the case of the empty input into the streaming aggregate we need to return
+   * a single batch with one row. For count we need to return 0 and for all
+   * other aggregate functions like sum, avg etc we need to return an explicit
+   * row with NULL. Since we correctly allocate the type of the outgoing vectors
+   * (required for count and nullable for other aggregate functions) all we
+   * really need to do is simply set the record count to be 1 in such cases. For
+   * nullable vectors we don't need to do anything because if we don't set
+   * anything the output will be NULL, however for required vectors we
+   * explicitly zero out the vector since we don't zero it out while allocating
+   * it.
    *
    * We maintain some state to remember that we have done such special handling.
    */
-  private boolean specialBatchSent = false;
+  private boolean specialBatchSent;
   private static final int SPECIAL_BATCH_COUNT = 1;
 
   // TODO: Needs to adapt to batch sizing rather than hardcoded constant value
@@ -156,38 +158,29 @@ public class StreamingAggBatch extends AbstractRecordBatch<StreamingAggregate> {
 
   @Override
   public VectorContainer getOutgoingContainer() {
-    return this.container;
+    return container;
   }
 
   @Override
-  public void buildSchema() throws SchemaChangeException {
+  public void buildSchema() {
     IterOutcome outcome = next(incoming);
     switch (outcome) {
       case NONE:
         state = BatchState.DONE;
         container.buildSchema(SelectionVectorMode.NONE);
         return;
-      case OUT_OF_MEMORY:
-        state = BatchState.OUT_OF_MEMORY;
-        return;
-      case STOP:
-        state = BatchState.STOP;
-        return;
       default:
         break;
     }
 
-    this.incomingSchema = incoming.getSchema();
-    if (!createAggregator()) {
-      state = BatchState.DONE;
-    }
-    for (final VectorWrapper<?> w : container) {
-      w.getValueVector().allocateNew();
-    }
+    incomingSchema = incoming.getSchema();
+    createAggregator();
+    container.allocateNew();
 
     if (complexWriters != null) {
       container.buildSchema(SelectionVectorMode.NONE);
     }
+    container.setEmpty();
   }
 
   @Override
@@ -207,6 +200,7 @@ public class StreamingAggBatch extends AbstractRecordBatch<StreamingAggregate> {
       firstBatchForDataSet = true;
       firstBatchForSchema = false;
       recordCount = 0;
+      container.setEmpty();
       specialBatchSent = false;
       return EMIT;
     }
@@ -223,9 +217,9 @@ public class StreamingAggBatch extends AbstractRecordBatch<StreamingAggregate> {
       switch (lastKnownOutcome) {
         case NONE:
 
-          if (first && popConfig.getKeys().size() == 0) {
+          if (first && getKeyExpressions().size() == 0) {
             // if we have a straight aggregate and empty input batch, we need to handle it in a different way
-            // Wewant to produce the special batch only if we got a NONE as the first outcome after
+            // We want to produce the special batch only if we got a NONE as the first outcome after
             // OK_NEW_SCHEMA. If we get a NONE immediately after we see an EMIT, then we have already handled
             // the case of the empty batch
             constructSpecialBatch();
@@ -237,21 +231,15 @@ public class StreamingAggBatch extends AbstractRecordBatch<StreamingAggregate> {
             return IterOutcome.OK;
           }
           // else fall thru
-        case OUT_OF_MEMORY:
         case NOT_YET:
-        case STOP:
-          return lastKnownOutcome;
         case OK_NEW_SCHEMA:
-          if (!createAggregator()) {
-            done = true;
-            return IterOutcome.STOP;
-          }
+          createAggregator();
           firstBatchForSchema = true;
           break;
         case EMIT:
           // if we get an EMIT with an empty batch as the first (and therefore only) batch
           // we have to do the special handling
-          if (firstBatchForDataSet && popConfig.getKeys().size() == 0 && incoming.getRecordCount() == 0) {
+          if (firstBatchForDataSet && getKeyExpressions().size() == 0 && incoming.getRecordCount() == 0) {
             constructSpecialBatch();
             // If outcome is NONE then we send the special batch in the first iteration and the NONE
             // outcome in the next iteration. If outcome is EMIT, we can send the special
@@ -271,7 +259,7 @@ public class StreamingAggBatch extends AbstractRecordBatch<StreamingAggregate> {
         && aggregator.previousBatchProcessed()) {
         lastKnownOutcome = incoming.next();
         if (!first ) {
-          //Setup needs to be called again. During setup, generated code saves a reference to the vectors
+          // Setup needs to be called again. During setup, generated code saves a reference to the vectors
           // pointed to by the incoming batch so that the de-referencing of the vector wrappers to get to
           // the vectors  does not have to be done at each call to eval. However, after an EMIT is seen,
           // the vectors are replaced and the reference to the old vectors is no longer valid
@@ -302,8 +290,8 @@ public class StreamingAggBatch extends AbstractRecordBatch<StreamingAggregate> {
         ExternalSortBatch.releaseBatches(incoming);
         return returnOutcome;
       case RETURN_AND_RESET:
-        //WE could have got a string of batches, all empty, until we hit an emit
-        if (firstBatchForDataSet && popConfig.getKeys().size() == 0 && recordCount == 0) {
+        // We could have got a string of batches, all empty, until we hit an emit
+        if (firstBatchForDataSet && getKeyExpressions().size() == 0 && recordCount == 0) {
           // if we have a straight aggregate and empty input batch, we need to handle it in a different way
           constructSpecialBatch();
           // If outcome is NONE then we send the special batch in the first iteration and the NONE
@@ -363,13 +351,10 @@ public class StreamingAggBatch extends AbstractRecordBatch<StreamingAggregate> {
           lastKnownOutcome = EMIT;
           return OK_NEW_SCHEMA;
         } else {
-          context.getExecutorState().fail(UserException.unsupportedError().message(SchemaChangeException
-              .schemaChanged("Streaming aggregate does not support schema changes", incomingSchema,
-                  incoming.getSchema()).getMessage()).build(logger));
-          close();
-          killIncoming(false);
-          lastKnownOutcome = STOP;
-          return IterOutcome.STOP;
+          throw UserException.schemaChangeError(SchemaChangeException.schemaChanged(
+                  "Streaming aggregate does not support schema changes", incomingSchema,
+                  incoming.getSchema()))
+              .build(logger);
         }
       default:
         throw new IllegalStateException(String.format("Unknown state %s.", aggOutcome));
@@ -379,23 +364,24 @@ public class StreamingAggBatch extends AbstractRecordBatch<StreamingAggregate> {
   private void allocateComplexWriters() {
     // Allocate the complex writers before processing the incoming batch
     if (complexWriters != null) {
-      for (final BaseWriter.ComplexWriter writer : complexWriters) {
+      for (BaseWriter.ComplexWriter writer : complexWriters) {
         writer.allocate();
       }
     }
   }
 
   /**
-   * Method is invoked when we have a straight aggregate (no group by expression) and our input is empty.
-   * In this case we construct an outgoing batch with record count as 1. For the nullable vectors we don't set anything
-   * as we want the output to be NULL. For the required vectors (only for count()) we set the value to be zero since
-   * we don't zero out our buffers initially while allocating them.
+   * Invoked when we have a straight aggregate (no group by expression) and our
+   * input is empty. In this case we construct an outgoing batch with record
+   * count as 1. For the nullable vectors we don't set anything as we want the
+   * output to be NULL. For the required vectors (only for count()) we set the
+   * value to be zero since we don't zero out our buffers initially while
+   * allocating them.
    */
-  @SuppressWarnings("resource")
   private void constructSpecialBatch() {
     int exprIndex = 0;
-    for (final VectorWrapper<?> vw: container) {
-      final ValueVector vv = vw.getValueVector();
+    for (VectorWrapper<?> vw: container) {
+      ValueVector vv = vw.getValueVector();
       AllocationHelper.allocateNew(vv, SPECIAL_BATCH_COUNT);
       vv.getMutator().setValueCount(SPECIAL_BATCH_COUNT);
       if (vv.getField().getType().getMode() == TypeProtos.DataMode.REQUIRED) {
@@ -412,7 +398,7 @@ public class StreamingAggBatch extends AbstractRecordBatch<StreamingAggregate> {
            * buffer
            */
           throw new DrillRuntimeException("FixedWidth vectors is the expected output vector type. " +
-              "Corresponding expression: " + popConfig.getExprs().get(exprIndex).toString());
+              "Corresponding expression: " + getValueExpressions().get(exprIndex).toString());
         }
       }
       exprIndex++;
@@ -422,61 +408,59 @@ public class StreamingAggBatch extends AbstractRecordBatch<StreamingAggregate> {
   }
 
   /**
-   * Creates a new Aggregator based on the current schema. If setup fails, this method is responsible for cleaning up
-   * and informing the context of the failure state, as well is informing the upstream operators.
-   *
-   * @return true if the aggregator was setup successfully. false if there was a failure.
+   * Creates a new Aggregator based on the current schema. If setup fails, this
+   * method is responsible for cleaning up and informing the context of the
+   * failure state, as well is informing the upstream operators.
    */
-  private boolean createAggregator() {
+  private void createAggregator() {
     logger.debug("Creating new aggregator.");
     try {
       stats.startSetup();
-      this.aggregator = createAggregatorInternal();
-      return true;
-    } catch (SchemaChangeException | ClassTransformationException | IOException ex) {
-      context.getExecutorState().fail(ex);
-      container.clear();
-      incoming.kill(false);
-      return false;
+      aggregator = createAggregatorInternal();
     } finally {
       stats.stopSetup();
     }
   }
 
-  public void addComplexWriter(final BaseWriter.ComplexWriter writer) {
+  public void addComplexWriter(BaseWriter.ComplexWriter writer) {
     complexWriters.add(writer);
   }
 
-  protected StreamingAggregator createAggregatorInternal() throws SchemaChangeException, ClassTransformationException, IOException{
+  protected StreamingAggregator createAggregatorInternal() {
     ClassGenerator<StreamingAggregator> cg = CodeGenerator.getRoot(StreamingAggTemplate.TEMPLATE_DEFINITION, context.getOptions());
-    cg.getCodeGenerator().plainJavaCapable(true);
+    // Streaming agg no longer plain Java capable. Stats generates code
+    // that fails when compiled normally.
+    //     cannot override resetValues() in org.apache.drill.exec.physical.impl.aggregate.StreamingAggTemplate
+    //     public boolean resetValues()
+    //     ^
+    //     overridden method does not throw org.apache.drill.exec.exception.SchemaChangeException (compiler.err.override.meth.doesnt.throw)
+    // cg.getCodeGenerator().plainJavaCapable(true);
     // Uncomment out this line to debug the generated code.
-    //cg.getCodeGenerator().saveCodeForDebugging(true);
+    // cg.getCodeGenerator().saveCodeForDebugging(true);
     container.clear();
 
-    LogicalExpression[] keyExprs = new LogicalExpression[popConfig.getKeys().size()];
-    LogicalExpression[] valueExprs = new LogicalExpression[popConfig.getExprs().size()];
-    TypedFieldId[] keyOutputIds = new TypedFieldId[popConfig.getKeys().size()];
+    LogicalExpression[] keyExprs = new LogicalExpression[getKeyExpressions().size()];
+    LogicalExpression[] valueExprs = new LogicalExpression[getValueExpressions().size()];
+    TypedFieldId[] keyOutputIds = new TypedFieldId[getKeyExpressions().size()];
 
     ErrorCollector collector = new ErrorCollectorImpl();
 
     for (int i = 0; i < keyExprs.length; i++) {
-      final NamedExpression ne = popConfig.getKeys().get(i);
-      final LogicalExpression expr = ExpressionTreeMaterializer.materialize(ne.getExpr(), incoming, collector,context.getFunctionRegistry() );
+      NamedExpression ne = getKeyExpressions().get(i);
+      LogicalExpression expr = ExpressionTreeMaterializer.materialize(ne.getExpr(), incoming, collector,context.getFunctionRegistry() );
       if (expr == null) {
         continue;
       }
       keyExprs[i] = expr;
-      final MaterializedField outputField = MaterializedField.create(ne.getRef().getLastSegment().getNameSegment().getPath(),
+      MaterializedField outputField = MaterializedField.create(ne.getRef().getLastSegment().getNameSegment().getPath(),
                                                                       expr.getMajorType());
-      @SuppressWarnings("resource")
-      final ValueVector vector = TypeHelper.getNewVector(outputField, oContext.getAllocator());
-      keyOutputIds[i] = container.add(vector);
+      container.addOrGet(outputField);
+      keyOutputIds[i] = container.getValueVectorId(ne.getRef());
     }
 
     for (int i = 0; i < valueExprs.length; i++) {
-      final NamedExpression ne = popConfig.getExprs().get(i);
-      final LogicalExpression expr = ExpressionTreeMaterializer.materialize(ne.getExpr(), incoming, collector, context.getFunctionRegistry());
+      NamedExpression ne = getValueExpressions().get(i);
+      LogicalExpression expr = ExpressionTreeMaterializer.materialize(ne.getExpr(), incoming, collector, context.getFunctionRegistry(), true, false);
       if (expr instanceof IfExpression) {
         throw UserException.unsupportedError(new UnsupportedOperationException("Union type not supported in aggregate functions")).build(logger);
       }
@@ -484,7 +468,7 @@ public class StreamingAggBatch extends AbstractRecordBatch<StreamingAggregate> {
         continue;
       }
 
-      /* Populate the complex writers for complex exprs */
+      // Populate the complex writers for complex exprs
       if (expr instanceof DrillFuncHolderExpr &&
           ((DrillFuncHolderExpr) expr).getHolder().isComplexWriterFuncHolder()) {
         // Need to process ComplexWriter function evaluation.
@@ -495,24 +479,20 @@ public class StreamingAggBatch extends AbstractRecordBatch<StreamingAggregate> {
           complexWriters.clear();
         }
         // The reference name will be passed to ComplexWriter, used as the name of the output vector from the writer.
-        ((DrillFuncHolderExpr) expr).getFieldReference(ne.getRef());
+        ((DrillFuncHolderExpr) expr).setFieldReference(ne.getRef());
         MaterializedField field = MaterializedField.create(ne.getRef().getAsNamePart().getName(), UntypedNullHolder.TYPE);
         container.add(new UntypedNullVector(field, container.getAllocator()));
         valueExprs[i] = expr;
       } else {
-        final MaterializedField outputField = MaterializedField.create(ne.getRef().getLastSegment().getNameSegment().getPath(),
+        MaterializedField outputField = MaterializedField.create(ne.getRef().getLastSegment().getNameSegment().getPath(),
             expr.getMajorType());
-        @SuppressWarnings("resource")
-        ValueVector vector = TypeHelper.getNewVector(outputField, oContext.getAllocator());
-        TypedFieldId id = container.add(vector);
+        container.addOrGet(outputField);
+        TypedFieldId id = container.getValueVectorId(ne.getRef());
         valueExprs[i] = new ValueVectorWriteExpression(id, expr, true);
       }
     }
 
-    if (collector.hasErrors()) {
-      throw new SchemaChangeException("Failure while materializing expression. " + collector.toErrorString());
-    }
-
+    collector.reportErrors(logger);
     setupIsSame(cg, keyExprs);
     setupIsSameApart(cg, keyExprs);
     addRecordValues(cg, valueExprs);
@@ -524,9 +504,21 @@ public class StreamingAggBatch extends AbstractRecordBatch<StreamingAggregate> {
 
     container.buildSchema(SelectionVectorMode.NONE);
     StreamingAggregator agg = context.getImplementationClass(cg);
-    agg.setup(oContext, incoming, this, maxOutputRowCount);
+    try {
+      agg.setup(oContext, incoming, this, maxOutputRowCount);
+    } catch (SchemaChangeException e) {
+      throw schemaChangeException(e, logger);
+    }
     allocateComplexWriters();
     return agg;
+  }
+
+  protected List<NamedExpression> getValueExpressions() {
+    return popConfig.getExprs();
+  }
+
+  protected List<NamedExpression> getKeyExpressions() {
+    return popConfig.getKeys();
   }
 
   private final GeneratorMapping IS_SAME = GeneratorMapping.create("setupInterior", "isSame", null, null);
@@ -535,40 +527,41 @@ public class StreamingAggBatch extends AbstractRecordBatch<StreamingAggregate> {
 
   protected void setupIsSame(ClassGenerator<StreamingAggregator> cg, LogicalExpression[] keyExprs) {
     cg.setMappingSet(IS_SAME_I1);
-    for (final LogicalExpression expr : keyExprs) {
+    for (LogicalExpression expr : keyExprs) {
       // first, we rewrite the evaluation stack for each side of the comparison.
       cg.setMappingSet(IS_SAME_I1);
-      final HoldingContainer first = cg.addExpr(expr, ClassGenerator.BlkCreateMode.FALSE);
+      HoldingContainer first = cg.addExpr(expr, ClassGenerator.BlkCreateMode.FALSE);
       cg.setMappingSet(IS_SAME_I2);
-      final HoldingContainer second = cg.addExpr(expr, ClassGenerator.BlkCreateMode.FALSE);
+      HoldingContainer second = cg.addExpr(expr, ClassGenerator.BlkCreateMode.FALSE);
 
-      final LogicalExpression fh =
+      LogicalExpression fh =
           FunctionGenerationHelper
           .getOrderingComparatorNullsHigh(first, second, context.getFunctionRegistry());
-      final HoldingContainer out = cg.addExpr(fh, ClassGenerator.BlkCreateMode.FALSE);
+      HoldingContainer out = cg.addExpr(fh, ClassGenerator.BlkCreateMode.FALSE);
       cg.getEvalBlock()._if(out.getValue().ne(JExpr.lit(0)))._then()._return(JExpr.FALSE);
     }
     cg.getEvalBlock()._return(JExpr.TRUE);
   }
 
-  private final GeneratorMapping IS_SAME_PREV_INTERNAL_BATCH_READ = GeneratorMapping.create("isSamePrev", "isSamePrev", null, null); // the internal batch changes each time so we need to redo setup.
+  // the internal batch changes each time so we need to redo setup.
+  private final GeneratorMapping IS_SAME_PREV_INTERNAL_BATCH_READ = GeneratorMapping.create("isSamePrev", "isSamePrev", null, null);
   private final GeneratorMapping IS_SAME_PREV = GeneratorMapping.create("setupInterior", "isSamePrev", null, null);
   private final MappingSet ISA_B1 = new MappingSet("b1Index", null, "b1", null, IS_SAME_PREV_INTERNAL_BATCH_READ, IS_SAME_PREV_INTERNAL_BATCH_READ);
   private final MappingSet ISA_B2 = new MappingSet("b2Index", null, "incoming", null, IS_SAME_PREV, IS_SAME_PREV);
 
   protected void setupIsSameApart(ClassGenerator<StreamingAggregator> cg, LogicalExpression[] keyExprs) {
     cg.setMappingSet(ISA_B1);
-    for (final LogicalExpression expr : keyExprs) {
+    for (LogicalExpression expr : keyExprs) {
       // first, we rewrite the evaluation stack for each side of the comparison.
       cg.setMappingSet(ISA_B1);
-      final HoldingContainer first = cg.addExpr(expr, ClassGenerator.BlkCreateMode.FALSE);
+      HoldingContainer first = cg.addExpr(expr, ClassGenerator.BlkCreateMode.FALSE);
       cg.setMappingSet(ISA_B2);
-      final HoldingContainer second = cg.addExpr(expr, ClassGenerator.BlkCreateMode.FALSE);
+      HoldingContainer second = cg.addExpr(expr, ClassGenerator.BlkCreateMode.FALSE);
 
-      final LogicalExpression fh =
+      LogicalExpression fh =
           FunctionGenerationHelper
           .getOrderingComparatorNullsHigh(first, second, context.getFunctionRegistry());
-      final HoldingContainer out = cg.addExpr(fh, ClassGenerator.BlkCreateMode.FALSE);
+      HoldingContainer out = cg.addExpr(fh, ClassGenerator.BlkCreateMode.FALSE);
       cg.getEvalBlock()._if(out.getValue().ne(JExpr.lit(0)))._then()._return(JExpr.FALSE);
     }
     cg.getEvalBlock()._return(JExpr.TRUE);
@@ -580,7 +573,7 @@ public class StreamingAggBatch extends AbstractRecordBatch<StreamingAggregate> {
 
   protected void addRecordValues(ClassGenerator<StreamingAggregator> cg, LogicalExpression[] valueExprs) {
     cg.setMappingSet(EVAL);
-    for (final LogicalExpression ex : valueExprs) {
+    for (LogicalExpression ex : valueExprs) {
       cg.addExpr(ex);
     }
   }
@@ -604,11 +597,13 @@ public class StreamingAggBatch extends AbstractRecordBatch<StreamingAggregate> {
     cg.setMappingSet(RECORD_KEYS_PREV);
 
     for (int i = 0; i < keyExprs.length; i++) {
-      // IMPORTANT: there is an implicit assertion here that the TypedFieldIds for the previous batch and the current batch are the same.  This is possible because InternalBatch guarantees this.
+      // IMPORTANT: there is an implicit assertion here that the TypedFieldIds
+      // for the previous batch and the current batch are the same. This is
+      // possible because InternalBatch guarantees this.
       logger.debug("Writing out expr {}", keyExprs[i]);
       cg.rotateBlock();
       cg.setMappingSet(RECORD_KEYS_PREV);
-      final HoldingContainer innerExpression = cg.addExpr(keyExprs[i], ClassGenerator.BlkCreateMode.FALSE);
+      HoldingContainer innerExpression = cg.addExpr(keyExprs[i], ClassGenerator.BlkCreateMode.FALSE);
       cg.setMappingSet(RECORD_KEYS_PREV_OUT);
       cg.addExpr(new ValueVectorWriteExpression(keyOutputIds[i], new HoldingContainerExpression(innerExpression), true), ClassGenerator.BlkCreateMode.FALSE);
     }
@@ -658,18 +653,14 @@ public class StreamingAggBatch extends AbstractRecordBatch<StreamingAggregate> {
   }
 
   @Override
-  public void close() {
-    super.close();
-  }
-
-  @Override
-  protected void killIncoming(boolean sendUpstream) {
-    incoming.kill(sendUpstream);
+  protected void cancelIncoming() {
+    incoming.cancel();
   }
 
   @Override
   public void dump() {
-    logger.error("StreamingAggBatch[container={}, popConfig={}, aggregator={}, incomingSchema={}]", container, popConfig, aggregator, incomingSchema);
+    logger.error("StreamingAggBatch[container={}, popConfig={}, aggregator={}, incomingSchema={}]",
+        container, popConfig, aggregator, incomingSchema);
   }
 
   @VisibleForTesting

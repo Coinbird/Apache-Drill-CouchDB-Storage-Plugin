@@ -36,15 +36,17 @@ import org.apache.drill.exec.store.easy.json.reader.CountingJsonReader;
 import org.apache.drill.exec.vector.BaseValueVector;
 import org.apache.drill.exec.vector.complex.fn.JsonReader;
 import org.apache.drill.exec.vector.complex.impl.VectorContainerWriter;
+import org.apache.drill.shaded.guava.com.google.common.base.Preconditions;
+import org.apache.drill.shaded.guava.com.google.common.collect.ImmutableList;
 import org.apache.hadoop.fs.Path;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import com.fasterxml.jackson.core.JsonParseException;
 import com.fasterxml.jackson.databind.JsonNode;
-import org.apache.drill.shaded.guava.com.google.common.base.Preconditions;
-import org.apache.drill.shaded.guava.com.google.common.collect.ImmutableList;
 
 public class JSONRecordReader extends AbstractRecordReader {
-  private static final org.slf4j.Logger logger = org.slf4j.LoggerFactory.getLogger(JSONRecordReader.class);
+  private static final Logger logger = LoggerFactory.getLogger(JSONRecordReader.class);
 
   public static final long DEFAULT_ROWS_PER_BATCH = BaseValueVector.INITIAL_VALUE_ALLOCATION;
 
@@ -57,7 +59,7 @@ public class JSONRecordReader extends AbstractRecordReader {
   private final DrillFileSystem fileSystem;
   private JsonProcessor jsonReader;
   private int recordCount;
-  private long runningRecordCount = 0;
+  private long runningRecordCount;
   private final FragmentContext fragmentContext;
   private final boolean enableAllTextMode;
   private final boolean enableNanInf;
@@ -67,7 +69,8 @@ public class JSONRecordReader extends AbstractRecordReader {
   private long parseErrorCount;
   private final boolean skipMalformedJSONRecords;
   private final boolean printSkippedMalformedJSONRecordLineNumber;
-  ReadState write = null;
+  private ReadState write;
+  private InputStream inputStream;
 
   /**
    * Create a JSON Record Reader that uses a file based input stream.
@@ -77,9 +80,9 @@ public class JSONRecordReader extends AbstractRecordReader {
    * @param columns  pathnames of columns/subfields to read
    * @throws OutOfMemoryException
    */
-  public JSONRecordReader(final FragmentContext fragmentContext, final String inputPath, final DrillFileSystem fileSystem,
-      final List<SchemaPath> columns) throws OutOfMemoryException {
-    this(fragmentContext, inputPath, null, fileSystem, columns);
+  public JSONRecordReader(FragmentContext fragmentContext, Path inputPath, DrillFileSystem fileSystem,
+      List<SchemaPath> columns) throws OutOfMemoryException {
+    this(fragmentContext, inputPath, null, fileSystem, columns, false);
   }
 
   /**
@@ -90,23 +93,34 @@ public class JSONRecordReader extends AbstractRecordReader {
    * @param columns  pathnames of columns/subfields to read
    * @throws OutOfMemoryException
    */
-  public JSONRecordReader(final FragmentContext fragmentContext, final JsonNode embeddedContent,
-      final DrillFileSystem fileSystem, final List<SchemaPath> columns) throws OutOfMemoryException {
-    this(fragmentContext, null, embeddedContent, fileSystem, columns);
+  public JSONRecordReader(FragmentContext fragmentContext, JsonNode embeddedContent, DrillFileSystem fileSystem,
+      List<SchemaPath> columns) throws OutOfMemoryException {
+    this(fragmentContext, null, embeddedContent, fileSystem, columns, false);
   }
 
-  private JSONRecordReader(final FragmentContext fragmentContext, final String inputPath,
-      final JsonNode embeddedContent, final DrillFileSystem fileSystem,
-      final List<SchemaPath> columns) {
+  /**
+   * Create a JSON Record Reader that uses an InputStream directly
+   * @param fragmentContext The Drill Fragmement
+   * @param inputStream The inputStream from which data will be received
+   * @param columns  pathnames of columns/subfields to read
+   * @throws OutOfMemoryException
+   */
+  public JSONRecordReader(FragmentContext fragmentContext, List<SchemaPath> columns) throws OutOfMemoryException {
+    this(fragmentContext, null, null, null, columns, true);
+  }
+
+  private JSONRecordReader(FragmentContext fragmentContext, Path inputPath, JsonNode embeddedContent,
+      DrillFileSystem fileSystem, List<SchemaPath> columns, boolean hasInputStream) {
 
     Preconditions.checkArgument(
-        (inputPath == null && embeddedContent != null) ||
-        (inputPath != null && embeddedContent == null),
-        "One of inputPath or embeddedContent must be set but not both."
+        (inputPath == null && embeddedContent != null && !hasInputStream) ||
+        (inputPath != null && embeddedContent == null && !hasInputStream) ||
+          (inputPath == null && embeddedContent == null && hasInputStream),
+      "One of inputPath, inputStream or embeddedContent must be set but not all."
         );
 
     if (inputPath != null) {
-      this.hadoopPath = new Path(inputPath);
+      this.hadoopPath = inputPath;
     } else {
       this.embeddedContent = embeddedContent;
     }
@@ -136,15 +150,15 @@ public class JSONRecordReader extends AbstractRecordReader {
   }
 
   @Override
-  public void setup(final OperatorContext context, final OutputMutator output) throws ExecutionSetupException {
+  public void setup(OperatorContext context, OutputMutator output) throws ExecutionSetupException {
     try{
       if (hadoopPath != null) {
-        this.stream = fileSystem.openPossiblyCompressedStream(hadoopPath);
+        stream = fileSystem.openPossiblyCompressedStream(hadoopPath);
       }
 
-      this.writer = new VectorContainerWriter(output, unionEnabled);
+      writer = new VectorContainerWriter(output, unionEnabled);
       if (isSkipQuery()) {
-        this.jsonReader = new CountingJsonReader(fragmentContext.getManagedBuffer(), enableNanInf, enableEscapeAnyChar);
+        jsonReader = new CountingJsonReader(fragmentContext.getManagedBuffer(), enableNanInf, enableEscapeAnyChar);
       } else {
         this.jsonReader = new JsonReader.Builder(fragmentContext.getManagedBuffer())
             .schemaPathColumns(ImmutableList.copyOf(getColumns()))
@@ -156,7 +170,7 @@ public class JSONRecordReader extends AbstractRecordReader {
             .build();
       }
       setupParser();
-    } catch (final Exception e){
+    } catch (Exception e){
       handleAndRaise("Failure reading JSON file", e);
     }
   }
@@ -169,6 +183,8 @@ public class JSONRecordReader extends AbstractRecordReader {
   private void setupParser() throws IOException {
     if (hadoopPath != null) {
       jsonReader.setSource(stream);
+    } else if (inputStream!= null) {
+      jsonReader.setSource(inputStream);
     } else {
       jsonReader.setSource(embeddedContent);
     }
@@ -181,7 +197,7 @@ public class JSONRecordReader extends AbstractRecordReader {
     int columnNr = -1;
 
     if (e instanceof JsonParseException) {
-      final JsonParseException ex = (JsonParseException) e;
+      JsonParseException ex = (JsonParseException) e;
       message = ex.getOriginalMessage();
       columnNr = ex.getLocation().getColumnNr();
     }
@@ -225,7 +241,8 @@ public class JSONRecordReader extends AbstractRecordReader {
           }
           ++parseErrorCount;
           if (printSkippedMalformedJSONRecordLineNumber) {
-            logger.debug("Error parsing JSON in " + hadoopPath.getName() + " : line nos :" + (recordCount + parseErrorCount));
+            logger.debug("Error parsing JSON in {}: line: {}",
+                hadoopPath.getName(), recordCount + parseErrorCount);
           }
           if (write == ReadState.JSON_RECORD_PARSE_EOF_ERROR) {
             break;
@@ -251,10 +268,20 @@ public class JSONRecordReader extends AbstractRecordReader {
     runningRecordCount += recordCount;
   }
 
+  public void setInputStream(InputStream in) {
+    this.inputStream = in;
+  }
+
   @Override
   public void close() throws Exception {
-    if(stream != null) {
+    if (stream != null) {
       stream.close();
+      stream = null;
+    }
+
+    if (inputStream != null) {
+      inputStream.close();
+      inputStream = null;
     }
   }
 }

@@ -18,6 +18,8 @@
 package org.apache.drill.exec.store.parquet.columnreaders;
 
 import java.math.BigDecimal;
+
+import org.apache.drill.categories.UnlikelyTest;
 import org.apache.drill.common.types.TypeProtos;
 import org.apache.drill.exec.record.VectorContainer;
 import org.apache.drill.exec.record.metadata.SchemaBuilder;
@@ -26,14 +28,15 @@ import org.apache.drill.exec.store.parquet.columnreaders.batchsizing.BatchSizing
 import org.apache.drill.exec.store.parquet.columnreaders.batchsizing.BatchSizingMemoryUtil.ColumnMemoryUsageInfo;
 import org.apache.drill.exec.store.parquet.columnreaders.batchsizing.RecordBatchSizerManager.ColumnMemoryQuota;
 import org.apache.drill.test.PhysicalOpUnitTestBase;
-import org.apache.drill.test.rowSet.RowSet;
-import org.apache.drill.test.rowSet.RowSetBuilder;
+import org.apache.drill.exec.physical.rowSet.RowSet;
+import org.apache.drill.exec.physical.rowSet.RowSetBuilder;
 import org.junit.Assert;
 import org.junit.BeforeClass;
 import org.junit.Test;
+import org.junit.experimental.categories.Category;
 
+@Category(UnlikelyTest.class)
 public class TestBatchSizingMemoryUtil extends PhysicalOpUnitTestBase {
-//  private static final org.slf4j.Logger logger = org.slf4j.LoggerFactory.getLogger(TestBatchSizingMemoryUtil.class);
 
   // Batch schema
   private static TupleMetadata schema;
@@ -46,7 +49,7 @@ public class TestBatchSizingMemoryUtil extends PhysicalOpUnitTestBase {
   private final ColumnMemoryUsageInfo[] columnMemoryInfo = new ColumnMemoryUsageInfo[3];
 
   @BeforeClass
-  public static void setUpBeforeClass() throws Exception {
+  public static void setUpBeforeClass() {
     schema = new SchemaBuilder()
       .add("name_vchar", TypeProtos.MinorType.VARCHAR, TypeProtos.DataMode.REQUIRED)
       .add("name_vbinary", TypeProtos.MinorType.VARBINARY, TypeProtos.DataMode.REQUIRED)
@@ -93,9 +96,9 @@ public class TestBatchSizingMemoryUtil extends PhysicalOpUnitTestBase {
 
     for (int columnIdx = 0; columnIdx < 3; columnIdx++) {
       final ColumnMemoryUsageInfo columnInfo = columnMemoryInfo[columnIdx];
-      final int remainingBitsCapacity = getRemainingBitsCapacity(columnInfo);
-      final int remainingOffsetsCapacity = getRemainingOffsetsCapacity(columnInfo);
-      final int remainingDataCapacity = getRemainingDataCapacity(columnInfo);
+      final long remainingBitsCapacity = getRemainingBitsCapacity(columnInfo);
+      final long remainingOffsetsCapacity = getRemainingOffsetsCapacity(columnInfo);
+      final long remainingDataCapacity = getRemainingDataCapacity(columnInfo);
 
       // Test current VV is within quota (since we are not adding new entries)
       Assert.assertTrue(BatchSizingMemoryUtil.canAddNewData(columnInfo, 0, 0, 0));
@@ -152,15 +155,15 @@ public class TestBatchSizingMemoryUtil extends PhysicalOpUnitTestBase {
     return result;
   }
 
-  private static int getRemainingBitsCapacity(ColumnMemoryUsageInfo columnInfo) {
+  private static long getRemainingBitsCapacity(ColumnMemoryUsageInfo columnInfo) {
     return columnInfo.vectorMemoryUsage.bitsBytesCapacity - columnInfo.vectorMemoryUsage.bitsBytesUsed;
   }
 
-  private static int getRemainingOffsetsCapacity(ColumnMemoryUsageInfo columnInfo) {
+  private static long getRemainingOffsetsCapacity(ColumnMemoryUsageInfo columnInfo) {
     return columnInfo.vectorMemoryUsage.offsetsByteCapacity - columnInfo.vectorMemoryUsage.offsetsBytesUsed;
   }
 
-  private static int getRemainingDataCapacity(ColumnMemoryUsageInfo columnInfo) {
+  private static long getRemainingDataCapacity(ColumnMemoryUsageInfo columnInfo) {
     return columnInfo.vectorMemoryUsage.dataByteCapacity - columnInfo.vectorMemoryUsage.dataBytesUsed;
   }
 

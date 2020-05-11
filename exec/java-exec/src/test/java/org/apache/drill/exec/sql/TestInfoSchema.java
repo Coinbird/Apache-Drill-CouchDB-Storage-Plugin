@@ -18,6 +18,7 @@
 package org.apache.drill.exec.sql;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.apache.drill.PlanTestBase;
 import org.apache.drill.categories.SqlTest;
 import org.apache.drill.common.expression.SchemaPath;
 import org.apache.drill.exec.record.RecordBatchLoader;
@@ -52,7 +53,7 @@ import static org.junit.Assert.assertTrue;
  */
 @Category(SqlTest.class)
 public class TestInfoSchema extends BaseTestQuery {
-  public static final String TEST_SUB_DIR = "testSubDir";
+  private static final String TEST_SUB_DIR = "testSubDir";
   private static final ObjectMapper mapper = new ObjectMapper().enable(INDENT_OUTPUT);
 
   @BeforeClass
@@ -69,6 +70,7 @@ public class TestInfoSchema extends BaseTestQuery {
     test("select * from INFORMATION_SCHEMA.`TABLES`");
     test("select * from INFORMATION_SCHEMA.COLUMNS");
     test("select * from INFORMATION_SCHEMA.`FILES`");
+    test("select * from INFORMATION_SCHEMA.`PARTITIONS`");
   }
 
   @Test
@@ -83,28 +85,29 @@ public class TestInfoSchema extends BaseTestQuery {
 
   @Test
   public void showTablesFromDb() throws Exception{
-    final List<String[]> expected = Arrays.asList(
+    List<String[]> expected = Arrays.asList(
         new String[]{"information_schema", "VIEWS"},
         new String[]{"information_schema", "COLUMNS"},
         new String[]{"information_schema", "TABLES"},
         new String[]{"information_schema", "CATALOGS"},
         new String[]{"information_schema", "SCHEMATA"},
-        new String[]{"information_schema", "FILES"});
+        new String[]{"information_schema", "FILES"},
+        new String[]{"information_schema", "PARTITIONS"});
 
-    final TestBuilder t1 = testBuilder()
+    TestBuilder t1 = testBuilder()
         .sqlQuery("SHOW TABLES FROM INFORMATION_SCHEMA")
         .unOrdered()
         .baselineColumns("TABLE_SCHEMA", "TABLE_NAME");
-    for(String[] expectedRow : expected) {
+    for (String[] expectedRow : expected) {
       t1.baselineValues(expectedRow);
     }
     t1.go();
 
-    final TestBuilder t2 = testBuilder()
+    TestBuilder t2 = testBuilder()
         .sqlQuery("SHOW TABLES IN INFORMATION_SCHEMA")
         .unOrdered()
         .baselineColumns("TABLE_SCHEMA", "TABLE_NAME");
-    for(String[] expectedRow : expected) {
+    for (String[] expectedRow : expected) {
       t2.baselineValues(expectedRow);
     }
     t2.go();
@@ -184,6 +187,16 @@ public class TestInfoSchema extends BaseTestQuery {
   }
 
   @Test
+  public void describeTableWithTableKeyword() throws Exception {
+    test("USE INFORMATION_SCHEMA");
+    testBuilder()
+        .sqlQuery("DESCRIBE TABLE CATALOGS")
+        .unOrdered()
+        .sqlBaselineQuery("DESCRIBE CATALOGS")
+        .go();
+  }
+
+  @Test
   public void describeTableWithSchema() throws Exception{
     testBuilder()
         .sqlQuery("DESCRIBE INFORMATION_SCHEMA.`TABLES`")
@@ -193,6 +206,19 @@ public class TestInfoSchema extends BaseTestQuery {
         .baselineValues("TABLE_SCHEMA", "CHARACTER VARYING", "NO")
         .baselineValues("TABLE_NAME", "CHARACTER VARYING", "NO")
         .baselineValues("TABLE_TYPE", "CHARACTER VARYING", "NO")
+        .baselineValues("TABLE_SOURCE", "CHARACTER VARYING", "NO")
+        .baselineValues("LOCATION", "CHARACTER VARYING", "NO")
+        .baselineValues("NUM_ROWS", "BIGINT", "NO")
+        .baselineValues("LAST_MODIFIED_TIME", "TIMESTAMP", "NO")
+        .go();
+  }
+
+  @Test
+  public void describeTableWithSchemaAndTableKeyword() throws Exception {
+    testBuilder()
+        .sqlQuery("DESCRIBE TABLE INFORMATION_SCHEMA.`TABLES`")
+        .unOrdered()
+        .sqlBaselineQuery("DESCRIBE INFORMATION_SCHEMA.`TABLES`")
         .go();
   }
 
@@ -218,9 +244,35 @@ public class TestInfoSchema extends BaseTestQuery {
           .baselineValues("TABLE_SCHEMA", "CHARACTER VARYING", "NO")
           .baselineValues("TABLE_NAME", "CHARACTER VARYING", "NO")
           .baselineValues("TABLE_TYPE", "CHARACTER VARYING", "NO")
+          .baselineValues("TABLE_SOURCE", "CHARACTER VARYING", "NO")
+          .baselineValues("LOCATION", "CHARACTER VARYING", "NO")
+          .baselineValues("NUM_ROWS", "BIGINT", "NO")
+          .baselineValues("LAST_MODIFIED_TIME", "TIMESTAMP", "NO")
           .go();
     } finally {
-      test("DROP VIEW dfs.tmp.`TABLES`");
+      test("DROP VIEW IF EXISTS dfs.tmp.`TABLES`");
+    }
+  }
+
+  @Test
+  public void describeWhenSameTableNameExistsInMultipleSchemasWithTableKeyword() throws Exception {
+    try {
+      test("USE dfs.tmp");
+      test("CREATE OR REPLACE VIEW `TABLES` AS SELECT full_name FROM cp.`employee.json`");
+
+      testBuilder()
+          .sqlQuery("DESCRIBE TABLE `TABLES`")
+          .unOrdered()
+          .sqlBaselineQuery("DESCRIBE `TABLES`")
+          .go();
+
+      testBuilder()
+          .sqlQuery("DESCRIBE TABLE INFORMATION_SCHEMA.`TABLES`")
+          .unOrdered()
+          .sqlBaselineQuery("DESCRIBE INFORMATION_SCHEMA.`TABLES`")
+          .go();
+    } finally {
+      test("DROP VIEW IF EXISTS dfs.tmp.`TABLES`");
     }
   }
 
@@ -236,12 +288,31 @@ public class TestInfoSchema extends BaseTestQuery {
   }
 
   @Test
+  public void describeTableWithColumnNameAndTableKeyword() throws Exception {
+    test("USE INFORMATION_SCHEMA");
+    testBuilder()
+        .sqlQuery("DESCRIBE TABLE `TABLES` TABLE_CATALOG")
+        .unOrdered()
+        .sqlBaselineQuery("DESCRIBE `TABLES` TABLE_CATALOG")
+        .go();
+  }
+
+  @Test
   public void describeTableWithSchemaAndColumnName() throws Exception{
     testBuilder()
         .sqlQuery("DESCRIBE INFORMATION_SCHEMA.`TABLES` TABLE_CATALOG")
         .unOrdered()
         .baselineColumns("COLUMN_NAME", "DATA_TYPE", "IS_NULLABLE")
         .baselineValues("TABLE_CATALOG", "CHARACTER VARYING", "NO")
+        .go();
+  }
+
+  @Test
+  public void describeTableWithSchemaAndColumnNameAndTableKeyword() throws Exception {
+    testBuilder()
+        .sqlQuery("DESCRIBE TABLE INFORMATION_SCHEMA.`TABLES` TABLE_CATALOG")
+        .unOrdered()
+        .sqlBaselineQuery("DESCRIBE INFORMATION_SCHEMA.`TABLES` TABLE_CATALOG")
         .go();
   }
 
@@ -365,25 +436,25 @@ public class TestInfoSchema extends BaseTestQuery {
 
   @Test
   public void describeSchemaOutput() throws Exception {
-    final List<QueryDataBatch> result = testSqlWithResults("describe schema dfs.tmp");
+    List<QueryDataBatch> result = testSqlWithResults("describe schema dfs.tmp");
     assertEquals(1, result.size());
-    final QueryDataBatch batch = result.get(0);
-    final RecordBatchLoader loader = new RecordBatchLoader(getDrillbitContext().getAllocator());
+    QueryDataBatch batch = result.get(0);
+    RecordBatchLoader loader = new RecordBatchLoader(getDrillbitContext().getAllocator());
     loader.load(batch.getHeader().getDef(), batch.getData());
 
     // check schema column value
-    final VectorWrapper schemaValueVector = loader.getValueAccessorById(
+    VectorWrapper<?> schemaValueVector = loader.getValueAccessorById(
         NullableVarCharVector.class,
         loader.getValueVectorId(SchemaPath.getCompoundPath("schema")).getFieldIds());
     String schema = schemaValueVector.getValueVector().getAccessor().getObject(0).toString();
     assertEquals("dfs.tmp", schema);
 
     // check properties column value
-    final VectorWrapper propertiesValueVector = loader.getValueAccessorById(
+    VectorWrapper<?> propertiesValueVector = loader.getValueAccessorById(
         NullableVarCharVector.class,
         loader.getValueVectorId(SchemaPath.getCompoundPath("properties")).getFieldIds());
     String properties = propertiesValueVector.getValueVector().getAccessor().getObject(0).toString();
-    final Map configMap = mapper.readValue(properties, Map.class);
+    Map<?, ?> configMap = mapper.readValue(properties, Map.class);
 
     // check some stable properties existence
     assertTrue(configMap.containsKey("connection"));
@@ -394,8 +465,8 @@ public class TestInfoSchema extends BaseTestQuery {
     // check some stable properties values
     assertEquals("file", configMap.get("type"));
 
-    final FileSystemConfig testConfig = (FileSystemConfig) bits[0].getContext().getStorage().getPlugin("dfs").getConfig();
-    final String tmpSchemaLocation = testConfig.getWorkspaces().get("tmp").getLocation();
+    FileSystemConfig testConfig = (FileSystemConfig) bits[0].getContext().getStorage().getPlugin("dfs").getConfig();
+    String tmpSchemaLocation = testConfig.getWorkspaces().get("tmp").getLocation();
     assertEquals(tmpSchemaLocation, configMap.get("location"));
 
     batch.release();
@@ -405,5 +476,23 @@ public class TestInfoSchema extends BaseTestQuery {
   @Test
   public void describeSchemaInvalid() throws Exception {
     errorMsgTestHelper("describe schema invalid.schema", "Invalid schema name [invalid.schema]");
+  }
+
+  @Test
+  public void testDescribeAlias() throws Exception {
+    test("desc schema dfs.tmp");
+    test("desc information_schema.`catalogs`");
+    test("desc table information_schema.`catalogs`");
+  }
+
+  @Test
+  public void testSerDe() throws Exception {
+    String sql = "select * from information_schema.`tables` where table_name = 'schemata' order by 1";
+
+    testBuilder()
+      .sqlQuery(sql)
+      .unOrdered()
+      .physicalPlanBaseline(PlanTestBase.getPhysicalJsonPlan(sql))
+      .go();
   }
 }

@@ -25,7 +25,6 @@ import java.io.InputStream;
 
 import org.apache.drill.PlanTestBase;
 import org.apache.drill.SingleRowListener;
-import org.apache.drill.exec.exception.SchemaChangeException;
 import org.apache.drill.exec.proto.UserBitShared.QueryType;
 import org.apache.drill.exec.record.RecordBatchLoader;
 import org.apache.drill.exec.rpc.user.QueryDataBatch;
@@ -53,6 +52,7 @@ public class TestSimpleJson extends BaseJsonTest {
 
   private static boolean tableCreated = false;
   private static String tablePath;
+  @Override
   protected String getTablePath() {
     return tablePath;
   }
@@ -148,16 +148,12 @@ public class TestSimpleJson extends BaseJsonTest {
     SingleRowListener listener = new SingleRowListener() {
       @Override
       protected void rowArrived(QueryDataBatch result) {
-        try {
-          final RecordBatchLoader loader = new RecordBatchLoader(getAllocator());
-          loader.load(result.getHeader().getDef(), result.getData());
-          StringBuilder sb = new StringBuilder();
-          VectorUtil.appendVectorAccessibleContent(loader, sb, "|", false);
-          loader.clear();
-          queryResult.set("result", sb.toString());
-        } catch (SchemaChangeException e) {
-          queryResult.set("error", "true");
-        }
+        final RecordBatchLoader loader = new RecordBatchLoader(getAllocator());
+        loader.load(result.getHeader().getDef(), result.getData());
+        StringBuilder sb = new StringBuilder();
+        VectorUtil.appendVectorAccessibleContent(loader, sb, "|", false);
+        loader.clear();
+        queryResult.set("result", sb.toString());
       }
     };
     testWithListener(QueryType.SQL, sql, listener);
@@ -329,7 +325,7 @@ public class TestSimpleJson extends BaseJsonTest {
         + " business.attributes.Ambience.casual IS NULL");
     runSQLAndVerifyCount(sql, 7);
 
-    final String[] expectedPlan = {"condition=\\(attributes.Ambience.casual = null\\)"};
+    final String[] expectedPlan = {"condition=\\(\\(attributes.Ambience.casual = null\\) or \\(TYPE_OF\\(attributes.Ambience.casual\\) = NULL\\)\\)"};
     final String[] excludedPlan ={};
 
     PlanTestBase.testPlanMatchingPatterns(sql, expectedPlan, excludedPlan);
@@ -347,7 +343,7 @@ public class TestSimpleJson extends BaseJsonTest {
         + " b.attributes.Ambience.casual IS NOT NULL");
     runSQLAndVerifyCount(sql, 3);
 
-    final String[] expectedPlan = {"condition=\\(attributes.Ambience.casual != null\\)"};
+    final String[] expectedPlan = {"condition=\\(\\(attributes.Ambience.casual != null\\) and \\(TYPE_OF\\(attributes.Ambience.casual\\) != NULL\\)\\)"};
     final String[] excludedPlan ={};
 
     PlanTestBase.testPlanMatchingPatterns(sql, expectedPlan, excludedPlan);
@@ -364,7 +360,7 @@ public class TestSimpleJson extends BaseJsonTest {
         + " b.attributes.`Accepts Credit Cards` IS NULL");
     runSQLAndVerifyCount(sql, 3);
 
-    final String[] expectedPlan = {"condition=\\(attributes.Accepts Credit Cards = null\\)"};
+    final String[] expectedPlan = {"condition=\\(\\(attributes.Accepts Credit Cards = null\\) or \\(TYPE_OF\\(attributes.Accepts Credit Cards\\) = NULL\\)\\)"};
     final String[] excludedPlan ={};
 
     PlanTestBase.testPlanMatchingPatterns(sql, expectedPlan, excludedPlan);

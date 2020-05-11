@@ -22,34 +22,34 @@ import java.util.Collection;
 import java.util.List;
 import java.util.Set;
 
+import org.apache.drill.common.config.ConfigConstants;
 import org.apache.drill.shaded.guava.com.google.common.collect.Lists;
 import org.apache.drill.common.config.DrillConfig;
 import org.apache.drill.common.scanner.persistence.ScanResult;
 
 /**
  * Utility to scan classpath at runtime
- *
  */
 public class RunTimeScan {
 
-  /** result of prescan */
+  /** Result of prescan */
   private static final ScanResult PRESCANNED = BuildTimeScan.load();
 
-  /** urls of the locations (classes directory or jar) to scan that don't have a registry in them */
+  /** URLs of the locations (classes directory or jar) to scan that don't have a registry in them */
   private static final Collection<URL> NON_PRESCANNED_MARKED_PATHS = getNonPrescannedMarkedPaths();
 
   /**
    * @return getMarkedPaths() sans getPrescannedPaths()
    */
   static Collection<URL> getNonPrescannedMarkedPaths() {
-    Collection<URL> markedPaths = ClassPathScanner.getMarkedPaths();
+    Collection<URL> markedPaths = ClassPathScanner.getMarkedPaths(ConfigConstants.DRILL_JAR_MARKER_FILE_RESOURCE_PATHNAME);
     markedPaths.removeAll(BuildTimeScan.getPrescannedPaths());
     return markedPaths;
   }
 
   /**
-   * loads prescanned classpath info and scans for extra ones based on configuration.
-   * (unless prescan is disabled with {@see ClassPathScanner#IMPLEMENTATIONS_SCAN_CACHE}=falses)
+   * Loads prescanned classpath info and scans for extra ones based on configuration.
+   * (unless prescan is disabled with {@link ClassPathScanner#IMPLEMENTATIONS_SCAN_CACHE}{@code =false})
    * @param config to retrieve the packages to scan
    * @return the scan result
    */
@@ -69,7 +69,7 @@ public class RunTimeScan {
     } else {
       // scan everything
       return ClassPathScanner.scan(
-          ClassPathScanner.getMarkedPaths(),
+          ClassPathScanner.getMarkedPaths(ConfigConstants.DRILL_JAR_MARKER_FILE_RESOURCE_PATHNAME),
           packagePrefixes,
           scannedBaseClasses,
           scannedAnnotations,
@@ -95,5 +95,4 @@ public class RunTimeScan {
         PRESCANNED.getScannedAnnotations(),
         ClassPathScanner.emptyResult());
   }
-
 }

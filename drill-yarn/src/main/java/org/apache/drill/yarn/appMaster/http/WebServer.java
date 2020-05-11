@@ -28,8 +28,11 @@ import java.security.SecureRandom;
 import java.security.cert.X509Certificate;
 import java.util.Collections;
 import java.util.Date;
+import java.util.EnumSet;
 import java.util.Set;
 
+import javax.servlet.DispatcherType;
+import javax.servlet.ServletRequest;
 import javax.servlet.http.HttpSession;
 import javax.servlet.http.HttpSessionEvent;
 import javax.servlet.http.HttpSessionListener;
@@ -37,6 +40,8 @@ import javax.servlet.http.HttpSessionListener;
 import org.apache.commons.lang3.RandomStringUtils;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
+import org.apache.drill.exec.server.rest.CsrfTokenInjectFilter;
+import org.apache.drill.exec.server.rest.CsrfTokenValidateFilter;
 import org.apache.drill.yarn.appMaster.Dispatcher;
 import org.apache.drill.yarn.core.DrillOnYarnConfig;
 import org.bouncycastle.asn1.x500.X500NameBuilder;
@@ -47,7 +52,6 @@ import org.bouncycastle.cert.jcajce.JcaX509v3CertificateBuilder;
 import org.bouncycastle.operator.ContentSigner;
 import org.bouncycastle.operator.jcajce.JcaContentSignerBuilder;
 import org.eclipse.jetty.http.HttpVersion;
-import org.eclipse.jetty.security.ConstraintMapping;
 import org.eclipse.jetty.security.ConstraintSecurityHandler;
 import org.eclipse.jetty.security.DefaultIdentityService;
 import org.eclipse.jetty.security.DefaultUserIdentity;
@@ -108,7 +112,7 @@ public class WebServer implements AutoCloseable {
   /**
    * Start the web server including setup.
    *
-   * @throws Exception
+   * @throws Exception in case of error during start
    */
   public void start() throws Exception {
     if (jettyServer == null) {
@@ -167,6 +171,13 @@ public class WebServer implements AutoCloseable {
     restHolder.setInitOrder(2);
     servletContextHandler.addServlet(restHolder, "/rest/*");
 
+    // Applying filters for CSRF protection.
+
+    servletContextHandler.addFilter(CsrfTokenInjectFilter.class, "/*", EnumSet.of(DispatcherType.REQUEST));
+    for (String path : new String[]{"/resize", "/stop", "/cancel"}) {
+      servletContextHandler.addFilter(CsrfTokenValidateFilter.class, path, EnumSet.of(DispatcherType.REQUEST));
+    }
+
     // Static resources (CSS, images, etc.)
 
     setupStaticResources(servletContextHandler);
@@ -174,9 +185,8 @@ public class WebServer implements AutoCloseable {
     // Security, if requested.
 
     if (AMSecurityManagerImpl.isEnabled()) {
-      servletContextHandler.setSecurityHandler(createSecurityHandler(config));
-      servletContextHandler.setSessionHandler(createSessionHandler(config,
-          servletContextHandler.getSecurityHandler()));
+      servletContextHandler.setSecurityHandler(createSecurityHandler());
+      servletContextHandler.setSessionHandler(createSessionHandler(config, servletContextHandler.getSecurityHandler()));
     }
   }
 
@@ -223,7 +233,7 @@ public class WebServer implements AutoCloseable {
   }
 
   public static class AMUserPrincipal implements Principal {
-    public final String userName;
+    private final String userName;
 
     public AMUserPrincipal(String userName) {
       this.userName = userName;
@@ -236,7 +246,7 @@ public class WebServer implements AutoCloseable {
   }
 
   public static class AmLoginService implements LoginService {
-    private AMSecurityManager securityMgr;
+    private final AMSecurityManager securityMgr;
     protected IdentityService identityService = new DefaultIdentityService();
 
     public AmLoginService(AMSecurityManager securityMgr) {
@@ -249,12 +259,11 @@ public class WebServer implements AutoCloseable {
     }
 
     @Override
-    public UserIdentity login(String username, Object credentials) {
+    public UserIdentity login(String username, Object credentials, ServletRequest request) {
       if (!securityMgr.login(username, (String) credentials)) {
         return null;
       }
-      return new DefaultUserIdentity(null, new AMUserPrincipal(username),
-          new String[] { ADMIN_ROLE });
+      return new DefaultUserIdentity(null, new AMUserPrincipal(username), new String[] { ADMIN_ROLE });
     }
 
     @Override
@@ -275,32 +284,19 @@ public class WebServer implements AutoCloseable {
     @Override
     public void logout(UserIdentity user) {
     }
-
-    // @Override
-    // protected UserIdentity loadUser(String username) {
-    // // TODO Auto-generated method stub
-    // return null;
-    // }
-    //
-    // @Override
-    // protected void loadUsers() throws IOException {
-    // putUser( "fred", new Password( "wilma" ), new String[] { ADMIN_ROLE } );
-    // }
-
   }
 
   /**
-   * @return
-   * @return
-   * @see http://www.eclipse.org/jetty/documentation/current/embedded-examples.html
+   * It creates handler with security constraint combinations for runtime efficiency
+   * @see <a href="http://www.eclipse.org/jetty/documentation/current/embedded-examples.html">Eclipse Jetty Documentation</a>
+   *
+   * @return security handler with precomputed constraint combinations
    */
-
-  private ConstraintSecurityHandler createSecurityHandler(Config config) {
+  private ConstraintSecurityHandler createSecurityHandler() {
     ConstraintSecurityHandler security = new ConstraintSecurityHandler();
 
     Set<String> knownRoles = ImmutableSet.of(ADMIN_ROLE);
-    security.setConstraintMappings(Collections.<ConstraintMapping> emptyList(),
-        knownRoles);
+    security.setConstraintMappings(Collections.emptyList(), knownRoles);
 
     security.setAuthenticator(new FormAuthenticator("/login", "/login", true));
     security
@@ -310,8 +306,11 @@ public class WebServer implements AutoCloseable {
   }
 
   /**
-   * @return A {@link SessionHandler} which contains a
-   *         {@link HashSessionManager}
+   * It creates A {@link SessionHandler} which contains a {@link HashSessionManager}
+   *
+   * @param config Drill configs
+   * @param securityHandler Set of initparameters that are used by the Authentication
+   * @return session handler
    */
   private SessionHandler createSessionHandler(Config config,
       final SecurityHandler securityHandler) {
@@ -348,13 +347,11 @@ public class WebServer implements AutoCloseable {
    * Create HTTP connector.
    *
    * @return Initialized {@link ServerConnector} instance for HTTP connections.
-   * @throws Exception
    */
-  private ServerConnector createHttpConnector(Config config) throws Exception {
+  private ServerConnector createHttpConnector(Config config) {
     LOG.info("Setting up HTTP connector for web server");
-    final HttpConfiguration httpConfig = new HttpConfiguration();
     final ServerConnector httpConnector = new ServerConnector(jettyServer,
-        new HttpConnectionFactory(httpConfig));
+        new HttpConnectionFactory(baseHttpConfig()));
     httpConnector.setPort(config.getInt(DrillOnYarnConfig.HTTP_PORT));
 
     return httpConnector;
@@ -366,14 +363,13 @@ public class WebServer implements AutoCloseable {
    * certificate is generated and used.
    * <p>
    * This is a shameless copy of
-   * {@link org.apache.drill.exec.server.rest.Webserver#createHttpsConnector( )}.
+   * org.apache.drill.exec.server.rest.WebServer#createHttpsConnector(int, int, int).
    * The two should be merged at some point. The primary issue is that the Drill
    * version is tightly coupled to Drillbit configuration.
    *
    * @return Initialized {@link ServerConnector} for HTTPS connections.
-   * @throws Exception
+   * @throws Exception when unable to create HTTPS connector
    */
-
   private ServerConnector createHttpsConnector(Config config) throws Exception {
     LOG.info("Setting up HTTPS connector for web server");
 
@@ -445,7 +441,7 @@ public class WebServer implements AutoCloseable {
     sslContextFactory.setKeyStorePassword(keyStorePasswd);
     // }
 
-    final HttpConfiguration httpsConfig = new HttpConfiguration();
+    final HttpConfiguration httpsConfig = baseHttpConfig();
     httpsConfig.addCustomizer(new SecureRequestCustomizer());
 
     // SSL Connector
@@ -456,6 +452,12 @@ public class WebServer implements AutoCloseable {
     sslConnector.setPort(config.getInt(DrillOnYarnConfig.HTTP_PORT));
 
     return sslConnector;
+  }
+
+  private HttpConfiguration baseHttpConfig() {
+    HttpConfiguration httpConfig = new HttpConfiguration();
+    httpConfig.setSendServerVersion(false);
+    return httpConfig;
   }
 
   @Override

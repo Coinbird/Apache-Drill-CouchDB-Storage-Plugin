@@ -20,11 +20,13 @@ package org.apache.drill.common.expression;
 import java.io.IOException;
 import java.util.Collections;
 import java.util.Iterator;
+import java.util.Objects;
 
 import org.apache.drill.common.expression.PathSegment.ArraySegment;
 import org.apache.drill.common.expression.PathSegment.NameSegment;
 import org.apache.drill.common.expression.visitors.ExprVisitor;
 import org.apache.drill.common.parser.LogicalExpressionParser;
+import org.apache.drill.common.types.TypeProtos;
 import org.apache.drill.common.types.TypeProtos.MajorType;
 import org.apache.drill.common.types.Types;
 import org.apache.drill.exec.proto.UserBitShared.NamePart;
@@ -35,6 +37,9 @@ import com.fasterxml.jackson.databind.DeserializationContext;
 import com.fasterxml.jackson.databind.deser.std.StdDeserializer;
 import org.apache.drill.shaded.guava.com.google.common.base.Preconditions;
 
+/**
+ * This is the path for the column in the table
+ */
 public class SchemaPath extends LogicalExpressionBase {
 
   // AKA "Wildcard": expand all columns
@@ -44,13 +49,20 @@ public class SchemaPath extends LogicalExpressionBase {
   private final NameSegment rootSegment;
 
   public SchemaPath(SchemaPath path) {
-    super(path.getPosition());
-    this.rootSegment = path.rootSegment;
+    this(path.rootSegment, path.getPosition());
   }
 
   public SchemaPath(NameSegment rootSegment) {
-    super(ExpressionPosition.UNKNOWN);
-    this.rootSegment = rootSegment;
+    this(rootSegment, ExpressionPosition.UNKNOWN);
+  }
+
+  /**
+   * @deprecated Use {@link #SchemaPath(NameSegment)}
+   * or {@link #SchemaPath(NameSegment, ExpressionPosition)} instead
+   */
+  @Deprecated
+  public SchemaPath(String simpleName, ExpressionPosition pos) {
+    this(new NameSegment(simpleName), pos);
   }
 
   public SchemaPath(NameSegment rootSegment, ExpressionPosition pos) {
@@ -62,11 +74,26 @@ public class SchemaPath extends LogicalExpressionBase {
     return getCompoundPath(name);
   }
 
-  public static SchemaPath getCompoundPath(String... strings) {
+  public static SchemaPath getCompoundPath(String... path) {
+    return getCompoundPath(path.length, path);
+  }
+
+  /**
+   * Constructs {@code SchemaPath} based on given {@code path} array up to {@literal n}th element (inclusively).
+   *
+   * Example: for case when {@code n = 2} and {@code path = {"a", "b", "c", "d", "e", ...}}
+   * the method returns {@code a.b}
+   *
+   * @param n number of elements in {@literal path} array to take when constructing {@code SchemaPath}
+   * @param path column path used to construct schema path
+   * @return schema path containing {@literal n - 1} children
+   */
+  public static SchemaPath getCompoundPath(int n, String... path) {
+    Preconditions.checkArgument(n > 0);
     NameSegment s = null;
     // loop through strings in reverse order
-    for (int i = strings.length - 1; i >= 0; i--) {
-      s = new NameSegment(strings[i], s);
+    for (int i = n - 1; i >= 0; i--) {
+      s = new NameSegment(path[i], s);
     }
     return new SchemaPath(s);
   }
@@ -77,12 +104,6 @@ public class SchemaPath extends LogicalExpressionBase {
       s = s.getChild();
     }
     return s;
-  }
-
-  @Deprecated
-  public SchemaPath(String simpleName, ExpressionPosition pos) {
-    super(pos);
-    this.rootSegment = new NameSegment(simpleName);
   }
 
   public NamePart getAsNamePart() {
@@ -135,8 +156,7 @@ public class SchemaPath extends LogicalExpressionBase {
    * @return un-indexed schema path
    */
   public SchemaPath getUnIndexed() {
-    NameSegment nameSegment = getUnIndexedNameSegment(rootSegment, null);
-    return new SchemaPath(nameSegment);
+    return new SchemaPath(getUnIndexedNameSegment(rootSegment, null));
   }
 
   /**
@@ -283,13 +303,44 @@ public class SchemaPath extends LogicalExpressionBase {
     return new SchemaPath(newRoot);
   }
 
+  public SchemaPath getChild(String childPath, Object originalValue, TypeProtos.MajorType valueType) {
+    NameSegment newRoot = rootSegment.cloneWithNewChild(new NameSegment(childPath, originalValue, valueType));
+    return new SchemaPath(newRoot);
+  }
+
   public SchemaPath getChild(int index) {
     NameSegment newRoot = rootSegment.cloneWithNewChild(new ArraySegment(index));
     return new SchemaPath(newRoot);
   }
 
+  public SchemaPath getChild(int index, Object originalValue, TypeProtos.MajorType valueType) {
+    NameSegment newRoot = rootSegment.cloneWithNewChild(new ArraySegment(index, originalValue, valueType));
+    return new SchemaPath(newRoot);
+  }
+
   public NameSegment getRootSegment() {
     return rootSegment;
+  }
+
+  public String getAsUnescapedPath() {
+    StringBuilder sb = new StringBuilder();
+    PathSegment seg = getRootSegment();
+    if (seg.isArray()) {
+      throw new IllegalStateException("Drill doesn't currently support top level arrays");
+    }
+    sb.append(seg.getNameSegment().getPath());
+
+    while ( (seg = seg.getChild()) != null) {
+      if (seg.isNamed()) {
+        sb.append('.');
+        sb.append(seg.getNameSegment().getPath());
+      } else {
+        sb.append('[');
+        sb.append(seg.getArraySegment().getIndex());
+        sb.append(']');
+      }
+    }
+    return sb.toString();
   }
 
   @Override
@@ -304,36 +355,13 @@ public class SchemaPath extends LogicalExpressionBase {
 
   @Override
   public boolean equals(Object obj) {
-    if (this == obj) {
-      return true;
-    }
-    if (obj == null) {
-      return false;
-    }
-    if (!(obj instanceof SchemaPath)) {
-      return false;
-    }
-
-    SchemaPath other = (SchemaPath) obj;
-    if (rootSegment == null) {
-      return (other.rootSegment == null);
-    }
-    return rootSegment.equals(other.rootSegment);
+    return this == obj || obj instanceof SchemaPath
+        && Objects.equals(rootSegment, ((SchemaPath) obj).rootSegment);
   }
 
-  public boolean contains(Object obj) {
-    if (this == obj) {
-      return true;
-    }
-    if (obj == null) {
-      return false;
-    }
-    if (!(obj instanceof SchemaPath)) {
-      return false;
-    }
-
-    SchemaPath other = (SchemaPath) obj;
-    return rootSegment == null || rootSegment.contains(other.rootSegment);
+  public boolean contains(SchemaPath path) {
+    return this == path || path != null
+        && (rootSegment == null || rootSegment.contains(path.rootSegment));
   }
 
   @Override

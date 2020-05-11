@@ -64,7 +64,7 @@ public class TestBuilder {
   private Boolean ordered;
   private boolean approximateEquality;
   private double tolerance;
-  private TestServices services;
+  private final TestServices services;
   // Used to pass the type information associated with particular column names rather than relying on the
   // ordering of the columns in the CSV file, or the default type inferences when reading JSON, this is used for the
   // case where results of the test query are adding type casts to the baseline queries, this saves a little bit of
@@ -408,10 +408,6 @@ public class TestBuilder {
     return this;
   }
 
-  private boolean singleExplicitBaselineRecord() {
-    return baselineRecords != null;
-  }
-
   /**
    * Provide a SQL query to validate against.
    * @param baselineQuery
@@ -439,6 +435,11 @@ public class TestBuilder {
     String baselineQuery = BaseTestQuery.getFile(baselinePhysicalPlanPath);
     return new BaselineQueryTestBuilder(baselineQuery, UserBitShared.QueryType.PHYSICAL, services, query, queryType, ordered, approximateEquality,
         baselineTypeMap, baselineOptionSettingQueries, testOptionSettingQueries, highPerformanceComparison, expectedNumBatches);
+  }
+
+  public BaselineQueryTestBuilder physicalPlanBaseline(String physicalPlan) {
+    return new BaselineQueryTestBuilder(physicalPlan, UserBitShared.QueryType.PHYSICAL, services, query, queryType, ordered, approximateEquality,
+      baselineTypeMap, baselineOptionSettingQueries, testOptionSettingQueries, highPerformanceComparison, expectedNumBatches);
   }
 
   private String getDecimalPrecisionScaleInfo(TypeProtos.MajorType type) {
@@ -553,7 +554,7 @@ public class TestBuilder {
   }
 
   public class SchemaTestBuilder extends TestBuilder {
-    private List<Pair<SchemaPath, TypeProtos.MajorType>> expectedSchema;
+    private final List<Pair<SchemaPath, TypeProtos.MajorType>> expectedSchema;
     SchemaTestBuilder(TestServices services, Object query, UserBitShared.QueryType queryType,
         String baselineOptionSettingQueries, String testOptionSettingQueries, List<Pair<SchemaPath, TypeProtos.MajorType>> expectedSchema) {
       super(services, query, queryType, false, false, null, baselineOptionSettingQueries, testOptionSettingQueries, false, -1);
@@ -593,7 +594,7 @@ public class TestBuilder {
   public class JSONTestBuilder extends TestBuilder {
 
     // path to the baseline file that will be inserted into the validation query
-    private String baselineFilePath;
+    private final String baselineFilePath;
 
     JSONTestBuilder(String baselineFile, TestServices services, Object query, UserBitShared.QueryType queryType, Boolean ordered,
                     boolean approximateEquality, Map<SchemaPath, TypeProtos.MajorType> baselineTypeMap,
@@ -622,8 +623,8 @@ public class TestBuilder {
     /**
      * Baseline query. Type of object depends on {@link #baselineQueryType}
      */
-    private Object baselineQuery;
-    private UserBitShared.QueryType baselineQueryType;
+    private final Object baselineQuery;
+    private final UserBitShared.QueryType baselineQueryType;
 
     BaselineQueryTestBuilder(Object baselineQuery, UserBitShared.QueryType baselineQueryType, TestServices services,
                              Object query, UserBitShared.QueryType queryType, Boolean ordered,
@@ -687,6 +688,41 @@ public class TestBuilder {
         value = new Text(value.toString());
       }
       map.put(String.class.cast(keyValueSequence[i]), value);
+    }
+    return map;
+  }
+
+  /**
+   * Convenience method to create an instance of {@link JsonStringHashMap}{@code <Object, Object>} with the given key-value sequence.
+   *
+   * By default, any {@link String} instance will be wrapped by {@link Text} instance. To disable wrapping pass
+   * {@code false} as the first object to key-value sequence.
+   *
+   * @param keyValueSequence sequence of key-value pairs with optional boolean
+   *                         flag which disables wrapping String instances by {@link Text}.
+   * @return map consisting of entries given in the key-value sequence.
+   */
+  public static JsonStringHashMap<Object, Object> mapOfObject(Object... keyValueSequence) {
+    boolean convertStringToText = true;
+    final int startIndex;
+    if (keyValueSequence.length % 2 == 1) {
+      convertStringToText = (boolean) keyValueSequence[0];
+      startIndex = 1;
+    } else {
+      startIndex = 0;
+    }
+
+    final JsonStringHashMap<Object, Object> map = new JsonStringHashMap<>();
+    for (int i = startIndex; i < keyValueSequence.length; i += 2) {
+      Object key = keyValueSequence[i];
+      if (convertStringToText && key instanceof CharSequence) {
+        key = new Text(key.toString());
+      }
+      Object value = keyValueSequence[i + 1];
+      if (value instanceof CharSequence) {
+        value = new Text(value.toString());
+      }
+      map.put(key, value);
     }
     return map;
   }

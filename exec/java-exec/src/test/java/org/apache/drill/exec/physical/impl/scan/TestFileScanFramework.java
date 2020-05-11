@@ -21,58 +21,82 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
+import java.io.File;
+import java.io.IOException;
+import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
 
-import org.apache.drill.common.exceptions.ExecutionSetupException;
+import org.apache.drill.categories.RowSetTests;
 import org.apache.drill.common.types.TypeProtos.DataMode;
 import org.apache.drill.common.types.TypeProtos.MinorType;
-import org.apache.drill.exec.physical.impl.scan.TestScanOperatorExec.AbstractScanOpFixture;
-import org.apache.drill.exec.physical.impl.scan.file.BaseFileScanFramework;
-import org.apache.drill.exec.physical.impl.scan.file.BaseFileScanFramework.FileSchemaNegotiator;
-import org.apache.drill.exec.physical.impl.scan.file.FileScanFramework;
-import org.apache.drill.exec.physical.impl.scan.file.FileScanFramework.FileReaderCreator;
+import org.apache.drill.exec.physical.impl.scan.ScanTestUtils.ScanFixture;
+import org.apache.drill.exec.physical.impl.scan.ScanTestUtils.ScanFixtureBuilder;
+import org.apache.drill.exec.physical.impl.scan.file.FileScanFramework.FileReaderFactory;
+import org.apache.drill.exec.physical.impl.scan.file.FileScanFramework.FileScanBuilder;
+import org.apache.drill.exec.physical.impl.scan.file.FileScanFramework.FileSchemaNegotiator;
 import org.apache.drill.exec.physical.impl.scan.framework.ManagedReader;
-import org.apache.drill.exec.physical.rowSet.ResultSetLoader;
-import org.apache.drill.exec.physical.rowSet.RowSetLoader;
+import org.apache.drill.exec.physical.impl.scan.framework.ManagedScanFramework.ScanFrameworkBuilder;
+import org.apache.drill.exec.physical.resultSet.ResultSetLoader;
+import org.apache.drill.exec.physical.resultSet.RowSetLoader;
 import org.apache.drill.exec.record.BatchSchema;
 import org.apache.drill.exec.record.MaterializedField;
+import org.apache.drill.exec.record.BatchSchemaBuilder;
 import org.apache.drill.exec.record.metadata.ColumnBuilder;
 import org.apache.drill.exec.record.metadata.SchemaBuilder;
 import org.apache.drill.exec.record.metadata.TupleMetadata;
+import org.apache.drill.exec.store.ColumnExplorer;
+import org.apache.drill.exec.store.ColumnExplorer.ImplicitInternalFileColumns;
 import org.apache.drill.exec.store.dfs.DrillFileSystem;
 import org.apache.drill.exec.store.dfs.easy.FileWork;
 import org.apache.drill.test.SubOperatorTest;
-import org.apache.drill.test.rowSet.RowSet.SingleRowSet;
-import org.apache.drill.test.rowSet.RowSetComparison;
+import org.apache.drill.exec.physical.rowSet.RowSet.SingleRowSet;
+import org.apache.drill.test.rowSet.RowSetUtilities;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.Path;
-import org.apache.hadoop.mapred.FileSplit;
+import org.junit.BeforeClass;
 import org.junit.Test;
+import org.junit.experimental.categories.Category;
 
 /**
  * Tests the file metadata extensions to the file operator framework.
  * Focuses on the file metadata itself, assumes that other tests have
  * verified the underlying mechanisms.
  */
-
+@Category(RowSetTests.class)
 public class TestFileScanFramework extends SubOperatorTest {
 
   private static final String MOCK_FILE_NAME = "foo.csv";
-  private static final String MOCK_FILE_PATH = "/w/x/y";
-  private static final String MOCK_FILE_FQN = MOCK_FILE_PATH + "/" + MOCK_FILE_NAME;
-  private static final String MOCK_FILE_SYSTEM_NAME = "file:" + MOCK_FILE_FQN;
-  private static final Path MOCK_ROOT_PATH = new Path("file:/w");
   private static final String MOCK_SUFFIX = "csv";
   private static final String MOCK_DIR0 = "x";
   private static final String MOCK_DIR1 = "y";
 
-  /**
-   * For schema-based testing, we only need the file path
-   * from the file work
-   */
+  private static String pathToFile;
+  private static String fqn;
+  private static String filePath;
+  private static Path rootPath;
+  private static String lastModifiedTime;
 
+  @BeforeClass
+  public static void copyFile() throws IOException {
+    rootPath = new Path(dirTestWatcher.getRootDir().toURI().getPath());
+    File file = dirTestWatcher.copyResourceToRoot(
+        Paths.get("multilevel", "csv", "1994", "Q1", "orders_94_q1.csv"),
+        Paths.get("x/y", MOCK_FILE_NAME));
+    filePath = file.toURI().getPath();
+    Path filePath = new Path(file.toURI().getPath());
+    fqn = ColumnExplorer.ImplicitFileColumns.FQN.getValue(filePath);
+    pathToFile = ColumnExplorer.ImplicitFileColumns.FILEPATH.getValue(filePath);
+    lastModifiedTime = ColumnExplorer.getImplicitColumnValue(
+        ImplicitInternalFileColumns.LAST_MODIFIED_TIME,
+        filePath,
+        new DrillFileSystem(new Configuration()));
+  }
+
+  /**
+   * For schema-based testing, we only need the file path from the file work.
+   */
   public static class DummyFileWork implements FileWork {
 
     private final Path path;
@@ -82,7 +106,7 @@ public class TestFileScanFramework extends SubOperatorTest {
     }
 
     @Override
-    public String getPath() { return path.toString(); }
+    public Path getPath() { return path; }
 
     @Override
     public long getStart() { return 0; }
@@ -91,61 +115,69 @@ public class TestFileScanFramework extends SubOperatorTest {
     public long getLength() { return 0; }
   }
 
+  private interface MockFileReader extends ManagedReader<FileSchemaNegotiator> {
+    Path filePath();
+  }
+
   /**
-   * Fixture class to assemble all the knick-knacks that make up a
-   * file scan framework. The parts have a form unique to testing
-   * since we are not actually doing real scans.
+   * Mock file reader that returns readers already created for specific
+   * test cases. Verifies that the readers match the file splits
+   * (which were obtained from the readers.)
+   * <p>
+   * This is not a good example of a real file reader factory, it does,
+   * however, illustrate a design goal to allow a variety of implementations
+   * through composition.
    */
+  public static class MockFileReaderFactory extends FileReaderFactory {
+    public Iterator<MockFileReader> readerIter;
 
-  public abstract static class BaseFileScanOpFixture extends AbstractScanOpFixture {
-
-    protected Path selectionRoot = MOCK_ROOT_PATH;
-    protected List<FileWork> files = new ArrayList<>();
-    protected Configuration fsConfig = new Configuration();
-
-    public ScanOperatorExec build() {
-      BaseFileScanFramework<?> framework = buildFramework();
-      configure(framework);
-      configureFileScan(framework);
-      return buildScanOp(framework);
+    public MockFileReaderFactory(List<MockFileReader> readers) {
+      readerIter = readers.iterator();
     }
 
-    protected abstract BaseFileScanFramework<?> buildFramework();
-
-    private void configureFileScan(BaseFileScanFramework<?> framework) {
-      framework.setSelectionRoot(selectionRoot);
+    @Override
+    public ManagedReader<? extends FileSchemaNegotiator> newReader() {
+      MockFileReader reader = readerIter.next();
+      assert reader != null;
+      return reader;
     }
   }
 
-  public static class FileScanOpFixture extends BaseFileScanOpFixture implements FileReaderCreator {
+  public static class FileScanFixtureBuilder extends ScanFixtureBuilder {
 
-    protected final List<MockFileReader> readers = new ArrayList<>();
-    protected Iterator<MockFileReader> readerIter;
+    public FileScanBuilder builder = new FileScanBuilder();
+    public List<MockFileReader> readers = new ArrayList<>();
+
+    public FileScanFixtureBuilder() {
+      super(fixture);
+      builder.implicitColumnOptions().setSelectionRoot(rootPath);
+      builder.implicitColumnOptions().setPartitionDepth(3);
+    }
+
+    @Override
+    public ScanFrameworkBuilder builder() { return builder; }
 
     public void addReader(MockFileReader reader) {
       readers.add(reader);
-      files.add(new DummyFileWork(reader.filePath()));
     }
 
     @Override
-    protected BaseFileScanFramework<?> buildFramework() {
-      readerIter = readers.iterator();
-      return new FileScanFramework(projection, files, fsConfig, this);
-    }
+    public ScanFixture build() {
 
-    @Override
-    public ManagedReader<FileSchemaNegotiator> makeBatchReader(
-        DrillFileSystem dfs,
-        FileSplit split) throws ExecutionSetupException {
-      if (! readerIter.hasNext()) {
-        return null;
+      // Bass-ackward construction of the list of files from
+      // a set of text fixture readers. Normal implementations
+      // create readers from file splits, not the other way around
+      // as is done here.
+
+      List<FileWork> blocks = new ArrayList<>();
+      for (MockFileReader reader : readers) {
+        blocks.add(new DummyFileWork(reader.filePath()));
       }
-      return readerIter.next();
+      builder.setFileSystemConfig(new Configuration());
+      builder.setFiles(blocks);
+      builder.setReaderFactory(new MockFileReaderFactory(readers));
+      return super.build();
     }
-  }
-
-  private interface MockFileReader extends ManagedReader<FileSchemaNegotiator> {
-    Path filePath();
   }
 
   /**
@@ -155,7 +187,6 @@ public class TestFileScanFramework extends SubOperatorTest {
    * They also expose internal state such as identifying which methods
    * were actually called.
    */
-
   private static abstract class BaseMockBatchReader implements MockFileReader {
     public boolean openCalled;
     public boolean closeCalled;
@@ -163,7 +194,7 @@ public class TestFileScanFramework extends SubOperatorTest {
     public int batchCount;
     public int batchLimit;
     protected ResultSetLoader tableLoader;
-    protected Path filePath = new Path(MOCK_FILE_SYSTEM_NAME);
+    protected Path filePath = new Path(TestFileScanFramework.filePath);
 
     @Override
     public Path filePath() { return filePath; }
@@ -196,7 +227,6 @@ public class TestFileScanFramework extends SubOperatorTest {
    * "Late schema" reader, meaning that the reader does not know the schema on
    * open, but must "discover" it when reading data.
    */
-
   private static class MockLateSchemaReader extends BaseMockBatchReader {
 
     public boolean returnDataOnFirst;
@@ -242,7 +272,6 @@ public class TestFileScanFramework extends SubOperatorTest {
    * Mock reader with an early schema: the schema is known before the first
    * record. Think Parquet or JDBC.
    */
-
   private static class MockEarlySchemaReader extends BaseMockBatchReader {
 
     @Override
@@ -252,7 +281,7 @@ public class TestFileScanFramework extends SubOperatorTest {
           .add("a", MinorType.INT)
           .addNullable("b", MinorType.VARCHAR, 10)
           .buildSchema();
-      schemaNegotiator.setTableSchema(schema);
+      schemaNegotiator.tableSchema(schema, true);
       tableLoader = schemaNegotiator.build();
       return true;
     }
@@ -273,32 +302,28 @@ public class TestFileScanFramework extends SubOperatorTest {
   public void testLateSchemaFileWildcards() {
 
     // Create a mock reader, return two batches: one schema-only, another with data.
-
     MockLateSchemaReader reader = new MockLateSchemaReader();
     reader.batchLimit = 2;
     reader.returnDataOnFirst = false;
 
     // Create the scan operator
-
-    FileScanOpFixture scanFixture = new FileScanOpFixture();
-    scanFixture.projectAllWithMetadata(2);
-    scanFixture.addReader(reader);
-    ScanOperatorExec scan = scanFixture.build();
+    FileScanFixtureBuilder builder = new FileScanFixtureBuilder();
+    builder.projectAllWithMetadata(2);
+    builder.addReader(reader);
+    ScanFixture scanFixture = builder.build();
+    ScanOperatorExec scan = scanFixture.scanOp;
 
     // Standard startup
-
     assertFalse(reader.openCalled);
 
     // First batch: build schema. The reader helps: it returns an
     // empty first batch.
-
     assertTrue(scan.buildSchema());
     assertTrue(reader.openCalled);
     assertEquals(1, reader.batchCount);
-    assertEquals(0, scan.batchAccessor().getRowCount());
+    assertEquals(0, scan.batchAccessor().rowCount());
 
     // Create the expected result.
-
     TupleMetadata expectedSchema = new SchemaBuilder()
         .add("a", MinorType.INT)
         .addNullable("b", MinorType.VARCHAR, 10)
@@ -306,26 +331,27 @@ public class TestFileScanFramework extends SubOperatorTest {
         .add(ScanTestUtils.FILE_PATH_COL, MinorType.VARCHAR)
         .add(ScanTestUtils.FILE_NAME_COL, MinorType.VARCHAR)
         .add(ScanTestUtils.SUFFIX_COL, MinorType.VARCHAR)
+        .add(ScanTestUtils.LAST_MODIFIED_TIME_COL, MinorType.VARCHAR)
+        .addNullable(ScanTestUtils.PROJECT_METADATA_COL, MinorType.VARCHAR)
         .addNullable(ScanTestUtils.partitionColName(0), MinorType.VARCHAR)
         .addNullable(ScanTestUtils.partitionColName(1), MinorType.VARCHAR)
+        .addNullable(ScanTestUtils.partitionColName(2), MinorType.VARCHAR)
         .buildSchema();
     SingleRowSet expected = fixture.rowSetBuilder(expectedSchema)
-        .addRow(30, "fred", MOCK_FILE_FQN, MOCK_FILE_PATH, MOCK_FILE_NAME, MOCK_SUFFIX, MOCK_DIR0, MOCK_DIR1)
-        .addRow(40, "wilma", MOCK_FILE_FQN, MOCK_FILE_PATH, MOCK_FILE_NAME, MOCK_SUFFIX, MOCK_DIR0, MOCK_DIR1)
+        .addRow(30, "fred", fqn, pathToFile, MOCK_FILE_NAME, MOCK_SUFFIX, lastModifiedTime, null, MOCK_DIR0, MOCK_DIR1, null)
+        .addRow(40, "wilma", fqn, pathToFile, MOCK_FILE_NAME, MOCK_SUFFIX, lastModifiedTime, null, MOCK_DIR0, MOCK_DIR1, null)
         .build();
-    RowSetComparison verifier = new RowSetComparison(expected);
-    assertEquals(expected.batchSchema(), scan.batchAccessor().getSchema());
+    assertEquals(expected.batchSchema(), scan.batchAccessor().schema());
 
     // Next call, return with data.
-
     assertTrue(scan.next());
-    verifier.verifyAndClearAll(fixture.wrap(scan.batchAccessor().getOutgoingContainer()));
+    RowSetUtilities.verify(expected,
+        fixture.wrap(scan.batchAccessor().container()));
 
     // EOF
-
     assertFalse(scan.next());
     assertTrue(reader.closeCalled);
-    assertEquals(0, scan.batchAccessor().getRowCount());
+    assertEquals(0, scan.batchAccessor().rowCount());
 
     scanFixture.close();
   }
@@ -335,7 +361,6 @@ public class TestFileScanFramework extends SubOperatorTest {
    * with all table columns in table order. Full testing of implicit
    * columns is done on lower-level components.
    */
-
   @Test
   public void testMetadataColumns() {
 
@@ -343,41 +368,39 @@ public class TestFileScanFramework extends SubOperatorTest {
     reader.batchLimit = 1;
 
     // Select table and implicit columns.
-
-    FileScanOpFixture scanFixture = new FileScanOpFixture();
-    scanFixture.setProjection(new String[] {"a", "b", "filename", "suffix"});
-    scanFixture.addReader(reader);
-    ScanOperatorExec scan = scanFixture.build();
+    FileScanFixtureBuilder builder = new FileScanFixtureBuilder();
+    builder.setProjection("a", "b", "filename", "suffix");
+    builder.addReader(reader);
+    ScanFixture scanFixture = builder.build();
+    ScanOperatorExec scan = scanFixture.scanOp;
 
     // Expect data and implicit columns
-
-    BatchSchema expectedSchema = new SchemaBuilder()
+    SchemaBuilder schemaBuilder = new SchemaBuilder()
         .add("a", MinorType.INT)
         .addNullable("b", MinorType.VARCHAR, 10)
         .add("filename", MinorType.VARCHAR)
-        .add("suffix", MinorType.VARCHAR)
+        .add("suffix", MinorType.VARCHAR);
+    BatchSchema expectedSchema = new BatchSchemaBuilder()
+        .withSchemaBuilder(schemaBuilder)
         .build();
     SingleRowSet expected = fixture.rowSetBuilder(expectedSchema)
         .addRow(10, "fred", MOCK_FILE_NAME, MOCK_SUFFIX)
         .addRow(20, "wilma", MOCK_FILE_NAME, MOCK_SUFFIX)
         .build();
-    RowSetComparison verifier = new RowSetComparison(expected);
 
     // Schema should include implicit columns.
-
     assertTrue(scan.buildSchema());
-    assertEquals(expectedSchema, scan.batchAccessor().getSchema());
+    assertEquals(expectedSchema, scan.batchAccessor().schema());
     scan.batchAccessor().release();
 
     // Read one batch, should contain implicit columns
-
     assertTrue(scan.next());
-    verifier.verifyAndClearAll(fixture.wrap(scan.batchAccessor().getOutgoingContainer()));
+    RowSetUtilities.verify(expected,
+        fixture.wrap(scan.batchAccessor().container()));
 
     // EOF
-
     assertFalse(scan.next());
-    assertEquals(0, scan.batchAccessor().getRowCount());
+    assertEquals(0, scan.batchAccessor().rowCount());
     scanFixture.close();
   }
 
@@ -388,7 +411,6 @@ public class TestFileScanFramework extends SubOperatorTest {
    * are more fully test on lower level components; here we verify
    * that the components are wired up correctly.
    */
-
   @Test
   public void testFullProject() {
 
@@ -396,42 +418,40 @@ public class TestFileScanFramework extends SubOperatorTest {
     reader.batchLimit = 1;
 
     // Select table and implicit columns.
-
-    FileScanOpFixture scanFixture = new FileScanOpFixture();
-    scanFixture.setProjection(new String[] {"dir0", "b", "filename", "c", "suffix"});
-    scanFixture.addReader(reader);
-    ScanOperatorExec scan = scanFixture.build();
+    FileScanFixtureBuilder builder = new FileScanFixtureBuilder();
+    builder.setProjection("dir0", "b", "filename", "c", "suffix");
+    builder.addReader(reader);
+    ScanFixture scanFixture = builder.build();
+    ScanOperatorExec scan = scanFixture.scanOp;
 
     // Expect data and implicit columns
-
-    BatchSchema expectedSchema = new SchemaBuilder()
+    SchemaBuilder schemaBuilder = new SchemaBuilder()
         .addNullable("dir0", MinorType.VARCHAR)
         .addNullable("b", MinorType.VARCHAR, 10)
         .add("filename", MinorType.VARCHAR)
         .addNullable("c", MinorType.INT)
-        .add("suffix", MinorType.VARCHAR)
+        .add("suffix", MinorType.VARCHAR);
+    BatchSchema expectedSchema = new BatchSchemaBuilder()
+        .withSchemaBuilder(schemaBuilder)
         .build();
     SingleRowSet expected = fixture.rowSetBuilder(expectedSchema)
         .addRow(MOCK_DIR0, "fred", MOCK_FILE_NAME, null, MOCK_SUFFIX)
         .addRow(MOCK_DIR0, "wilma", MOCK_FILE_NAME, null, MOCK_SUFFIX)
         .build();
-    RowSetComparison verifier = new RowSetComparison(expected);
 
     // Schema should include implicit columns.
-
     assertTrue(scan.buildSchema());
-    assertEquals(expectedSchema, scan.batchAccessor().getSchema());
+    assertEquals(expectedSchema, scan.batchAccessor().schema());
     scan.batchAccessor().release();
 
     // Read one batch, should contain implicit columns
-
     assertTrue(scan.next());
-    verifier.verifyAndClearAll(fixture.wrap(scan.batchAccessor().getOutgoingContainer()));
+    RowSetUtilities.verify(expected,
+        fixture.wrap(scan.batchAccessor().container()));
 
     // EOF
-
     assertFalse(scan.next());
-    assertEquals(0, scan.batchAccessor().getRowCount());
+    assertEquals(0, scan.batchAccessor().rowCount());
     scanFixture.close();
   }
 
@@ -442,37 +462,34 @@ public class TestFileScanFramework extends SubOperatorTest {
     reader.batchLimit = 1;
 
     // Select no columns
-
-    FileScanOpFixture scanFixture = new FileScanOpFixture();
-    scanFixture.setProjection(new String[] {});
-    scanFixture.addReader(reader);
-    ScanOperatorExec scan = scanFixture.build();
+    FileScanFixtureBuilder builder = new FileScanFixtureBuilder();
+    builder.setProjection();
+    builder.addReader(reader);
+    ScanFixture scanFixture = builder.build();
+    ScanOperatorExec scan = scanFixture.scanOp;
 
     // Expect data and implicit columns
-
-    BatchSchema expectedSchema = new SchemaBuilder()
+    BatchSchema expectedSchema = new BatchSchemaBuilder()
+        .withSchemaBuilder(new SchemaBuilder())
         .build();
     SingleRowSet expected = fixture.rowSetBuilder(expectedSchema)
         .addRow()
         .addRow()
         .build();
-    RowSetComparison verifier = new RowSetComparison(expected);
 
     // Schema should include implicit columns.
-
     assertTrue(scan.buildSchema());
-    assertEquals(expectedSchema, scan.batchAccessor().getSchema());
+    assertEquals(expectedSchema, scan.batchAccessor().schema());
     scan.batchAccessor().release();
 
     // Read one batch, should contain implicit columns
-
     assertTrue(scan.next());
-    verifier.verifyAndClearAll(fixture.wrap(scan.batchAccessor().getOutgoingContainer()));
+    RowSetUtilities.verify(expected,
+        fixture.wrap(scan.batchAccessor().container()));
 
     // EOF
-
     assertFalse(scan.next());
-    assertEquals(0, scan.batchAccessor().getRowCount());
+    assertEquals(0, scan.batchAccessor().rowCount());
     scanFixture.close();
   }
 
@@ -486,7 +503,7 @@ public class TestFileScanFramework extends SubOperatorTest {
             .add("b", MinorType.INT)
             .resumeSchema()
           .buildSchema();
-      schemaNegotiator.setTableSchema(schema);
+      schemaNegotiator.tableSchema(schema, true);
       tableLoader = schemaNegotiator.build();
       return true;
     }
@@ -507,40 +524,39 @@ public class TestFileScanFramework extends SubOperatorTest {
 
   @Test
   public void testMapProject() {
-
     MockMapReader reader = new MockMapReader();
     reader.batchLimit = 1;
 
     // Select one of the two map columns
-
-    FileScanOpFixture scanFixture = new FileScanOpFixture();
-    scanFixture.setProjection(new String[] {"m1.a"});
-    scanFixture.addReader(reader);
-    ScanOperatorExec scan = scanFixture.build();
+    FileScanFixtureBuilder builder = new FileScanFixtureBuilder();
+    builder.setProjection("m1.a");
+    builder.addReader(reader);
+    ScanFixture scanFixture = builder.build();
+    ScanOperatorExec scan = scanFixture.scanOp;
 
     // Expect data and implicit columns
-
-    BatchSchema expectedSchema = new SchemaBuilder()
+    SchemaBuilder schemaBuilder = new SchemaBuilder()
         .addMap("m1")
           .add("a", MinorType.INT)
-          .resumeSchema()
+          .resumeSchema();
+    BatchSchema expectedSchema = new BatchSchemaBuilder()
+        .withSchemaBuilder(schemaBuilder)
         .build();
     SingleRowSet expected = fixture.rowSetBuilder(expectedSchema)
         .addSingleCol(new Object[] {10})
         .addSingleCol(new Object[] {20})
         .build();
     assertTrue(scan.buildSchema());
-    assertEquals(expectedSchema, scan.batchAccessor().getSchema());
+    assertEquals(expectedSchema, scan.batchAccessor().schema());
     scan.batchAccessor().release();
 
     assertTrue(scan.next());
-    new RowSetComparison(expected)
-         .verifyAndClearAll(fixture.wrap(scan.batchAccessor().getOutgoingContainer()));
+    RowSetUtilities.verify(expected,
+         fixture.wrap(scan.batchAccessor().container()));
 
     // EOF
-
     assertFalse(scan.next());
-    assertEquals(0, scan.batchAccessor().getRowCount());
+    assertEquals(0, scan.batchAccessor().rowCount());
     scanFixture.close();
   }
 }

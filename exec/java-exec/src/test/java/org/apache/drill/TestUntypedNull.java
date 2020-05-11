@@ -22,6 +22,7 @@ import org.apache.drill.common.types.TypeProtos;
 import org.apache.drill.common.types.Types;
 import org.apache.drill.exec.ExecConstants;
 import org.apache.drill.exec.record.BatchSchema;
+import org.apache.drill.exec.record.BatchSchemaBuilder;
 import org.apache.drill.exec.record.metadata.SchemaBuilder;
 import org.apache.drill.test.ClusterFixture;
 import org.apache.drill.test.ClusterFixtureBuilder;
@@ -30,9 +31,6 @@ import org.apache.drill.test.QueryBuilder;
 import org.junit.BeforeClass;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
-
-import java.util.Arrays;
-import java.util.List;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
@@ -77,24 +75,35 @@ public class TestUntypedNull extends ClusterTest {
   }
 
   @Test
-  public void testTableCreation() throws Exception {
-    String tablePrefix = "table_";
-    List<String> formats = Arrays.asList("parquet", "json", "csv");
+  public void testParquetTableCreation() throws Exception {
+    testTableCreation("parquet");
+  }
+
+  @Test
+  public void testJsonTableCreation() throws Exception {
+    testTableCreation("json");
+  }
+
+  @Test
+  public void testCsvTableCreation() throws Exception {
+    testTableCreation("csv");
+  }
+
+
+  private void testTableCreation(String format) throws Exception {
+    String tableName = "table_" + format;
     try {
-      for (String format : formats) {
-        client.alterSession(ExecConstants.OUTPUT_FORMAT_OPTION, format);
-        String query = String.format("create table dfs.tmp.%s%s as\n" +
-          "select split(n_name, ' ') [1] from cp.`tpch/nation.parquet` where n_nationkey = -1 group by n_name",
-          tablePrefix, format);
-        QueryBuilder.QuerySummary summary = queryBuilder().sql(query).run();
-        assertTrue(summary.succeeded());
-        assertEquals(1, summary.recordCount());
-      }
+      client.alterSession(ExecConstants.OUTPUT_FORMAT_OPTION, format);
+      String query = "create table dfs.tmp." + tableName + " as\n" +
+          "select split(n_name, ' ') [1] from cp.`tpch/nation.parquet` where n_nationkey = -1 group by n_name";
+
+      QueryBuilder.QuerySummary summary = queryBuilder().sql(query).run();
+
+      assertTrue(summary.succeeded());
+      assertEquals(1, summary.recordCount());
     } finally {
       client.resetSession(ExecConstants.OUTPUT_FORMAT_OPTION);
-      for (String format : formats) {
-        queryBuilder().sql(String.format("drop table if exists dfs.tmp.%s%s", tablePrefix, format)).run();
-      }
+      queryBuilder().sql("drop table if exists dfs.tmp." + tableName).run();
     }
   }
 
@@ -115,8 +124,10 @@ public class TestUntypedNull extends ClusterTest {
   @Test
   public void testCoalesceOnNotExistentColumns() throws Exception {
     String query = "select coalesce(unk1, unk2) as coal from cp.`tpch/nation.parquet` limit 5";
-    BatchSchema expectedSchema = new SchemaBuilder()
-        .add("coal", UNTYPED_NULL_TYPE)
+    SchemaBuilder schemaBuilder = new SchemaBuilder()
+        .add("coal", UNTYPED_NULL_TYPE);
+    BatchSchema expectedSchema = new BatchSchemaBuilder()
+        .withSchemaBuilder(schemaBuilder)
         .build();
 
     testBuilder()
@@ -135,8 +146,10 @@ public class TestUntypedNull extends ClusterTest {
   @Test
   public void testCoalesceOnNotExistentColumnsWithGroupBy() throws Exception {
     String query = "select coalesce(unk1, unk2) as coal from cp.`tpch/nation.parquet` group by 1";
-    BatchSchema expectedSchema = new SchemaBuilder()
-        .add("coal", UNTYPED_NULL_TYPE)
+    SchemaBuilder schemaBuilder = new SchemaBuilder()
+        .add("coal", UNTYPED_NULL_TYPE);
+    BatchSchema expectedSchema = new BatchSchemaBuilder()
+        .withSchemaBuilder(schemaBuilder)
         .build();
 
     testBuilder()
@@ -155,8 +168,10 @@ public class TestUntypedNull extends ClusterTest {
   @Test
   public void testCoalesceOnNotExistentColumnsWithOrderBy() throws Exception {
     String query = "select coalesce(unk1, unk2) as coal from cp.`tpch/nation.parquet` order by 1 limit 5";
-    BatchSchema expectedSchema = new SchemaBuilder()
-        .add("coal", UNTYPED_NULL_TYPE)
+    SchemaBuilder schemaBuilder = new SchemaBuilder()
+        .add("coal", UNTYPED_NULL_TYPE);
+    BatchSchema expectedSchema = new BatchSchemaBuilder()
+        .withSchemaBuilder(schemaBuilder)
         .build();
 
     testBuilder()

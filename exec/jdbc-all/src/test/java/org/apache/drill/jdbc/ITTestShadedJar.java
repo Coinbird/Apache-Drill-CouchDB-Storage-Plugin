@@ -17,9 +17,17 @@
  */
 package org.apache.drill.jdbc;
 
-import static org.junit.Assert.assertEquals;
+import org.apache.drill.test.BaseTest;
+import org.junit.ClassRule;
+import org.junit.Test;
+import org.junit.rules.TestWatcher;
+import org.junit.runner.Description;
 
+import java.io.BufferedReader;
 import java.io.File;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.net.MalformedURLException;
@@ -32,13 +40,12 @@ import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.Vector;
 import java.util.concurrent.Semaphore;
+import java.util.stream.Collectors;
 
-import org.junit.ClassRule;
-import org.junit.Test;
-import org.junit.rules.TestWatcher;
-import org.junit.runner.Description;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNotNull;
 
-public class ITTestShadedJar {
+public class ITTestShadedJar extends BaseTest {
   private static final org.slf4j.Logger logger = org.slf4j.LoggerFactory.getLogger(ITTestShadedJar.class);
 
   private static DrillbitClassLoader drillbitLoader;
@@ -166,6 +173,18 @@ public class ITTestShadedJar {
 
   }
 
+  @Test
+  public void serviceFileContainsCorrectDriver() throws IOException {
+    URLClassLoader loader = URLClassLoader.newInstance(new URL[]{getJdbcUrl()});
+    try (InputStream resourceStream = loader.getResourceAsStream("META-INF/services/java.sql.Driver")) {
+      assertNotNull("java.sql.Driver is not present in the jdbc jar", resourceStream);
+      try (BufferedReader reader = new BufferedReader(new InputStreamReader(resourceStream))) {
+        String driverClass = reader.lines().collect(Collectors.joining(System.lineSeparator()));
+        assertEquals("org.apache.drill.jdbc.Driver", driverClass);
+      }
+    }
+  }
+
   private static void printQuery(Connection c, String query) throws SQLException {
     final StringBuilder sb = new StringBuilder();
 
@@ -216,8 +235,8 @@ public class ITTestShadedJar {
 
   private static void runWithLoader(String name, ClassLoader loader) throws Exception {
     Class<?> clazz = loader.loadClass(ITTestShadedJar.class.getName() + "$" + name);
-    Object o = clazz.getDeclaredConstructors()[0].newInstance(loader);
-    clazz.getMethod("go").invoke(o);
+    Object instance = clazz.getDeclaredConstructors()[0].newInstance(loader);
+    clazz.getMethod("go").invoke(instance);
   }
 
   public abstract static class AbstractLoaderThread extends Thread {
@@ -264,7 +283,7 @@ public class ITTestShadedJar {
       // loader.loadClass("org.apache.drill.exec.exception.SchemaChangeException");
 
       // execute a single query to make sure the drillbit is fully up
-      clazz.getMethod("testNoResult", String.class, new Object[] {}.getClass())
+      clazz.getMethod("testNoResult", String.class, Object[].class)
           .invoke(null, "select * from (VALUES 1)", new Object[] {});
 
       SEM.release();

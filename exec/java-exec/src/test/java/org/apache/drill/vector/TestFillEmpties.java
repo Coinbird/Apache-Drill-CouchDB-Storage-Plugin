@@ -34,14 +34,15 @@ import org.junit.Test;
 
 import io.netty.buffer.DrillBuf;
 import org.junit.experimental.categories.Category;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 @Category(VectorTest.class)
 public class TestFillEmpties extends SubOperatorTest {
-  static final org.slf4j.Logger logger = org.slf4j.LoggerFactory.getLogger(TestFillEmpties.class);
+  private static final Logger logger = LoggerFactory.getLogger(TestFillEmpties.class);
 
   @Test
   public void testNullableVarChar() {
-    @SuppressWarnings("resource")
     NullableVarCharVector vector = new NullableVarCharVector(SchemaBuilder.columnSchema("a", MinorType.VARCHAR, DataMode.OPTIONAL), fixture.allocator());
     vector.allocateNew( );
 
@@ -61,7 +62,6 @@ public class TestFillEmpties extends SubOperatorTest {
 
   @Test
   public void testVarChar() {
-    @SuppressWarnings("resource")
     VarCharVector vector = new VarCharVector(SchemaBuilder.columnSchema("a", MinorType.VARCHAR, DataMode.REQUIRED), fixture.allocator());
     vector.allocateNew( );
 
@@ -85,7 +85,6 @@ public class TestFillEmpties extends SubOperatorTest {
 
   @Test
   public void testInt() {
-    @SuppressWarnings("resource")
     IntVector vector = new IntVector(SchemaBuilder.columnSchema("a", MinorType.INT, DataMode.REQUIRED), fixture.allocator());
     vector.allocateNew( );
 
@@ -102,7 +101,6 @@ public class TestFillEmpties extends SubOperatorTest {
 
   @Test
   public void testRepeatedVarChar() {
-    @SuppressWarnings("resource")
     RepeatedVarCharVector vector = new RepeatedVarCharVector(SchemaBuilder.columnSchema("a", MinorType.VARCHAR, DataMode.REPEATED), fixture.allocator());
     vector.allocateNew( );
 
@@ -212,5 +210,4 @@ public class TestFillEmpties extends SubOperatorTest {
     }
     return value;
   }
-
 }

@@ -27,7 +27,6 @@ import org.apache.calcite.sql.SqlKind;
 import org.apache.calcite.sql.SqlNode;
 import org.apache.calcite.sql.SqlOrderBy;
 import org.apache.calcite.sql.SqlSelect;
-import org.apache.calcite.sql.SqlSetOption;
 import org.apache.calcite.sql.util.SqlShuttle;
 import org.apache.calcite.sql.util.SqlVisitor;
 
@@ -65,6 +64,8 @@ public class CompoundIdentifierConverter extends SqlShuttle {
     // returned by getOperandList() method for concrete SqlCall implementation.
     REWRITE_RULES = ImmutableMap.<Class<? extends SqlCall>, RewriteType[]>builder()
         .put(SqlAnalyzeTable.class, arrayOf(D, D, E, D))
+        .put(SqlMetastoreAnalyzeTable.class, arrayOf(D, E, D, D, D))
+        .put(SqlDropTableMetadata.class, arrayOf(D, D, D))
         .put(SqlSelect.class, arrayOf(D, E, D, E, E, E, E, E, D, D))
         .put(SqlCreateTable.class, arrayOf(D, D, D, E, D, D))
         .put(SqlCreateView.class, arrayOf(D, E, E, D))
@@ -76,12 +77,16 @@ public class CompoundIdentifierConverter extends SqlShuttle {
         .put(SqlJoin.class, arrayOf(D, D, D, D, D, E))
         .put(SqlOrderBy.class, arrayOf(D, E, D, D))
         .put(SqlDropTable.class, arrayOf(D, D))
-        .put(SqlRefreshMetadata.class, arrayOf(D))
-        .put(SqlSetOption.class, arrayOf(D, D, D))
+        .put(SqlRefreshMetadata.class, arrayOf(D, D, E))
+        .put(DrillSqlSetOption.class, arrayOf(D, D, D))
+        .put(DrillSqlResetOption.class, arrayOf(D, D))
         .put(SqlCreateFunction.class, arrayOf(D))
         .put(SqlDropFunction.class, arrayOf(D))
         .put(SqlSchema.Create.class, arrayOf(D, D, D, D, D, D))
         .put(SqlSchema.Drop.class, arrayOf(D, D))
+        .put(SqlSchema.Describe.class, arrayOf(D, D))
+        .put(SqlSchema.Add.class, arrayOf(D, D, D, D, D, D))
+        .put(SqlSchema.Remove.class, arrayOf(D, D, D, D, D))
         .build();
   }
 

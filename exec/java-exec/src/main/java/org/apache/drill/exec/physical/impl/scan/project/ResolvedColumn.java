@@ -18,6 +18,7 @@
 package org.apache.drill.exec.physical.impl.scan.project;
 
 import org.apache.drill.exec.record.MaterializedField;
+import org.apache.drill.exec.record.metadata.ColumnMetadata;
 
 /**
  * A resolved column has a name, and a specification for how to project
@@ -33,20 +34,29 @@ import org.apache.drill.exec.record.MaterializedField;
  * along with a serialized record batch; each operator must rediscover
  * it after deserialization.
  */
-
 public abstract class ResolvedColumn implements ColumnProjection {
 
-  public final VectorSource source;
-  public final int sourceIndex;
+  private final VectorSource source;
+  private final int sourceIndex;
+  private final ColumnMetadata outputCol;
 
   public ResolvedColumn(VectorSource source, int sourceIndex) {
     this.source = source;
     this.sourceIndex = sourceIndex;
+    outputCol = null;
+  }
+
+  public ResolvedColumn(ColumnMetadata outputCol, VectorSource source, int sourceIndex) {
+    this.source = source;
+    this.sourceIndex = sourceIndex;
+    this.outputCol = outputCol;
   }
 
   public VectorSource source() { return source; }
 
   public int sourceIndex() { return sourceIndex; }
+
+  public ColumnMetadata metadata() { return outputCol; }
 
   /**
    * Return the type of this column. Used primarily by the schema smoothing
@@ -54,7 +64,6 @@ public abstract class ResolvedColumn implements ColumnProjection {
    *
    * @return the MaterializedField representation of this column
    */
-
   public abstract MaterializedField schema();
 
   public void project(ResolvedTuple dest) {

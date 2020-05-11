@@ -58,12 +58,15 @@ import com.carrotsearch.hppc.predicates.IntObjectPredicate;
 import org.apache.drill.shaded.guava.com.google.common.base.Preconditions;
 import org.apache.drill.shaded.guava.com.google.common.collect.Lists;
 import org.apache.drill.shaded.guava.com.google.common.collect.Maps;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
- * Each Foreman holds its own QueryManager.  This manages the events associated with execution of a particular query across all fragments.
+ * Each Foreman holds its own QueryManager. This manages the events associated
+ * with execution of a particular query across all fragments.
  */
 public class QueryManager implements AutoCloseable {
-  private static final org.slf4j.Logger logger = org.slf4j.LoggerFactory.getLogger(QueryManager.class);
+  private static final Logger logger = LoggerFactory.getLogger(QueryManager.class);
 
   private final Map<DrillbitEndpoint, NodeTracker> nodeMap = Maps.newHashMap();
   private final QueryId queryId;
@@ -199,7 +202,6 @@ public class QueryManager implements AutoCloseable {
    * (3) Leaf fragment: running, send the cancel signal through a tunnel. The cancel is done directly.
    */
   void cancelExecutingFragments(final DrillbitContext drillbitContext) {
-    @SuppressWarnings("resource")
     final Controller controller = drillbitContext.getController();
     for(final FragmentData data : fragmentDataSet) {
       switch(data.getState()) {
@@ -228,7 +230,6 @@ public class QueryManager implements AutoCloseable {
    * sending any message. Resume all fragments through the control tunnel.
    */
   void unpauseExecutingFragments(final DrillbitContext drillbitContext) {
-    @SuppressWarnings("resource")
     final Controller controller = drillbitContext.getController();
     for(final FragmentData data : fragmentDataSet) {
       final DrillbitEndpoint endpoint = data.getEndpoint();
@@ -242,10 +243,10 @@ public class QueryManager implements AutoCloseable {
   public void close() throws Exception { }
 
   /*
-     * This assumes that the FragmentStatusListener implementation takes action when it hears
-     * that the target fragment has acknowledged the signal. As a result, this listener doesn't do anything
-     * but log messages.
-     */
+   * This assumes that the FragmentStatusListener implementation takes action when it hears
+   * that the target fragment has acknowledged the signal. As a result, this listener doesn't do anything
+   * but log messages.
+   */
   private static class SignalListener extends EndpointListener<Ack, FragmentHandle> {
     /**
      * An enum of possible signals that {@link SignalListener} listens to.
@@ -379,6 +380,12 @@ public class QueryManager implements AutoCloseable {
       profileBuilder.setQuery(queryText);
     }
 
+    int autoLimitRowCount = foreman.getQueryContext().getOptions().getOption(ExecConstants.QUERY_MAX_ROWS).num_val.intValue();
+    if (autoLimitRowCount > 0) {
+      profileBuilder.setAutoLimit(autoLimitRowCount);
+      logger.debug("The query's resultset was limited to {} rows", autoLimitRowCount);
+    }
+
     fragmentDataMap.forEach(new OuterIter(profileBuilder));
 
     return profileBuilder.build();
@@ -457,13 +464,10 @@ public class QueryManager implements AutoCloseable {
    * there is a node failure, we can then correctly track how many outstanding messages will never arrive.
    */
   private class NodeTracker {
-    private final DrillbitEndpoint endpoint;
     private final AtomicInteger totalFragments = new AtomicInteger(0);
     private final AtomicInteger completedFragments = new AtomicInteger(0);
 
-    public NodeTracker(final DrillbitEndpoint endpoint) {
-      this.endpoint = endpoint;
-    }
+    public NodeTracker(final DrillbitEndpoint endpoint) { }
 
     /**
      * Increments the number of fragment this node is running.
@@ -502,7 +506,6 @@ public class QueryManager implements AutoCloseable {
       }
       return true;
     }
-
   }
 
   /**
@@ -552,7 +555,6 @@ public class QueryManager implements AutoCloseable {
     }
   };
 
-
   public DrillbitStatusListener getDrillbitStatusListener() {
     return drillbitStatusListener;
   }
@@ -597,7 +599,6 @@ public class QueryManager implements AutoCloseable {
             new ForemanException(String.format("One more more nodes lost connectivity during query.  Identified nodes were [%s].",
                 failedNodeList)));
       }
-
     }
   };
 }

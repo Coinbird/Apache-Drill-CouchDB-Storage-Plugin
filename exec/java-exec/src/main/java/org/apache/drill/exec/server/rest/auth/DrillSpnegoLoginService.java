@@ -37,6 +37,7 @@ import org.ietf.jgss.GSSName;
 import org.ietf.jgss.Oid;
 
 import javax.security.auth.Subject;
+import javax.servlet.ServletRequest;
 import java.io.IOException;
 import java.lang.reflect.Field;
 import java.security.Principal;
@@ -78,16 +79,11 @@ public class DrillSpnegoLoginService extends SpnegoLoginService {
   }
 
   @Override
-  public UserIdentity login(final String username, final Object credentials) {
+  public UserIdentity login(final String username, final Object credentials, ServletRequest request) {
 
     UserIdentity identity = null;
     try {
-      identity = loggedInUgi.doAs(new PrivilegedExceptionAction<UserIdentity>() {
-        @Override
-        public UserIdentity run() {
-          return spnegoLogin(credentials);
-        }
-      });
+      identity = loggedInUgi.doAs((PrivilegedExceptionAction<UserIdentity>) () -> spnegoLogin(credentials, request));
     } catch (Exception e) {
       logger.error("Failed to login using SPNEGO", e);
     }
@@ -95,7 +91,7 @@ public class DrillSpnegoLoginService extends SpnegoLoginService {
     return identity;
   }
 
-  private UserIdentity spnegoLogin(Object credentials) {
+  private UserIdentity spnegoLogin(Object credentials, ServletRequest request) {
 
     String encodedAuthToken = (String) credentials;
     byte[] authToken = B64Code.decode(encodedAuthToken);
@@ -126,7 +122,8 @@ public class DrillSpnegoLoginService extends SpnegoLoginService {
 
           // Get the client user short name
           final String userShortName = new HadoopKerberosName(clientName).getShortName();
-
+          logger.info("WebUser {} logged in from {}:{}", userShortName, request.getRemoteHost(),
+            request.getRemotePort());
           logger.debug("Client Name: {}, realm: {} and shortName: {}", clientName, realm, userShortName);
           final SystemOptionManager sysOptions = drillContext.getOptionManager();
           final boolean isAdmin = ImpersonationUtil.hasAdminPrivileges(userShortName,

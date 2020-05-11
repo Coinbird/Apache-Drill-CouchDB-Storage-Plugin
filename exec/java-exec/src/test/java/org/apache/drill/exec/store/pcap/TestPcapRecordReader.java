@@ -43,6 +43,21 @@ public class TestPcapRecordReader extends BaseTestQuery {
   }
 
   @Test
+  public void testCorruptPCAPQuery() throws Exception {
+    runSQLVerifyCount("select * from dfs.`store/pcap/testv1.pcap`", 7000);
+  }
+
+  @Test
+  public void testTrueCorruptPCAPQuery() throws Exception {
+    runSQLVerifyCount("select * from dfs.`store/pcap/testv1.pcap` WHERE is_corrupt=true", 16);
+  }
+
+  @Test
+  public void testNotCorruptPCAPQuery() throws Exception {
+    runSQLVerifyCount("select * from dfs.`store/pcap/testv1.pcap` WHERE is_corrupt=false", 6984);
+  }
+
+  @Test
   public void testCountQuery() throws Exception {
     runSQLVerifyCount("select count(*) from dfs.`store/pcap/tcp-1.pcap`", 1);
     runSQLVerifyCount("select count(*) from dfs.`store/pcap/tcp-2.pcap`", 1);
@@ -91,5 +106,4 @@ public class TestPcapRecordReader extends BaseTestQuery {
     }
     assertEquals(expectedRowCount, count);
   }
-
 }

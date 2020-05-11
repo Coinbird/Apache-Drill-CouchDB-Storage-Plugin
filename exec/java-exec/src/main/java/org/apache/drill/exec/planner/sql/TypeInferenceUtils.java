@@ -21,7 +21,8 @@ import org.apache.calcite.sql.fun.SqlStdOperatorTable;
 import org.apache.drill.shaded.guava.com.google.common.collect.ImmutableMap;
 import org.apache.drill.shaded.guava.com.google.common.collect.ImmutableSet;
 import org.apache.drill.shaded.guava.com.google.common.collect.Lists;
-
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.apache.calcite.avatica.util.TimeUnit;
 import org.apache.calcite.rel.type.RelDataType;
 import org.apache.calcite.rel.type.RelDataTypeFactory;
@@ -59,7 +60,7 @@ import java.util.Set;
 
 @SuppressWarnings("WeakerAccess")
 public class TypeInferenceUtils {
-  private static final org.slf4j.Logger logger = org.slf4j.LoggerFactory.getLogger(TypeInferenceUtils.class);
+  private static final Logger logger = LoggerFactory.getLogger(TypeInferenceUtils.class);
 
   public static final TypeProtos.MajorType UNKNOWN_TYPE = TypeProtos.MajorType.getDefaultInstance();
   private static final ImmutableMap<TypeProtos.MinorType, SqlTypeName> DRILL_TO_CALCITE_TYPE_MAPPING
@@ -226,6 +227,39 @@ public class TypeInferenceUtils {
   }
 
   /**
+   * Returns {@link TypeProtos.MajorType} instance which corresponds to specified {@code RelDataType relDataType}
+   * with its nullability, scale and precision if it is available.
+   *
+   * @param relDataType RelDataType to convert
+   * @return {@link TypeProtos.MajorType} instance
+   */
+  public static TypeProtos.MajorType getDrillMajorTypeFromCalciteType(RelDataType relDataType) {
+    final SqlTypeName sqlTypeName = relDataType.getSqlTypeName();
+
+    TypeProtos.MinorType minorType = getDrillTypeFromCalciteType(sqlTypeName);
+    TypeProtos.MajorType.Builder typeBuilder = TypeProtos.MajorType.newBuilder().setMinorType(minorType);
+    switch (minorType) {
+      case VAR16CHAR:
+      case VARCHAR:
+      case VARBINARY:
+      case TIMESTAMP:
+        if (relDataType.getPrecision() > 0) {
+          typeBuilder.setPrecision(relDataType.getPrecision());
+        }
+        break;
+      case VARDECIMAL:
+        typeBuilder.setPrecision(relDataType.getPrecision());
+        typeBuilder.setScale(relDataType.getScale());
+    }
+    if (relDataType.isNullable()) {
+      typeBuilder.setMode(TypeProtos.DataMode.OPTIONAL);
+    } else {
+      typeBuilder.setMode(TypeProtos.DataMode.REQUIRED);
+    }
+    return typeBuilder.build();
+  }
+
+  /**
    * Given a Calcite's SqlTypeName, return a Drill's corresponding TypeProtos.MinorType
    */
   public static TypeProtos.MinorType getDrillTypeFromCalciteType(final SqlTypeName sqlTypeName) {
@@ -318,7 +352,7 @@ public class TypeInferenceUtils {
       final DrillFuncHolder func = resolveDrillFuncHolder(opBinding, functions, functionCall);
 
       final RelDataType returnType = getReturnType(opBinding,
-          func.getReturnType(functionCall.args), func.getNullHandling());
+          func.getReturnType(functionCall.args()), func.getNullHandling());
 
       return returnType.getSqlTypeName() == SqlTypeName.VARBINARY
           ? createCalciteTypeWithNullability(factory, SqlTypeName.ANY, returnType.isNullable())
@@ -864,7 +898,11 @@ public class TypeInferenceUtils {
     if (func == null) {
       StringBuilder operandTypes = new StringBuilder();
       for (int i = 0; i < opBinding.getOperandCount(); ++i) {
-        operandTypes.append(opBinding.getOperandType(i).getSqlTypeName());
+        RelDataType operandType = opBinding.getOperandType(i);
+        operandTypes.append(operandType.getSqlTypeName());
+        if (operandType.isNullable()) {
+          operandTypes.append(":OPTIONAL");
+        }
         if (i < opBinding.getOperandCount() - 1) {
           operandTypes.append(",");
         }
@@ -981,7 +1019,7 @@ public class TypeInferenceUtils {
       args.add(new MajorTypeInLogicalExpression(builder.build()));
     }
 
-    final String drillFuncName = FunctionCallFactory.replaceOpWithFuncName(opBinding.getOperator().getName());
+    final String drillFuncName = FunctionCallFactory.convertToDrillFunctionName(opBinding.getOperator().getName());
     return new FunctionCall(
         drillFuncName,
         args,

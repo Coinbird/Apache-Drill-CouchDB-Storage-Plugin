@@ -28,9 +28,7 @@ import org.eclipse.jetty.security.authentication.DeferredAuthentication;
 import org.eclipse.jetty.security.authentication.SessionAuthentication;
 import org.eclipse.jetty.security.authentication.SpnegoAuthenticator;
 import org.eclipse.jetty.server.Authentication;
-import org.eclipse.jetty.server.HttpChannel;
 import org.eclipse.jetty.server.Request;
-import org.eclipse.jetty.server.Response;
 import org.eclipse.jetty.server.UserIdentity;
 
 import javax.servlet.ServletRequest;
@@ -77,11 +75,10 @@ public class DrillSpnegoAuthenticator extends SpnegoAuthenticator {
     // If the Request URI is for /spnegoLogin then perform login
     final boolean mandatory = mandatoryAuth || uri.equals(WebServerConstants.SPENGO_LOGIN_RESOURCE_PATH);
 
-    // For logout remove the attribute from the session that holds UserIdentity
+    // For logout the attribute from the session that holds UserIdentity will be removed when session is getting
+    // invalidated
     if (authentication != null) {
       if (uri.equals(WebServerConstants.LOGOUT_RESOURCE_PATH)) {
-        logger.debug("Logging out user {}", req.getRemoteAddr());
-        session.removeAttribute(SessionAuthentication.__J_AUTHENTICATED);
         return null;
       }
 
@@ -150,15 +147,12 @@ public class DrillSpnegoAuthenticator extends SpnegoAuthenticator {
             newUri = WebServerConstants.WEBSERVER_ROOT_PATH;
           }
         }
-
         response.setContentLength(0);
-        final HttpChannel channel = HttpChannel.getCurrentHttpChannel();
-        final Response base_response = channel.getResponse();
-        final Request base_request = channel.getRequest();
-        final int redirectCode =
-            base_request.getHttpVersion().getVersion() < HttpVersion.HTTP_1_1.getVersion() ? 302 : 303;
+        Request baseRequest = Request.getBaseRequest(req);
+        int redirectCode =
+            baseRequest.getHttpVersion().getVersion() < HttpVersion.HTTP_1_1.getVersion() ? 302 : 303;
         try {
-          base_response.sendRedirect(redirectCode, res.encodeRedirectURL(newUri));
+          baseRequest.getResponse().sendRedirect(redirectCode, res.encodeRedirectURL(newUri));
         } catch (IOException e) {
           logger.error("DrillSpnegoAuthenticator: Failed while using the redirect URL {} from client {}", newUri,
               req.getRemoteAddr(), e);

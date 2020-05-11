@@ -17,6 +17,7 @@
  */
 package org.apache.drill;
 
+import org.apache.drill.exec.record.BatchSchemaBuilder;
 import org.apache.drill.shaded.guava.com.google.common.collect.Lists;
 
 import org.apache.commons.lang3.tuple.Pair;
@@ -346,7 +347,6 @@ public class TestUnionAll extends BaseTestQuery {
         .baselineColumns("n_nationkey", "n_regionkey", "n_name")
         .build().run();
 
-
     testBuilder()
         .sqlQuery(query2)
         .unOrdered()
@@ -354,7 +354,7 @@ public class TestUnionAll extends BaseTestQuery {
         .baselineTypes(TypeProtos.MinorType.INT, TypeProtos.MinorType.INT, TypeProtos.MinorType.VARCHAR)
         .baselineColumns("n_nationkey", "n_regionkey", "n_name")
         .build().run();
-    }
+  }
 
   @Test // see DRILL-1977, DRILL-2376, DRILL-2377, DRILL-2378, DRILL-2379
   @Category(UnlikelyTest.class)
@@ -1250,8 +1250,10 @@ public class TestUnionAll extends BaseTestQuery {
 
   @Test
   public void testUnionAllBothEmptyDirs() throws Exception {
-    final BatchSchema expectedSchema = new SchemaBuilder()
-        .addNullable("key", TypeProtos.MinorType.INT)
+    SchemaBuilder schemaBuilder = new SchemaBuilder()
+        .addNullable("key", TypeProtos.MinorType.INT);
+    BatchSchema expectedSchema = new BatchSchemaBuilder()
+        .withSchemaBuilder(schemaBuilder)
         .build();
 
     testBuilder()

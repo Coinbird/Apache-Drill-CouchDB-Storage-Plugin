@@ -24,6 +24,7 @@ import org.apache.drill.categories.UnlikelyTest;
 import org.apache.drill.common.exceptions.UserException;
 import org.apache.drill.common.exceptions.UserRemoteException;
 import org.apache.drill.exec.dotdrill.DotDrillType;
+import org.apache.drill.exec.store.StoragePluginRegistry.PluginException;
 import org.apache.drill.exec.store.dfs.WorkspaceConfig;
 import org.apache.drill.shaded.guava.com.google.common.base.Joiner;
 import org.apache.drill.shaded.guava.com.google.common.collect.Maps;
@@ -268,17 +269,20 @@ public class TestImpersonationMetadata extends BaseTestImpersonation {
   @Test
   public void testCreateViewInWSWithNoPermissionsForQueryUser() throws Exception {
     // Workspace dir owned by "processUser", workspace group is "group0" and "user2" is not part of "group0"
-    final String viewSchema = MINI_DFS_STORAGE_PLUGIN_NAME + ".drill_test_grp_0_755";
+    final String tableWS = "drill_test_grp_0_755";
+    final String viewSchema = MINI_DFS_STORAGE_PLUGIN_NAME + "." + tableWS;
     final String viewName = "view1";
 
     updateClient(user2);
 
     test("USE " + viewSchema);
 
-    final String query = "CREATE VIEW " + viewName + " AS SELECT " +
-        "c_custkey, c_nationkey FROM cp.`tpch/customer.parquet` ORDER BY c_custkey;";
-    final String expErrorMsg = "PERMISSION ERROR: Permission denied: user=drillTestUser2, access=WRITE, inode=\"/drill_test_grp_0_755";
-    errorMsgTestHelper(query, expErrorMsg);
+    String expErrorMsg = "PERMISSION ERROR: Permission denied: user=drillTestUser2, access=WRITE, inode=\"/" + tableWS;
+    thrown.expect(UserRemoteException.class);
+    thrown.expectMessage(containsString(expErrorMsg));
+
+    test("CREATE VIEW %s AS" +
+        " SELECT c_custkey, c_nationkey FROM cp.`tpch/customer.parquet` ORDER BY c_custkey", viewName);
 
     // SHOW TABLES is expected to return no records as view creation fails above.
     testBuilder()
@@ -348,7 +352,7 @@ public class TestImpersonationMetadata extends BaseTestImpersonation {
 
     thrown.expect(UserRemoteException.class);
     thrown.expectMessage(containsString("Permission denied: user=drillTestUser2, " +
-        "access=WRITE, inode=\"/drill_test_grp_0_755"));
+        "access=WRITE, inode=\"/" + tableWS));
 
     test("CREATE TABLE %s AS SELECT c_custkey, c_nationkey " +
         "FROM cp.`tpch/customer.parquet` ORDER BY c_custkey", tableName);
@@ -403,8 +407,8 @@ public class TestImpersonationMetadata extends BaseTestImpersonation {
   }
 
   @AfterClass
-  public static void removeMiniDfsBasedStorage() {
-    getDrillbitContext().getStorage().deletePlugin(MINI_DFS_STORAGE_PLUGIN_NAME);
+  public static void removeMiniDfsBasedStorage() throws PluginException {
+    getDrillbitContext().getStorage().remove(MINI_DFS_STORAGE_PLUGIN_NAME);
     stopMiniDfsCluster();
   }
 }

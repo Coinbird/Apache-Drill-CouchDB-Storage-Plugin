@@ -35,6 +35,7 @@ import org.apache.drill.exec.server.options.SystemOptionManager;
 import org.apache.drill.exec.server.rest.auth.DrillHttpSecurityHandlerProvider;
 import org.apache.drill.exec.server.rest.auth.DrillSpnegoLoginService;
 import org.apache.drill.test.BaseDirTestWatcher;
+import org.apache.drill.test.BaseTest;
 import org.apache.hadoop.security.authentication.util.KerberosName;
 import org.apache.hadoop.security.authentication.util.KerberosUtil;
 import org.apache.kerby.kerberos.kerb.client.JaasKrbUtil;
@@ -56,6 +57,8 @@ import java.lang.reflect.Field;
 import java.security.PrivilegedExceptionAction;
 
 import static junit.framework.TestCase.fail;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 
 /**
@@ -63,7 +66,7 @@ import static org.junit.Assert.assertTrue;
  */
 @Ignore("See DRILL-5387")
 @Category(SecurityTest.class)
-public class TestSpnegoAuthentication {
+public class TestSpnegoAuthentication extends BaseTest {
 
   private static KerberosHelper spnegoHelper;
 
@@ -88,7 +91,6 @@ public class TestSpnegoAuthentication {
   /**
    * Both SPNEGO and FORM mechanism is enabled for WebServer in configuration. Test to see if the respective security
    * handlers are created successfully or not.
-   * @throws Exception
    */
   @Test
   public void testSPNEGOAndFORMEnabled() throws Exception {
@@ -119,7 +121,6 @@ public class TestSpnegoAuthentication {
 
   /**
    * Validate if FORM security handler is created successfully when only form is configured as auth mechanism
-   * @throws Exception
    */
   @Test
   public void testOnlyFORMEnabled() throws Exception {
@@ -151,7 +152,6 @@ public class TestSpnegoAuthentication {
   /**
    * Validate failure in creating FORM security handler when PAM authenticator is absent. PAM authenticator is provided
    * via {@link PlainFactory#getAuthenticator()}
-   * @throws Exception
    */
   @Test
   public void testFORMEnabledWithPlainDisabled() throws Exception {
@@ -185,7 +185,6 @@ public class TestSpnegoAuthentication {
 
   /**
    * Validate only SPNEGO security handler is configured properly when enabled via configuration
-   * @throws Exception
    */
   @Test
   public void testOnlySPNEGOEnabled() throws Exception {
@@ -219,7 +218,6 @@ public class TestSpnegoAuthentication {
    * Validate when none of the security mechanism is specified in the
    * {@link ExecConstants#HTTP_AUTHENTICATION_MECHANISMS}, FORM security handler is still configured correctly when
    * authentication is enabled along with PAM authenticator module.
-   * @throws Exception
    */
   @Test
   public void testConfigBackwardCompatibility() throws Exception {
@@ -244,9 +242,8 @@ public class TestSpnegoAuthentication {
   }
 
   /**
-   * Validate successful {@link DrillSpnegoLoginService#login(String, Object)} when provided with client token for a
-   * configured service principal.
-   * @throws Exception
+   * Validate successful {@link DrillSpnegoLoginService#login(String, Object, javax.servlet.ServletRequest)}
+   * when provided with client token for a configured service principal.
    */
   @Test
   public void testDrillSpnegoLoginService() throws Exception {
@@ -305,11 +302,11 @@ public class TestSpnegoAuthentication {
     final DrillSpnegoLoginService loginService = new DrillSpnegoLoginService(drillbitContext);
 
     // Authenticate the client using its SPNEGO token
-    final UserIdentity user = loginService.login(null, token);
+    final UserIdentity user = loginService.login(null, token, null);
 
     // Validate the UserIdentity of authenticated client
-    assertTrue(user != null);
-    assertTrue(user.getUserPrincipal().getName().equals(spnegoHelper.CLIENT_SHORT_NAME));
+    assertNotNull(user);
+    assertEquals(user.getUserPrincipal().getName(), spnegoHelper.CLIENT_SHORT_NAME);
     assertTrue(user.isUserInRole("authenticated", null));
   }
 

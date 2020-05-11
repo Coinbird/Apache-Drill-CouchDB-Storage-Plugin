@@ -19,9 +19,13 @@ package org.apache.drill.exec.vector.accessor.writer;
 
 import org.apache.drill.exec.record.metadata.ColumnMetadata;
 import org.apache.drill.exec.vector.UInt4Vector;
+import org.apache.drill.exec.vector.accessor.ArrayReader;
 import org.apache.drill.exec.vector.accessor.ArrayWriter;
+import org.apache.drill.exec.vector.accessor.ColumnReader;
 import org.apache.drill.exec.vector.accessor.ColumnWriter;
 import org.apache.drill.exec.vector.accessor.ColumnWriterIndex;
+import org.apache.drill.exec.vector.accessor.DictWriter;
+import org.apache.drill.exec.vector.accessor.ObjectReader;
 import org.apache.drill.exec.vector.accessor.ObjectType;
 import org.apache.drill.exec.vector.accessor.ObjectWriter;
 import org.apache.drill.exec.vector.accessor.ScalarWriter;
@@ -96,7 +100,7 @@ public abstract class AbstractArrayWriter implements ArrayWriter, WriterEvents {
 
   public static class ArrayObjectWriter extends AbstractObjectWriter {
 
-    private final AbstractArrayWriter arrayWriter;
+    protected final AbstractArrayWriter arrayWriter;
 
     public ArrayObjectWriter(AbstractArrayWriter arrayWriter) {
       this.arrayWriter = arrayWriter;
@@ -144,7 +148,12 @@ public abstract class AbstractArrayWriter implements ArrayWriter, WriterEvents {
     @Override
     public void nextElement() { }
 
-    public void next() { elementIndex++; }
+    @Override
+    public void prevElement() { }
+
+    protected void next() { elementIndex++; }
+
+    protected void prev() { elementIndex--; }
 
     public int valueStartOffset() { return offsetsWriter.nextOffset(); }
 
@@ -257,13 +266,14 @@ public abstract class AbstractArrayWriter implements ArrayWriter, WriterEvents {
     }
   }
 
-  protected final ColumnMetadata schema;
+  private final ColumnMetadata schema;
   protected AbstractObjectWriter elementObjWriter;
   protected final OffsetVectorWriter offsetsWriter;
   protected ColumnWriterIndex outerIndex;
   protected ArrayElementWriterIndex elementIndex;
 
-  public AbstractArrayWriter(ColumnMetadata schema, AbstractObjectWriter elementObjWriter, OffsetVectorWriter offsetVectorWriter) {
+  public AbstractArrayWriter(ColumnMetadata schema, AbstractObjectWriter elementObjWriter,
+      OffsetVectorWriter offsetVectorWriter) {
     this.schema = schema;
     this.elementObjWriter = elementObjWriter;
     this.offsetsWriter = offsetVectorWriter;
@@ -310,10 +320,18 @@ public abstract class AbstractArrayWriter implements ArrayWriter, WriterEvents {
   }
 
   @Override
+  public DictWriter dict() {
+    return elementObjWriter.dict();
+  }
+
+  @Override
   public int size() { return elementIndex.arraySize(); }
 
   @Override
   public boolean nullable() { return false; }
+
+  @Override
+  public boolean isProjected() { return true; }
 
   @Override
   public void setNull() {
@@ -337,8 +355,19 @@ public abstract class AbstractArrayWriter implements ArrayWriter, WriterEvents {
 
   @Override
   public void setNull(boolean isNull) {
-    if (isNull == true) {
+    if (isNull) {
       throw new UnsupportedOperationException();
+    }
+  }
+
+  @Override
+  public void copy(ColumnReader from) {
+    ArrayReader source = (ArrayReader) from;
+    // Inefficient initial implementation
+    ObjectReader entryReader = source.entry();
+    while (source.next()) {
+      elementObjWriter.writer().copy(entryReader.reader());
+      save();
     }
   }
 
@@ -357,7 +386,7 @@ public abstract class AbstractArrayWriter implements ArrayWriter, WriterEvents {
     format
       .startObject(this)
       .attribute("elementObjWriter");
-      elementObjWriter.dump(format);
+    elementObjWriter.dump(format);
     format.endObject();
   }
 }

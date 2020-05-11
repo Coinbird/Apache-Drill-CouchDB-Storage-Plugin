@@ -17,13 +17,14 @@
  */
 package org.apache.drill.exec.work.foreman;
 
-import com.codahale.metrics.Counter;
 import org.apache.drill.common.EventProcessor;
 import org.apache.drill.exec.ExecConstants;
-import org.apache.drill.exec.metrics.DrillMetrics;
 import org.apache.drill.exec.proto.UserBitShared.QueryResult.QueryState;
 import org.apache.drill.exec.server.DrillbitContext;
 import org.apache.drill.exec.work.foreman.Foreman.ForemanResult;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Is responsible for query transition from one state to another,
@@ -31,15 +32,7 @@ import org.apache.drill.exec.work.foreman.Foreman.ForemanResult;
  */
 public class QueryStateProcessor implements AutoCloseable {
 
-  private static final org.slf4j.Logger logger = org.slf4j.LoggerFactory.getLogger(QueryStateProcessor.class);
-
-  private static final Counter planningQueries = DrillMetrics.getRegistry().counter("drill.queries.planning");
-  private static final Counter enqueuedQueries = DrillMetrics.getRegistry().counter("drill.queries.enqueued");
-  private static final Counter runningQueries = DrillMetrics.getRegistry().counter("drill.queries.running");
-  private static final Counter completedQueries = DrillMetrics.getRegistry().counter("drill.queries.completed");
-  private static final Counter succeededQueries = DrillMetrics.getRegistry().counter("drill.queries.succeeded");
-  private static final Counter failedQueries = DrillMetrics.getRegistry().counter("drill.queries.failed");
-  private static final Counter canceledQueries = DrillMetrics.getRegistry().counter("drill.queries.canceled");
+  private static final Logger logger = LoggerFactory.getLogger(QueryStateProcessor.class);
 
   private final StateSwitch stateSwitch = new StateSwitch();
 
@@ -175,18 +168,18 @@ public class QueryStateProcessor implements AutoCloseable {
 
     switch (state) {
       case FAILED:
-        failedQueries.inc();
+        drillbitContext.getCounters().getFailedQueries().inc();
         break;
       case CANCELED:
-        canceledQueries.inc();
+        drillbitContext.getCounters().getCanceledQueries().inc();
         break;
       case COMPLETED:
-        succeededQueries.inc();
+        drillbitContext.getCounters().getSucceededQueries().inc();
         break;
     }
 
-    runningQueries.dec();
-    completedQueries.inc();
+    drillbitContext.getCounters().getRunningQueries().dec();
+    drillbitContext.getCounters().getCompletedQueries().inc();
   }
 
 
@@ -194,10 +187,10 @@ public class QueryStateProcessor implements AutoCloseable {
     switch (newState) {
       case PLANNING:
         queryManager.markStartTime();
-        runningQueries.inc();
+        drillbitContext.getCounters().getRunningQueries().inc();
 
         recordNewState(newState);
-        planningQueries.inc();
+        drillbitContext.getCounters().getPlanningQueries().inc();
         return;
       case CANCELLATION_REQUESTED:
         wrapUpCancellation();
@@ -207,22 +200,24 @@ public class QueryStateProcessor implements AutoCloseable {
   }
 
   private void planning(final QueryState newState, final Exception exception) {
-    planningQueries.dec();
+    drillbitContext.getCounters().getPlanningQueries().dec();
     queryManager.markPlanningEndTime();
     switch (newState) {
       case ENQUEUED:
         recordNewState(newState);
-        enqueuedQueries.inc();
+        drillbitContext.getCounters().getEnqueuedQueries().inc();
         return;
       case CANCELLATION_REQUESTED:
         wrapUpCancellation();
         return;
+    default:
+      break;
     }
     checkCommonStates(newState, exception);
   }
 
   private void enqueued(final QueryState newState, final Exception exception) {
-    enqueuedQueries.dec();
+    drillbitContext.getCounters().getEnqueuedQueries().dec();
     queryManager.markQueueWaitEndTime();
     switch (newState) {
       case STARTING:
@@ -231,6 +226,8 @@ public class QueryStateProcessor implements AutoCloseable {
       case CANCELLATION_REQUESTED:
         wrapUpCancellation();
         return;
+    default:
+      break;
     }
     checkCommonStates(newState, exception);
   }
@@ -324,6 +321,8 @@ public class QueryStateProcessor implements AutoCloseable {
         foremanResult.setFailed(exception);
         foremanResult.close();
         return;
+    default:
+      break;
     }
 
     throw new IllegalStateException(String.format("Failure trying to change states: %s --> %s", state.name(), newState.name()));

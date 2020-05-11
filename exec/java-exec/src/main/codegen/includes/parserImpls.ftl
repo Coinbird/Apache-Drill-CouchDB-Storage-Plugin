@@ -106,7 +106,7 @@ SqlNode SqlShowSchemas() :
 
 /**
  * Parses statement
- *   { DESCRIBE | DESC } tblname [col_name | wildcard ]
+ *   { DESCRIBE | DESC } [TABLE] tblname [col_name | wildcard ]
  */
 SqlNode SqlDescribeTable() :
 {
@@ -117,6 +117,7 @@ SqlNode SqlDescribeTable() :
 }
 {
     (<DESCRIBE> | <DESC>) { pos = getPos(); }
+    (<TABLE>)?
     table = CompoundIdentifier()
     (
         column = CompoundIdentifier()
@@ -179,7 +180,7 @@ SqlNodeList ParseRequiredFieldList(String relType) :
 }
 
 /**
-* Rarses CREATE [OR REPLACE] command for VIEW, TABLE or SCHEMA.
+* Parses CREATE [OR REPLACE] command for VIEW, TABLE or SCHEMA.
 */
 SqlNode SqlCreateOrReplace() :
 {
@@ -313,12 +314,12 @@ SqlNode SqlCreateSchema(SqlParserPos pos, String createType) :
             token_source.SwitchTo(SCH);
     }
     (
-        <LOAD>
+        <SCH_LOAD>
         {
             load = StringLiteral();
         }
     |
-        <PAREN_STRING>
+        <SCH_PAREN_STRING>
         {
             schema = SqlLiteral.createCharString(token.image, getPos());
         }
@@ -372,13 +373,13 @@ void addProperty(SqlNodeList properties) :
 }
 
 <SCH> TOKEN : {
-    < LOAD: "LOAD" > { popState(); }
-  | < NUM: <DIGIT> (" " | "\t" | "\n" | "\r")* >
-    // once schema is found, swich back to initial lexical state
+    < SCH_LOAD: "LOAD" > { popState(); }
+  | < SCH_NUM: <DIGIT> (" " | "\t" | "\n" | "\r")* >
+    // once schema is found, switch back to initial lexical state
     // must be enclosed in the parentheses
-    // inside may have left parenthesis only if number precededs (covers cases with varchar(10)),
+    // inside may have left parenthesis only if number precedes (covers cases with varchar(10)),
     // if left parenthesis is present in column name, it must be escaped with backslash
-  | < PAREN_STRING: <LPAREN> ((~[")"]) | (<NUM> ")") | ("\\)"))+ <RPAREN> > { popState(); }
+  | < SCH_PAREN_STRING: <LPAREN> ((~[")"]) | (<SCH_NUM> ")") | ("\\)"))* <RPAREN> > { popState(); }
 }
 
 /**
@@ -464,40 +465,177 @@ SqlNode SqlDropSchema(SqlParserPos pos) :
 
 /**
  * Parse refresh table metadata statement.
- * REFRESH TABLE METADATA tblname
+ * REFRESH TABLE METADATA [COLUMNS ((field1, field2,..) | NONE)] table_name
  */
 SqlNode SqlRefreshMetadata() :
 {
     SqlParserPos pos;
     SqlIdentifier tblName;
-    SqlNodeList fieldList;
+    SqlNodeList fieldList = null;
     SqlNode query;
+    boolean allColumnsInteresting = true;
 }
 {
     <REFRESH> { pos = getPos(); }
     <TABLE>
     <METADATA>
+    [
+        <COLUMNS> { allColumnsInteresting = false; }
+        (   fieldList = ParseRequiredFieldList("Table")
+            |
+            <NONE>
+        )
+    ]
     tblName = CompoundIdentifier()
     {
-        return new SqlRefreshMetadata(pos, tblName);
+        return new SqlRefreshMetadata(pos, tblName, SqlLiteral.createBoolean(allColumnsInteresting, getPos()), fieldList);
     }
 }
 
 /**
 * Parses statement
-*   DESCRIBE { SCHEMA | DATABASE } name
+*   { DESCRIBE | DESC } { SCHEMA | DATABASE } name
+*   { DESCRIBE | DESC } SCHEMA FOR TABLE dfs.my_table [AS (JSON | STATEMENT)]
 */
 SqlNode SqlDescribeSchema() :
 {
    SqlParserPos pos;
-   SqlIdentifier schema;
+   SqlIdentifier table;
+   String format = "JSON";
 }
 {
-   <DESCRIBE> { pos = getPos(); }
-   (<SCHEMA> | <DATABASE>) { schema = CompoundIdentifier(); }
+   (<DESCRIBE> | <DESC>) { pos = getPos(); }
+   (
+       <SCHEMA>
+         (
+              <FOR> <TABLE> { table = CompoundIdentifier(); }
+              [
+                  <AS>
+                  (
+                       <JSON> { format = "JSON"; }
+                  |
+                       <STATEMENT> { format = "STATEMENT"; }
+                  )
+              ]
+              {
+                   return new SqlSchema.Describe(pos, table, SqlLiteral.createCharString(format, getPos()));
+              }
+
+         |
+             {
+                  return new SqlDescribeSchema(pos, CompoundIdentifier());
+             }
+         )
+   |
+       <DATABASE>
+            {
+                 return new SqlDescribeSchema(pos, CompoundIdentifier());
+            }
+   )
+}
+
+/**
+* Parses ALTER SCHEMA statements:
+*
+* ALTER SCHEMA
+* (FOR TABLE dfs.tmp.nation | PATH '/tmp/schema.json')
+* ADD [OR REPLACE]
+* [COLUMNS (col1 int, col2 varchar)]
+* [PROPERTIES ('prop1'='val1', 'prop2'='val2')]
+*
+* ALTER SCHEMA
+* (FOR TABLE dfs.tmp.nation | PATH '/tmp/schema.json')
+* REMOVE
+* [COLUMNS (`col1`, `col2`)]
+* [PROPERTIES ('prop1', 'prop2')]
+*/
+SqlNode SqlAlterSchema() :
+{
+   SqlParserPos pos;
+   SqlIdentifier table = null;
+   SqlNode path = null;
+}
+{
+   <ALTER> { pos = getPos(); }
+   <SCHEMA>
+    (
+        <FOR> <TABLE> { table = CompoundIdentifier(); }
+        |
+        <PATH> { path = StringLiteral(); }
+    )
+    (
+        <ADD> { return SqlAlterSchemaAdd(pos, table, path); }
+        |
+        <REMOVE> { return SqlAlterSchemaRemove(pos, table, path); }
+    )
+}
+
+SqlNode SqlAlterSchemaAdd(SqlParserPos pos, SqlIdentifier table, SqlNode path) :
+{
+   boolean replace = false;
+   SqlCharStringLiteral schema = null;
+   SqlNodeList properties = null;
+}
+{
+   [ <OR> <REPLACE> { replace = true; } ]
+   [ <COLUMNS> { schema = ParseSchema(); } ]
+   [
+       <PROPERTIES> <LPAREN>
+        {
+             properties = new SqlNodeList(getPos());
+             addProperty(properties);
+        }
+        (
+             <COMMA> { addProperty(properties); }
+        )*
+        <RPAREN>
+   ]
    {
-        return new SqlDescribeSchema(pos, schema);
+        if (schema == null && properties == null) {
+             throw new ParseException("ALTER SCHEMA ADD command must have at least <COLUMNS> or <PROPERTIES> keyword indicated.");
+        }
+        return new SqlSchema.Add(pos, table, path, SqlLiteral.createBoolean(replace, getPos()), schema, properties);
    }
+}
+
+SqlCharStringLiteral ParseSchema() :
+{}
+{
+   {
+        token_source.pushState();
+        token_source.SwitchTo(SCH);
+   }
+    <SCH_PAREN_STRING>
+   {
+        return SqlLiteral.createCharString(token.image, getPos());
+   }
+}
+
+SqlNode SqlAlterSchemaRemove(SqlParserPos pos, SqlIdentifier table, SqlNode path) :
+{
+   SqlNodeList columns = null;
+   SqlNodeList properties = null;
+}
+{
+    [ <COLUMNS> { columns = ParseRequiredFieldList("Schema"); } ]
+    [
+        <PROPERTIES> <LPAREN>
+        {
+            properties = new SqlNodeList(getPos());
+            properties.add(StringLiteral());
+        }
+        (
+            <COMMA>
+            { properties.add(StringLiteral()); }
+        )*
+        <RPAREN>
+    ]
+    {
+         if (columns == null && properties == null) {
+             throw new ParseException("ALTER SCHEMA REMOVE command must have at least <COLUMNS> or <PROPERTIES> keyword indicated.");
+         }
+         return new SqlSchema.Remove(pos, table, path, columns, properties);
+    }
 }
 
 /**
@@ -558,45 +696,200 @@ Pair<SqlNodeList, SqlNodeList> ParenthesizedCompoundIdentifierList() :
     }
 }
 </#if>
+
 /**
- * Parses a analyze statement.
- * ANALYZE TABLE tblname {COMPUTE | ESTIMATE} | STATISTICS
- *      [(column1, column2, ...)] [ SAMPLE numeric PERCENT ]
+ * Parses a analyze statements:
+ * <ul>
+ * <li>ANALYZE TABLE [table_name | table({table function name}(parameters))] [COLUMNS {(col1, col2, ...) | NONE}] REFRESH METADATA ['level' LEVEL] [{COMPUTE | ESTIMATE} | STATISTICS [ SAMPLE number PERCENT ]]
+ * <li>ANALYZE TABLE [table_name] DROP [METADATA|STATISTICS] [IF EXISTS]
+ * <li>ANALYZE TABLE [table_name | table({table function name}(parameters))] {COMPUTE | ESTIMATE} | STATISTICS [(column1, column2, ...)] [ SAMPLE numeric PERCENT ]
+ * </ul>
  */
 SqlNode SqlAnalyzeTable() :
 {
     SqlParserPos pos;
-    SqlIdentifier tblName;
-    SqlLiteral estimate = null;
+    SqlNode tableRef;
+    Span s = null;
     SqlNodeList fieldList = null;
+    SqlNode level = null;
+    SqlLiteral estimate = null;
+    SqlLiteral dropMetadata = null;
+    SqlLiteral checkMetadataExistence = null;
     SqlNumericLiteral percent = null;
 }
 {
     <ANALYZE> { pos = getPos(); }
     <TABLE>
-    tblName = CompoundIdentifier()
     (
-        <COMPUTE> { estimate = SqlLiteral.createBoolean(false, pos); }
-        |
-        <ESTIMATE> { estimate = SqlLiteral.createBoolean(true, pos); }
+        tableRef = CompoundIdentifier()
+    |
+        <TABLE> { s = span(); } <LPAREN>
+        tableRef = TableFunctionCall(s.pos())
+        <RPAREN>
     )
-    <STATISTICS>
     [
-        (fieldList = ParseRequiredFieldList("Table"))
-    ]
-    [
-        <SAMPLE> percent = UnsignedNumericLiteral() <PERCENT>
-        {
-            BigDecimal rate = percent.bigDecimalValue();
-            if (rate.compareTo(BigDecimal.ZERO) <= 0 ||
-                rate.compareTo(BigDecimal.valueOf(100L)) > 0)
+        (
+            (
+                <COMPUTE> { estimate = SqlLiteral.createBoolean(false, pos); }
+                |
+                <ESTIMATE> {
+                  if (true) {
+                    throw new ParseException("ESTIMATE statistics collecting is not supported. See DRILL-7438.");
+                  }
+                  estimate = SqlLiteral.createBoolean(true, pos);
+                }
+            )
+            <STATISTICS>
+            [
+                (fieldList = ParseRequiredFieldList("Table"))
+            ]
+            [
+                <SAMPLE> percent = UnsignedNumericLiteral() <PERCENT>
+                {
+                    BigDecimal rate = percent.bigDecimalValue();
+                    if (rate.compareTo(BigDecimal.ZERO) <= 0 ||
+                        rate.compareTo(BigDecimal.valueOf(100L)) > 0)
+                    {
+                        throw new ParseException("Invalid percentage for ANALYZE TABLE");
+                    }
+                }
+            ]
             {
-                throw new ParseException("Invalid percentage for ANALYZE TABLE");
+                if (percent == null) { percent = SqlLiteral.createExactNumeric("100.0", pos); }
+                return new SqlAnalyzeTable(pos, tableRef, estimate, fieldList, percent);
             }
-        }
+        )
+        |
+        (
+            [
+                <COLUMNS>
+                (
+                    fieldList = ParseRequiredFieldList("Table")
+                    |
+                    <NONE> {fieldList = SqlNodeList.EMPTY;}
+                )
+            ]
+            <REFRESH>
+            <METADATA>
+            [
+                level = StringLiteral()
+                <LEVEL>
+            ]
+            [
+                (
+                    <COMPUTE> { estimate = SqlLiteral.createBoolean(false, pos); }
+                    |
+                    <ESTIMATE> {
+                      if (true) {
+                        throw new ParseException("ESTIMATE statistics collecting is not supported. See DRILL-7438.");
+                      }
+                      estimate = SqlLiteral.createBoolean(true, pos);
+                    }
+                )
+                <STATISTICS>
+            ]
+            [
+                <SAMPLE> percent = UnsignedNumericLiteral() <PERCENT>
+                {
+                    BigDecimal rate = percent.bigDecimalValue();
+                    if (rate.compareTo(BigDecimal.ZERO) <= 0 ||
+                        rate.compareTo(BigDecimal.valueOf(100L)) > 0) {
+                      throw new ParseException("Invalid percentage for ANALYZE TABLE");
+                    }
+                }
+            ]
+            {
+                return new SqlMetastoreAnalyzeTable(pos, tableRef, fieldList, level, estimate, percent);
+            }
+        )
+        |
+        (
+            <DROP>
+            [
+                <METADATA> { dropMetadata = SqlLiteral.createCharString("METADATA", pos); }
+                |
+                <STATISTICS> {
+                  if (true) {
+                    throw new ParseException("DROP STATISTICS is not supported.");
+                  }
+                  dropMetadata = SqlLiteral.createCharString("STATISTICS", pos);
+                }
+            ]
+            [
+                <IF>
+                <EXISTS> { checkMetadataExistence = SqlLiteral.createBoolean(false, pos); }
+            ]
+            {
+                if (checkMetadataExistence == null) {
+                  checkMetadataExistence = SqlLiteral.createBoolean(true, pos);
+                }
+                if (s != null) {
+                  throw new ParseException("Table functions shouldn't be used in DROP METADATA statement.");
+                }
+                return new SqlDropTableMetadata(pos, (SqlIdentifier) tableRef, dropMetadata, checkMetadataExistence);
+            }
+        )
     ]
+    { throw generateParseException(); }
+}
+
+
+/**
+ * Parses a SET statement without a leading "ALTER <SCOPE>":
+ *
+ * SET &lt;NAME&gt; [ = VALUE ]
+ * <p>
+ * Statement handles in: {@link SetAndResetOptionHandler}
+ */
+DrillSqlSetOption DrillSqlSetOption(Span s, String scope) :
+{
+    SqlParserPos pos;
+    SqlIdentifier name;
+    SqlNode val = null;
+}
+{
+    <SET> {
+        s.add(this);
+    }
+    name = CompoundIdentifier()
+    (
+        <EQ>
+        (
+            val = Literal()
+        |
+            val = SimpleIdentifier()
+        )
+    )?
     {
-        if (percent == null) { percent = SqlLiteral.createExactNumeric("100.0", pos); }
-        return new SqlAnalyzeTable(pos, tblName, estimate, fieldList, percent);
+      pos = (val == null) ? s.end(name) : s.end(val);
+
+      return new DrillSqlSetOption(pos, scope, name, val);
+    }
+}
+
+/**
+ * Parses a RESET statement without a leading "ALTER <SCOPE>":
+ *
+ *  RESET { <NAME> | ALL }
+ * <p>
+ * Statement handles in: {@link SetAndResetOptionHandler}
+ */
+DrillSqlResetOption DrillSqlResetOption(Span s, String scope) :
+{
+    SqlIdentifier name;
+}
+{
+    <RESET> {
+        s.add(this);
+    }
+    (
+        name = CompoundIdentifier()
+    |
+        <ALL> {
+            name = new SqlIdentifier(token.image.toUpperCase(Locale.ROOT), getPos());
+        }
+    )
+    {
+        return new DrillSqlResetOption(s.end(name), scope, name);
     }
 }

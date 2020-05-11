@@ -17,16 +17,19 @@
  */
 package org.apache.drill.exec.store.mapr.db.json;
 
+import java.util.List;
+
+import org.apache.drill.common.FunctionNames;
 import org.apache.drill.common.expression.BooleanOperator;
 import org.apache.drill.common.expression.FunctionCall;
 import org.apache.drill.common.expression.LogicalExpression;
+import org.apache.drill.common.expression.SchemaPath;
 import org.apache.drill.common.expression.visitors.AbstractExprVisitor;
 import org.apache.drill.exec.store.hbase.DrillHBaseConstants;
 import org.ojai.Value;
 import org.ojai.store.QueryCondition;
 import org.ojai.store.QueryCondition.Op;
 
-import org.apache.drill.shaded.guava.com.google.common.collect.ImmutableList;
 import com.mapr.db.impl.MapRDBImpl;
 
 public class JsonConditionBuilder extends AbstractExprVisitor<JsonScanSpec, Void, RuntimeException> implements DrillHBaseConstants {
@@ -46,7 +49,7 @@ public class JsonConditionBuilder extends AbstractExprVisitor<JsonScanSpec, Void
   public JsonScanSpec parseTree() {
     JsonScanSpec parsedSpec = le.accept(this, null);
     if (parsedSpec != null) {
-      parsedSpec.mergeScanSpec("booleanAnd", this.groupScan.getScanSpec());
+      parsedSpec.mergeScanSpec(FunctionNames.AND, this.groupScan.getScanSpec());
     }
     return parsedSpec;
   }
@@ -54,6 +57,15 @@ public class JsonConditionBuilder extends AbstractExprVisitor<JsonScanSpec, Void
   public boolean isAllExpressionsConverted() {
     // TODO Auto-generated method stub
     return allExpressionsConverted;
+  }
+
+  @Override
+  public JsonScanSpec visitSchemaPath(SchemaPath path, Void value) throws RuntimeException {
+    String fieldPath = FieldPathHelper.schemaPath2FieldPath(path).asPathString();
+    QueryCondition cond = MapRDBImpl.newCondition().is(fieldPath, Op.EQUAL, true);
+    return new JsonScanSpec(groupScan.getTableName(),
+        groupScan.getIndexDesc(),
+        cond.build());
   }
 
   @Override
@@ -71,7 +83,7 @@ public class JsonConditionBuilder extends AbstractExprVisitor<JsonScanSpec, Void
   public JsonScanSpec visitFunctionCall(FunctionCall call, Void value) throws RuntimeException {
     JsonScanSpec nodeScanSpec = null;
     String functionName = call.getName();
-    ImmutableList<LogicalExpression> args = call.args;
+    List<LogicalExpression> args = call.args();
 
     if (CompareFunctionsProcessor.isCompareFunction(functionName)) {
       CompareFunctionsProcessor processor;
@@ -85,34 +97,34 @@ public class JsonConditionBuilder extends AbstractExprVisitor<JsonScanSpec, Void
       }
     } else {
       switch(functionName) {
-      case "booleanAnd":
-      case "booleanOr":
-        nodeScanSpec = args.get(0).accept(this, null);
-        for (int i = 1; i < args.size(); ++i) {
-          JsonScanSpec nextScanSpec = args.get(i).accept(this, null);
-          if (nodeScanSpec != null && nextScanSpec != null) {
-            nodeScanSpec.mergeScanSpec(functionName, nextScanSpec);
-          } else {
-            allExpressionsConverted = false;
-            if ("booleanAnd".equals(functionName)) {
-              nodeScanSpec = nodeScanSpec == null ? nextScanSpec : nodeScanSpec;
+        case FunctionNames.AND:
+        case FunctionNames.OR:
+          nodeScanSpec = args.get(0).accept(this, null);
+          for (int i = 1; i < args.size(); ++i) {
+            JsonScanSpec nextScanSpec = args.get(i).accept(this, null);
+            if (nodeScanSpec != null && nextScanSpec != null) {
+              nodeScanSpec.mergeScanSpec(functionName, nextScanSpec);
+            } else {
+              allExpressionsConverted = false;
+              if (FunctionNames.AND.equals(functionName)) {
+                nodeScanSpec = nodeScanSpec == null ? nextScanSpec : nodeScanSpec;
+              }
             }
           }
-        }
-        break;
+          break;
 
-      case "ojai_sizeof":
-      case "ojai_typeof":
-      case "ojai_nottypeof":
-      case "ojai_matches":
-      case "ojai_notmatches":
-      case "ojai_condition": {
-        final OjaiFunctionsProcessor processor = OjaiFunctionsProcessor.process(call);
-        if (processor != null) {
-                return new JsonScanSpec(groupScan.getTableName(), groupScan.getIndexDesc(),
-                                processor.getCondition());
+        case "ojai_sizeof":
+        case "ojai_typeof":
+        case "ojai_nottypeof":
+        case "ojai_matches":
+        case "ojai_notmatches":
+        case "ojai_condition": {
+          final OjaiFunctionsProcessor processor = OjaiFunctionsProcessor.process(call);
+          if (processor != null) {
+                  return new JsonScanSpec(groupScan.getTableName(), groupScan.getIndexDesc(),
+                                  processor.getCondition());
+          }
         }
-      }
       }
     }
 
@@ -181,57 +193,61 @@ public class JsonConditionBuilder extends AbstractExprVisitor<JsonScanSpec, Void
 
     QueryCondition cond = null;
     switch (functionName) {
-    case "equal":
+    case FunctionNames.EQ:
       cond = MapRDBImpl.newCondition();
       setIsCondition(cond, fieldPath, Op.EQUAL, fieldValue);
       break;
 
-    case "not_equal":
+    case FunctionNames.NE:
       cond = MapRDBImpl.newCondition();
       setIsCondition(cond, fieldPath, Op.NOT_EQUAL, fieldValue);
       break;
 
-    case "less_than":
+    case FunctionNames.LT:
       cond = MapRDBImpl.newCondition();
       setIsCondition(cond, fieldPath, Op.LESS, fieldValue);
       break;
 
-    case "less_than_or_equal_to":
+    case FunctionNames.LE:
       cond = MapRDBImpl.newCondition();
       setIsCondition(cond, fieldPath, Op.LESS_OR_EQUAL, fieldValue);
       break;
 
-    case "greater_than":
+    case FunctionNames.GT:
       cond = MapRDBImpl.newCondition();
       setIsCondition(cond, fieldPath, Op.GREATER, fieldValue);
       break;
 
-    case "greater_than_or_equal_to":
+    case FunctionNames.GE:
       cond = MapRDBImpl.newCondition();
       setIsCondition(cond, fieldPath, Op.GREATER_OR_EQUAL, fieldValue);
       break;
 
-    case "isnull":
-      cond = MapRDBImpl.newCondition().notExists(fieldPath);
+    case FunctionNames.IS_NULL:
+      // 'field is null' should be transformed to 'field not exists OR typeof(field) = NULL'
+      QueryCondition orCond = MapRDBImpl.newCondition().or();
+      cond = orCond.notExists(fieldPath).typeOf(fieldPath, Value.Type.NULL).close();
       break;
 
-    case "isnotnull":
-      cond = MapRDBImpl.newCondition().exists(fieldPath);
+    case FunctionNames.IS_NOT_NULL:
+      // 'field is not null should be transformed to 'field exists AND typeof(field) != NULL'
+      QueryCondition andCond = MapRDBImpl.newCondition().and();
+      cond = andCond.exists(fieldPath).notTypeOf(fieldPath, Value.Type.NULL).close();
       break;
 
-    case "istrue":
+    case FunctionNames.IS_TRUE:
       cond = MapRDBImpl.newCondition().is(fieldPath, Op.EQUAL, true);
       break;
 
-    case "isnotfalse":
+    case FunctionNames.IS_NOT_FALSE:
       cond = MapRDBImpl.newCondition().is(fieldPath, Op.NOT_EQUAL, false);
       break;
 
-    case "isfalse":
+    case FunctionNames.IS_FALSE:
       cond = MapRDBImpl.newCondition().is(fieldPath, Op.EQUAL, false);
       break;
 
-    case "isnottrue":
+    case FunctionNames.IS_NOT_TRUE:
       cond = MapRDBImpl.newCondition().is(fieldPath, Op.NOT_EQUAL, true);
       break;
 

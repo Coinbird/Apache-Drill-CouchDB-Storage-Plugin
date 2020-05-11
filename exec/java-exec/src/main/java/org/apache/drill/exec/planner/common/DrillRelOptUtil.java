@@ -17,6 +17,7 @@
  */
 package org.apache.drill.exec.planner.common;
 
+import java.io.IOException;
 import java.util.AbstractList;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -26,17 +27,16 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-import org.apache.drill.shaded.guava.com.google.common.collect.ImmutableList;
-import org.apache.drill.shaded.guava.com.google.common.collect.ImmutableMap;
-import org.apache.drill.shaded.guava.com.google.common.collect.Lists;
-import org.apache.drill.shaded.guava.com.google.common.collect.Sets;
-import org.apache.calcite.plan.hep.HepRelVertex;
+import org.apache.calcite.rex.RexFieldAccess;
+import org.apache.drill.metastore.statistics.TableStatisticsKind;
+import org.apache.drill.metastore.metadata.TableMetadata;
 import org.apache.calcite.plan.RelOptUtil;
+import org.apache.calcite.plan.hep.HepRelVertex;
 import org.apache.calcite.plan.volcano.RelSubset;
 import org.apache.calcite.rel.RelNode;
+import org.apache.calcite.rel.core.Join;
 import org.apache.calcite.rel.core.Project;
 import org.apache.calcite.rel.core.TableScan;
-import org.apache.calcite.rel.core.Join;
 import org.apache.calcite.rel.rules.ProjectRemoveRule;
 import org.apache.calcite.rel.type.RelDataType;
 import org.apache.calcite.rel.type.RelDataTypeFactory;
@@ -59,18 +59,27 @@ import org.apache.drill.common.expression.SchemaPath;
 import org.apache.drill.common.types.TypeProtos;
 import org.apache.drill.common.types.Types;
 import org.apache.drill.exec.planner.logical.DrillRelFactories;
-import org.apache.drill.exec.planner.logical.FieldsReWriterUtil;
 import org.apache.drill.exec.planner.logical.DrillTable;
+import org.apache.drill.exec.planner.logical.FieldsReWriterUtil;
 import org.apache.drill.exec.planner.logical.DrillTranslatableTable;
 import org.apache.drill.exec.planner.physical.PlannerSettings;
 import org.apache.drill.exec.resolver.TypeCastRules;
 import org.apache.drill.exec.util.Utilities;
+import org.apache.drill.shaded.guava.com.google.common.collect.ImmutableList;
+import org.apache.drill.shaded.guava.com.google.common.collect.ImmutableMap;
+import org.apache.drill.shaded.guava.com.google.common.collect.Lists;
+import org.apache.drill.shaded.guava.com.google.common.collect.Sets;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
- * Utility class that is a subset of the RelOptUtil class and is a placeholder for Drill specific
- * static methods that are needed during either logical or physical planning.
+ * Utility class that is a subset of the RelOptUtil class and is a placeholder
+ * for Drill specific static methods that are needed during either logical or
+ * physical planning.
  */
 public abstract class DrillRelOptUtil {
+
+  private static final Logger logger = LoggerFactory.getLogger(DrillRelOptUtil.class);
 
   final public static String IMPLICIT_COLUMN = "$drill_implicit_field$";
 
@@ -134,10 +143,12 @@ public abstract class DrillRelOptUtil {
     assert fieldNames.size() == fields.size();
     final List<RexNode> refs =
         new AbstractList<RexNode>() {
+          @Override
           public int size() {
             return fields.size();
           }
 
+          @Override
           public RexNode get(int index) {
             return RexInputRef.of(index, fields);
           }
@@ -213,6 +224,7 @@ public abstract class DrillRelOptUtil {
     try {
       RexVisitor<Void> visitor =
           new RexVisitorImpl<Void>(true) {
+            @Override
             public Void visitCall(RexCall call) {
               if (operators.contains(call.getOperator().getName().toLowerCase())) {
                 throw new Util.FoundOne(call); /* throw exception to interrupt tree walk (this is similar to
@@ -221,6 +233,7 @@ public abstract class DrillRelOptUtil {
               return super.visitCall(call);
             }
 
+            @Override
             public Void visitInputRef(RexInputRef inputRef) {
               if (projExprs.size() == 0 ) {
                 return super.visitInputRef(inputRef);
@@ -256,6 +269,7 @@ public abstract class DrillRelOptUtil {
           if (((long) l.getValue2()) == 0) {
             return true;
           }
+        default:
       }
     }
     return false;
@@ -288,6 +302,7 @@ public abstract class DrillRelOptUtil {
     try {
       RexVisitor<Void> visitor =
           new RexVisitorImpl<Void>(true) {
+            @Override
             public Void visitCall(RexCall call) {
               if ("convert_fromjson".equals(call.getOperator().getName().toLowerCase())) {
                 throw new Util.FoundOne(call); /* throw exception to interrupt tree walk (this is similar to
@@ -319,11 +334,13 @@ public abstract class DrillRelOptUtil {
       inputRefList = new ArrayList<>();
     }
 
+    @Override
     public Void visitInputRef(RexInputRef ref) {
       inputRefList.add(ref);
       return null;
     }
 
+    @Override
     public Void visitCall(RexCall call) {
       for (RexNode operand : call.operands) {
         operand.accept(this);
@@ -413,12 +430,12 @@ public abstract class DrillRelOptUtil {
     }
   }
 
+  @SuppressWarnings("deprecation")
   public static boolean isProjectFlatten(RelNode project) {
 
     assert project instanceof Project : "Rel is NOT an instance of project!";
 
     for (RexNode rex : project.getChildExps()) {
-      RexNode newExpr = rex;
       if (rex instanceof RexCall) {
         RexCall function = (RexCall) rex;
         String functionName = function.getOperator().getName();
@@ -506,7 +523,7 @@ public abstract class DrillRelOptUtil {
     }
 
     void addField(PathSegment segment) {
-      if (segment != null && segment instanceof PathSegment.NameSegment) {
+      if (segment instanceof PathSegment.NameSegment) {
         newFields.add(new SchemaPath((PathSegment.NameSegment) segment));
       }
     }
@@ -548,6 +565,13 @@ public abstract class DrillRelOptUtil {
       return null;
     }
 
+    @Override
+    public PathSegment visitFieldAccess(RexFieldAccess fieldAccess) {
+      PathSegment refPath = fieldAccess.getReferenceExpr().accept(this);
+      PathSegment.NameSegment fieldPath = new PathSegment.NameSegment(fieldAccess.getField().getName());
+      return refPath.cloneWithNewChild(fieldPath);
+    }
+
     private void addDesiredField(String name, RelDataType type, RexNode originalNode) {
       FieldsReWriterUtil.DesiredField desiredField = desiredFields.get(name);
       if (desiredField == null) {
@@ -584,15 +608,14 @@ public abstract class DrillRelOptUtil {
         return guessRows(((HepRelVertex) rel).getCurrentRel());
       }
     } else if (rel instanceof TableScan) {
-      DrillTable table = rel.getTable().unwrap(DrillTable.class);
-      if (table == null) {
-        table = rel.getTable().unwrap(DrillTranslatableTable.class).getDrillTable();
-      }
-      if (table != null
-          && table.getStatsTable() != null
-          && table.getStatsTable().isMaterialized()) {
-        return false;
-      } else {
+      DrillTable table = Utilities.getDrillTable(rel.getTable());
+      try {
+        TableMetadata tableMetadata;
+        return table == null
+            || (tableMetadata = table.getGroupScan().getTableMetadata()) == null
+            || !TableStatisticsKind.HAS_DESCRIPTIVE_STATISTICS.getValue(tableMetadata);
+      } catch (IOException e) {
+        logger.debug("Unable to obtain table metadata due to exception: {}", e.getMessage(), e);
         return true;
       }
     } else {
@@ -614,27 +637,27 @@ public abstract class DrillRelOptUtil {
    * */
   public static boolean analyzeSimpleEquiJoin(Join join, int[] joinFieldOrdinals) {
     RexNode joinExp = join.getCondition();
-    if(joinExp.getKind() != SqlKind.EQUALS) {
+    if (joinExp.getKind() != SqlKind.EQUALS) {
       return false;
     } else {
-      RexCall binaryExpression = (RexCall)joinExp;
-      RexNode leftComparand = (RexNode)binaryExpression.operands.get(0);
-      RexNode rightComparand = (RexNode)binaryExpression.operands.get(1);
-      if(!(leftComparand instanceof RexInputRef)) {
+      RexCall binaryExpression = (RexCall) joinExp;
+      RexNode leftComparand = binaryExpression.operands.get(0);
+      RexNode rightComparand = binaryExpression.operands.get(1);
+      if (!(leftComparand instanceof RexInputRef)) {
         return false;
-      } else if(!(rightComparand instanceof RexInputRef)) {
+      } else if (!(rightComparand instanceof RexInputRef)) {
         return false;
       } else {
         int leftFieldCount = join.getLeft().getRowType().getFieldCount();
         int rightFieldCount = join.getRight().getRowType().getFieldCount();
-        RexInputRef leftFieldAccess = (RexInputRef)leftComparand;
-        RexInputRef rightFieldAccess = (RexInputRef)rightComparand;
-        if(leftFieldAccess.getIndex() >= leftFieldCount+rightFieldCount ||
-           rightFieldAccess.getIndex() >= leftFieldCount+rightFieldCount) {
+        RexInputRef leftFieldAccess = (RexInputRef) leftComparand;
+        RexInputRef rightFieldAccess = (RexInputRef) rightComparand;
+        if (leftFieldAccess.getIndex() >= leftFieldCount + rightFieldCount ||
+            rightFieldAccess.getIndex() >= leftFieldCount + rightFieldCount) {
           return false;
         }
         /* Both columns reference same table */
-        if((leftFieldAccess.getIndex() >= leftFieldCount &&
+        if ((leftFieldAccess.getIndex() >= leftFieldCount &&
             rightFieldAccess.getIndex() >= leftFieldCount) ||
            (leftFieldAccess.getIndex() < leftFieldCount &&
             rightFieldAccess.getIndex() < leftFieldCount)) {
@@ -651,5 +674,87 @@ public abstract class DrillRelOptUtil {
         }
       }
     }
+  }
+
+  public static DrillTable getDrillTable(final TableScan scan) {
+    DrillTable drillTable = null;
+    drillTable = scan.getTable().unwrap(DrillTable.class);
+    if (drillTable == null) {
+      DrillTranslatableTable transTable = scan.getTable().unwrap(DrillTranslatableTable.class);
+      if (transTable != null) {
+        drillTable = transTable.getDrillTable();
+      }
+    }
+    return drillTable;
+  }
+
+  public static List<Pair<Integer, Integer>> analyzeSimpleEquiJoin(Join join) {
+    List<Pair<Integer, Integer>> joinConditions = new ArrayList<>();
+    try {
+      RexVisitor<Void> visitor =
+          new RexVisitorImpl<Void>(true) {
+            @Override
+            public Void visitCall(RexCall call) {
+              if (call.getKind() == SqlKind.AND || call.getKind() == SqlKind.OR) {
+                super.visitCall(call);
+              } else {
+                if (call.getKind() == SqlKind.EQUALS) {
+                  RexNode leftComparand = call.operands.get(0);
+                  RexNode rightComparand = call.operands.get(1);
+                  // If a join condition predicate has something more complicated than a RexInputRef
+                  // we bail out!
+                  if (!(leftComparand instanceof RexInputRef && rightComparand instanceof RexInputRef)) {
+                    joinConditions.clear();
+                    throw new Util.FoundOne(call);
+                  }
+                  int leftFieldCount = join.getLeft().getRowType().getFieldCount();
+                  int rightFieldCount = join.getRight().getRowType().getFieldCount();
+                  RexInputRef leftFieldAccess = (RexInputRef) leftComparand;
+                  RexInputRef rightFieldAccess = (RexInputRef) rightComparand;
+                  if (leftFieldAccess.getIndex() >= leftFieldCount + rightFieldCount ||
+                      rightFieldAccess.getIndex() >= leftFieldCount + rightFieldCount) {
+                    joinConditions.clear();
+                    throw new Util.FoundOne(call);
+                  }
+                  /* Both columns reference same table */
+                  if ((leftFieldAccess.getIndex() >= leftFieldCount &&
+                      rightFieldAccess.getIndex() >= leftFieldCount) ||
+                          (leftFieldAccess.getIndex() < leftFieldCount &&
+                              rightFieldAccess.getIndex() < leftFieldCount)) {
+                    joinConditions.clear();
+                    throw new Util.FoundOne(call);
+                  } else {
+                    if (leftFieldAccess.getIndex() < leftFieldCount) {
+                      joinConditions.add(Pair.of(leftFieldAccess.getIndex(),
+                          rightFieldAccess.getIndex() - leftFieldCount));
+                    } else {
+                      joinConditions.add(Pair.of(rightFieldAccess.getIndex(),
+                          leftFieldAccess.getIndex() - leftFieldCount));
+                    }
+                  }
+                }
+              }
+              return null;
+            }
+          };
+      join.getCondition().accept(visitor);
+    } catch (Util.FoundOne ex) {
+      Util.swallow(ex, null);
+    }
+    return joinConditions;
+  }
+
+  public static List<RexInputRef> findAllRexInputRefs(final RexNode node) {
+    List<RexInputRef> rexRefs = new ArrayList<>();
+    RexVisitor<Void> visitor =
+            new RexVisitorImpl<Void>(true) {
+              @Override
+              public Void visitInputRef(RexInputRef inputRef) {
+                rexRefs.add(inputRef);
+                return super.visitInputRef(inputRef);
+              }
+            };
+    node.accept(visitor);
+    return rexRefs;
   }
 }

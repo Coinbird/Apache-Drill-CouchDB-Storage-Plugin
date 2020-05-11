@@ -28,10 +28,12 @@ import org.apache.drill.exec.physical.config.Filter;
 import org.apache.drill.exec.physical.config.UnionAll;
 import org.apache.drill.exec.record.BatchSchema;
 import org.apache.drill.exec.record.RecordBatch;
+import org.apache.drill.exec.record.BatchSchemaBuilder;
 import org.apache.drill.exec.record.metadata.SchemaBuilder;
 import org.apache.drill.exec.store.dfs.DrillFileSystem;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
+import org.apache.hadoop.fs.Path;
 import org.junit.BeforeClass;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
@@ -59,15 +61,17 @@ public class TestMiniPlan extends MiniPlanUnitTestBase {
   @Test
   public void testSimpleParquetScan() throws Exception {
     String file = DrillFileUtils.getResourceAsFile("/tpchmulti/region/01.parquet").toURI().toString();
-
+    List<Path> filePath = Collections.singletonList(new Path(file));
     RecordBatch scanBatch = new ParquetScanBuilder()
         .fileSystem(fs)
         .columnsToRead("R_REGIONKEY")
-        .inputPaths(Lists.newArrayList(file))
+        .inputPaths(filePath)
         .build();
 
-    BatchSchema expectedSchema = new SchemaBuilder()
-        .add("R_REGIONKEY", TypeProtos.MinorType.BIGINT)
+    SchemaBuilder schemaBuilder = new SchemaBuilder()
+        .add("R_REGIONKEY", TypeProtos.MinorType.BIGINT);
+    BatchSchema expectedSchema = new BatchSchemaBuilder()
+        .withSchemaBuilder(schemaBuilder)
         .build();
 
     new MiniPlanTestBuilder()
@@ -88,8 +92,10 @@ public class TestMiniPlan extends MiniPlanUnitTestBase {
         .jsonBatches(jsonBatches)
         .build();
 
-    BatchSchema expectedSchema = new SchemaBuilder()
-        .addNullable("a", TypeProtos.MinorType.BIGINT)
+    SchemaBuilder schemaBuilder = new SchemaBuilder()
+        .addNullable("a", TypeProtos.MinorType.BIGINT);
+    BatchSchema expectedSchema = new BatchSchemaBuilder()
+        .withSchemaBuilder(schemaBuilder)
         .build();
 
     new MiniPlanTestBuilder()
@@ -128,9 +134,11 @@ public class TestMiniPlan extends MiniPlanUnitTestBase {
           .buildAddAsInput()
         .build();
 
-    BatchSchema expectedSchema = new SchemaBuilder()
+    SchemaBuilder schemaBuilder = new SchemaBuilder()
         .addNullable("a", TypeProtos.MinorType.BIGINT)
-        .addNullable("b", TypeProtos.MinorType.BIGINT)
+        .addNullable("b", TypeProtos.MinorType.BIGINT);
+    BatchSchema expectedSchema = new BatchSchemaBuilder()
+        .withSchemaBuilder(schemaBuilder)
         .withSVMode(BatchSchema.SelectionVectorMode.NONE)
         .build();
 

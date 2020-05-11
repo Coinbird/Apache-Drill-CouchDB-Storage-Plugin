@@ -17,12 +17,16 @@
  */
 package org.apache.drill.exec.store.parquet.columnreaders;
 
+import org.apache.drill.categories.ParquetTest;
+import org.apache.drill.categories.UnlikelyTest;
 import org.apache.drill.test.BaseTestQuery;
 import org.apache.drill.exec.planner.physical.PlannerSettings;
 import org.junit.AfterClass;
 import org.junit.BeforeClass;
 import org.junit.Test;
+import org.junit.experimental.categories.Category;
 
+@Category({ParquetTest.class, UnlikelyTest.class})
 public class TestColumnReaderFactory extends BaseTestQuery {
 
   @BeforeClass
@@ -93,20 +97,5 @@ public class TestColumnReaderFactory extends BaseTestQuery {
 
     // query parquet file. We shouldn't get any exception
     testNoResult("SELECT * FROM cp.`parquet/decimal_nodictionary.parquet`");
-  }
-
-  /**
-   * check if BigInt is read correctly with dictionary encoding.
-   */
-  @Test
-  public void testBigIntWithDictionary() throws Exception {
-    String query = "select sum(ts) as total from cp.`parquet/bigIntDictionary.parquet`";
-
-    testBuilder()
-    .sqlQuery(query)
-    .ordered()
-    .baselineColumns("total")
-    .baselineValues(190928593476806865L)
-    .build().run();
   }
 }

@@ -46,6 +46,8 @@ import org.apache.drill.exec.physical.impl.TopN.TopNBatch;
 import org.apache.drill.exec.physical.impl.partitionsender.PartitionSenderRootExec.Metric;
 import org.apache.drill.exec.physical.impl.partitionsender.PartitionerDecorator.GeneralExecuteIface;
 import org.apache.drill.exec.planner.PhysicalPlanReader;
+import org.apache.drill.exec.planner.cost.PrelCostEstimates;
+import org.apache.drill.exec.planner.fragment.DefaultQueryParallelizer;
 import org.apache.drill.exec.planner.fragment.Fragment;
 import org.apache.drill.exec.planner.fragment.PlanningSet;
 import org.apache.drill.exec.planner.fragment.SimpleParallelizer;
@@ -86,7 +88,8 @@ import org.apache.drill.shaded.guava.com.google.common.collect.Lists;
 @Category(OperatorTest.class)
 public class TestPartitionSender extends PlanTestBase {
 
-  private static final SimpleParallelizer PARALLELIZER = new SimpleParallelizer(
+  private static final SimpleParallelizer PARALLELIZER = new DefaultQueryParallelizer(
+      true,
       1 /*parallelizationThreshold (slice_count)*/,
       6 /*maxWidthPerNode*/,
       1000 /*maxGlobalWidth*/,
@@ -137,7 +140,7 @@ public class TestPartitionSender extends PlanTestBase {
     final SelectionVector4 sv = Mockito.mock(SelectionVector4.class, "SelectionVector4");
     Mockito.when(sv.getCount()).thenReturn(100);
     Mockito.when(sv.getTotalCount()).thenReturn(100);
-    for (int i = 0; i < 100; i++ ) {
+    for (int i = 0; i < 100; i++) {
       Mockito.when(sv.get(i)).thenReturn(i);
     }
 
@@ -162,8 +165,8 @@ public class TestPartitionSender extends PlanTestBase {
 
     // get HashToRandomExchange physical operator
     HashToRandomExchange hashToRandomExchange = null;
-    for ( PhysicalOperator operator : operators) {
-      if ( operator instanceof HashToRandomExchange) {
+    for (PhysicalOperator operator : operators) {
+      if (operator instanceof HashToRandomExchange) {
         hashToRandomExchange = (HashToRandomExchange) operator;
         break;
       }
@@ -178,14 +181,14 @@ public class TestPartitionSender extends PlanTestBase {
     options.clear();
     options.add(OptionValue.create(AccessibleScopes.SESSION, "planner.slice_target", 1, OptionScope.SESSION));
     options.add(OptionValue.create(OptionValue.AccessibleScopes.SESSION, "planner.partitioner_sender_max_threads", 10, OptionScope.SESSION));
-    hashToRandomExchange.setCost(1000);
+    hashToRandomExchange.setCost(new PrelCostEstimates(1000, 1000));
     testThreadsHelper(hashToRandomExchange, drillbitContext, options,
         incoming, registry, planReader, planningSet, rootFragment, 10);
 
     options.clear();
     options.add(OptionValue.create(AccessibleScopes.SESSION, "planner.slice_target", 1000, OptionScope.SESSION));
     options.add(OptionValue.create(AccessibleScopes.SESSION, "planner.partitioner_sender_threads_factor",2, OptionScope.SESSION));
-    hashToRandomExchange.setCost(14000);
+    hashToRandomExchange.setCost(new PrelCostEstimates(14000, 14000));
     testThreadsHelper(hashToRandomExchange, drillbitContext, options,
         incoming, registry, planReader, planningSet, rootFragment, 2);
   }
@@ -207,9 +210,8 @@ public class TestPartitionSender extends PlanTestBase {
       RecordBatch incoming, FunctionImplementationRegistry registry, PhysicalPlanReader planReader, PlanningSet planningSet, Fragment rootFragment,
       int expectedThreadsCount) throws Exception {
 
-    final QueryContextInformation queryContextInfo = Utilities.createQueryContextInfo("dummySchemaName",
-        "938ea2d9-7cb9-4baf-9414-a5a0b7777e8e");
-    final QueryWorkUnit qwu = PARALLELIZER.getFragments(options, drillbitContext.getEndpoint(),
+    final QueryContextInformation queryContextInfo = Utilities.createQueryContextInfo("dummySchemaName", "938ea2d9-7cb9-4baf-9414-a5a0b7777e8e");
+    final QueryWorkUnit qwu = PARALLELIZER.generateWorkUnit(options, drillbitContext.getEndpoint(),
         QueryId.getDefaultInstance(),
         drillbitContext.getBits(), rootFragment, USER_SESSION, queryContextInfo);
     qwu.applyPlan(planReader);
@@ -239,7 +241,7 @@ public class TestPartitionSender extends PlanTestBase {
         final int actualThreads = DRILLBITS_COUNT > expectedThreadsCount ? expectedThreadsCount : DRILLBITS_COUNT;
         assertEquals("Number of partitioners", actualThreads, partitioners.size());
 
-        for ( int i = 0; i < mfEndPoints.size(); i++) {
+        for (int i = 0; i < mfEndPoints.size(); i++) {
           assertNotNull("PartitionOutgoingBatch", partDecor.getOutgoingBatches(i));
         }
 
@@ -247,10 +249,11 @@ public class TestPartitionSender extends PlanTestBase {
         boolean isFirst = true;
         int prevBatchCountSize = 0;
         int batchCountSize = 0;
-        for (Partitioner part : partitioners ) {
+        for (Partitioner part : partitioners) {
+          @SuppressWarnings("unchecked")
           final List<PartitionOutgoingBatch> outBatch = (List<PartitionOutgoingBatch>) part.getOutgoingBatches();
           batchCountSize = outBatch.size();
-          if ( !isFirst ) {
+          if (!isFirst) {
             assertTrue(Math.abs(batchCountSize - prevBatchCountSize) <= 1);
           } else {
             isFirst = false;
@@ -264,7 +267,7 @@ public class TestPartitionSender extends PlanTestBase {
         } finally {
           partionSenderRootExec.getStats().stopProcessing();
         }
-        if ( actualThreads == 1 ) {
+        if (actualThreads == 1) {
           assertEquals("With single thread parent and child waitNanos should match", partitioners.get(0).getStats().getWaitNanos(), partionSenderRootExec.getStats().getWaitNanos());
         }
 
@@ -272,11 +275,12 @@ public class TestPartitionSender extends PlanTestBase {
         partitioners = partDecor.getPartitioners();
         isFirst = true;
         // since we have fake Nullvector distribution is skewed
-        for (Partitioner part : partitioners ) {
+        for (Partitioner part : partitioners) {
+          @SuppressWarnings("unchecked")
           final List<PartitionOutgoingBatch> outBatches = (List<PartitionOutgoingBatch>) part.getOutgoingBatches();
-          for (PartitionOutgoingBatch partOutBatch : outBatches ) {
+          for (PartitionOutgoingBatch partOutBatch : outBatches) {
             final int recordCount = ((VectorAccessible) partOutBatch).getRecordCount();
-            if ( isFirst ) {
+            if (isFirst) {
               assertEquals("RecordCount", 100, recordCount);
               isFirst = false;
             } else {
@@ -294,8 +298,8 @@ public class TestPartitionSender extends PlanTestBase {
           final OperatorProfile.Builder oPBuilder = OperatorProfile.newBuilder();
           partionSenderRootExec.getStats().addAllMetrics(oPBuilder);
           final List<MetricValue> metrics = oPBuilder.getMetricList();
-          for ( MetricValue metric : metrics) {
-            if ( Metric.BYTES_SENT.metricId() == metric.getMetricId() ) {
+          for (MetricValue metric : metrics) {
+            if (Metric.BYTES_SENT.metricId() == metric.getMetricId()) {
               assertEquals("Should add metricValue irrespective of exception", 5*actualThreads, metric.getLongValue());
             }
             if (Metric.SENDING_THREADS_COUNT.metricId() == metric.getMetricId()) {
@@ -325,7 +329,7 @@ public class TestPartitionSender extends PlanTestBase {
     int numberPartitions;
     int k = 0;
     final Random rand = new Random();
-    while ( k < 1000 ) {
+    while (k < 1000) {
       outGoingBatchCount = rand.nextInt(1000)+1;
       numberPartitions = rand.nextInt(32)+1;
       final int actualPartitions = outGoingBatchCount > numberPartitions ? numberPartitions : outGoingBatchCount;
@@ -337,11 +341,11 @@ public class TestPartitionSender extends PlanTestBase {
       for (int i = 0; i < actualPartitions; i++) {
         startIndex = endIndex;
         endIndex = startIndex + divisor;
-        if ( i < longTail ) {
+        if (i < longTail) {
           endIndex++;
         }
       }
-      assertTrue("endIndex can not be > outGoingBatchCount", endIndex == outGoingBatchCount );
+      assertTrue("endIndex can not be > outGoingBatchCount", endIndex == outGoingBatchCount);
       k++;
     }
   }

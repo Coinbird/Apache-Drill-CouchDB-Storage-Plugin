@@ -15,17 +15,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-import org.apache.drill.common.types.TypeProtos.DataMode;
-import org.apache.drill.exec.memory.AllocationManager.BufferLedger;
-import org.apache.drill.exec.record.MaterializedField;
-import org.apache.drill.exec.util.DecimalUtility;
-import org.apache.drill.exec.vector.BaseDataValueVector;
-import org.apache.drill.exec.vector.NullableVectorDefinitionSetter;
-
-import java.lang.Override;
-import java.lang.UnsupportedOperationException;
-import java.util.Set;
-
 <@pp.dropOutputFile />
 <#list vv.types as type>
 <#list type.minor as minor>
@@ -41,6 +30,7 @@ import java.util.Set;
 package org.apache.drill.exec.vector;
 
 <#include "/@includes/vv_imports.ftl" />
+import org.apache.drill.shaded.guava.com.google.common.annotations.VisibleForTesting;
 
 /**
  * Nullable${minor.class} implements a vector of values which could be null.  Elements in the vector
@@ -92,20 +82,20 @@ public final class ${className} extends BaseDataValueVector implements <#if type
   }
 
   @Override
-  public FieldReader getReader(){
+  public FieldReader getReader() {
     return reader;
   }
 
   @Override
-  public int getValueCapacity(){
+  public int getValueCapacity() {
     return Math.min(bits.getValueCapacity(), values.getValueCapacity());
   }
 
   @Override
   public DrillBuf[] getBuffers(boolean clear) {
-    final DrillBuf[] buffers = ObjectArrays.concat(bits.getBuffers(false), values.getBuffers(false), DrillBuf.class);
+    DrillBuf[] buffers = ObjectArrays.concat(bits.getBuffers(false), values.getBuffers(false), DrillBuf.class);
     if (clear) {
-      for (final DrillBuf buffer:buffers) {
+      for (DrillBuf buffer:buffers) {
         buffer.retain(1);
       }
       clear();
@@ -128,12 +118,12 @@ public final class ${className} extends BaseDataValueVector implements <#if type
   }
 
   @Override
-  public int getBufferSize(){
+  public int getBufferSize() {
     return values.getBufferSize() + bits.getBufferSize();
   }
 
   @Override
-  public int getBufferSizeFor(final int valueCount) {
+  public int getBufferSizeFor(int valueCount) {
     if (valueCount == 0) {
       return 0;
     }
@@ -143,7 +133,7 @@ public final class ${className} extends BaseDataValueVector implements <#if type
   }
 
   @Override
-  public int getAllocatedSize(){
+  public int getAllocatedSize() {
     return bits.getAllocatedSize() + values.getAllocatedSize();
   }
 
@@ -180,7 +170,7 @@ public final class ${className} extends BaseDataValueVector implements <#if type
 
   @Override
   public void allocateNew() {
-    if(!allocateNewSafe()){
+    if (!allocateNewSafe()) {
       throw new OutOfMemoryException("Failure while allocating buffer.");
     }
   }
@@ -198,6 +188,7 @@ public final class ${className} extends BaseDataValueVector implements <#if type
     } finally {
       if (!success) {
         clear();
+        return false;
       }
     }
     bits.zeroVector();
@@ -226,7 +217,7 @@ public final class ${className} extends BaseDataValueVector implements <#if type
 
   <#if type.major != "VarLen">
   @Override
-  public int getValueWidth(){
+  public int getValueWidth() {
     return bits.getValueWidth() + ${type.width};
   }
   </#if>
@@ -255,12 +246,12 @@ public final class ${className} extends BaseDataValueVector implements <#if type
   }
 
   @Override
-  public int getByteCapacity(){
+  public int getByteCapacity() {
     return values.getByteCapacity();
   }
 
   @Override
-  public int getCurrentSizeInBytes(){
+  public int getCurrentSizeInBytes() {
     return values.getCurrentSizeInBytes();
   }
 
@@ -301,22 +292,31 @@ public final class ${className} extends BaseDataValueVector implements <#if type
   public void load(SerializedField metadata, DrillBuf buffer) {
     clear();
     // the bits vector is the first child (the order in which the children are added in getMetadataBuilder is significant)
-    final SerializedField bitsField = metadata.getChild(0);
+    SerializedField bitsField = metadata.getChild(0);
     bits.load(bitsField, buffer);
 
-    final int capacity = buffer.capacity();
-    final int bitsLength = bitsField.getBufferLength();
-    final SerializedField valuesField = metadata.getChild(1);
+    int capacity = buffer.capacity();
+    int bitsLength = bitsField.getBufferLength();
+    SerializedField valuesField = metadata.getChild(1);
     values.load(valuesField, buffer.slice(bitsLength, capacity - bitsLength));
+    <#if type.major == "VarLen">
+
+    // Though a loaded vector should be read only,
+    // it can have its values set such as when copying
+    // with transfer pairs. Since lastSet is used when
+    // setting values, it must be set on vector load.
+
+    mutator.lastSet = accessor.getValueCount() - 1;
+    </#if>
   }
 
   @Override
-  public TransferPair getTransferPair(BufferAllocator allocator){
+  public TransferPair getTransferPair(BufferAllocator allocator) {
     return new TransferImpl(getField(), allocator);
   }
 
   @Override
-  public TransferPair getTransferPair(String ref, BufferAllocator allocator){
+  public TransferPair getTransferPair(String ref, BufferAllocator allocator) {
     return new TransferImpl(getField().withPath(ref), allocator);
   }
 
@@ -325,7 +325,7 @@ public final class ${className} extends BaseDataValueVector implements <#if type
     return new TransferImpl((Nullable${minor.class}Vector) to);
   }
 
-  public void transferTo(Nullable${minor.class}Vector target){
+  public void transferTo(Nullable${minor.class}Vector target) {
     bits.transferTo(target.bits);
     values.transferTo(target.values);
     <#if type.major == "VarLen">
@@ -345,21 +345,21 @@ public final class ${className} extends BaseDataValueVector implements <#if type
   private class TransferImpl implements TransferPair {
     private final Nullable${minor.class}Vector to;
 
-    public TransferImpl(MaterializedField field, BufferAllocator allocator){
+    public TransferImpl(MaterializedField field, BufferAllocator allocator) {
       to = new Nullable${minor.class}Vector(field, allocator);
     }
 
-    public TransferImpl(Nullable${minor.class}Vector to){
+    public TransferImpl(Nullable${minor.class}Vector to) {
       this.to = to;
     }
 
     @Override
-    public Nullable${minor.class}Vector getTo(){
+    public Nullable${minor.class}Vector getTo() {
       return to;
     }
 
     @Override
-    public void transfer(){
+    public void transfer() {
       transferTo(to);
     }
 
@@ -384,7 +384,7 @@ public final class ${className} extends BaseDataValueVector implements <#if type
     return mutator;
   }
 
-  public ${minor.class}Vector convertToRequiredVector(){
+  public ${minor.class}Vector convertToRequiredVector() {
     ${minor.class}Vector v = new ${minor.class}Vector(getField().getOtherNullableVersion(), allocator);
     if (v.data != null) {
       v.data.release(1);
@@ -402,14 +402,14 @@ public final class ${className} extends BaseDataValueVector implements <#if type
     return bits.getValueCapacity();
   }
 
-  public void copyFrom(int fromIndex, int thisIndex, Nullable${minor.class}Vector from){
-    final Accessor fromAccessor = from.getAccessor();
+  public void copyFrom(int fromIndex, int thisIndex, Nullable${minor.class}Vector from) {
+    Accessor fromAccessor = from.getAccessor();
     if (!fromAccessor.isNull(fromIndex)) {
       mutator.set(thisIndex, fromAccessor.get(fromIndex));
     }
   }
 
-  public void copyFromSafe(int fromIndex, int thisIndex, ${minor.class}Vector from){
+  public void copyFromSafe(int fromIndex, int thisIndex, ${minor.class}Vector from) {
     <#if type.major == "VarLen">
     mutator.fillEmpties(thisIndex);
     </#if>
@@ -417,7 +417,7 @@ public final class ${className} extends BaseDataValueVector implements <#if type
     bits.getMutator().setSafe(thisIndex, 1);
   }
 
-  public void copyFromSafe(int fromIndex, int thisIndex, Nullable${minor.class}Vector from){
+  public void copyFromSafe(int fromIndex, int thisIndex, Nullable${minor.class}Vector from) {
     <#if type.major == "VarLen">
     mutator.fillEmpties(thisIndex);
     </#if>
@@ -428,6 +428,10 @@ public final class ${className} extends BaseDataValueVector implements <#if type
   @Override
   public void copyEntry(int toIndex, ValueVector from, int fromIndex) {
     <#if type.major == "VarLen">
+
+    // Called by HashJoinBatch for OUTER joins; may skip values,
+    // so must fill empties.
+
     mutator.fillEmpties(toIndex);
     </#if>
 
@@ -439,12 +443,6 @@ public final class ${className} extends BaseDataValueVector implements <#if type
     }
 
     Nullable${minor.class}Vector fromVector = (Nullable${minor.class}Vector) from;
-    <#if type.major == "VarLen">
-
-    // This method is to be called only for loading the vector
-    // sequentially, so there should be no empties to fill.
-
-    </#if>
     bits.copyFromSafe(fromIndex, toIndex, fromVector.bits);
     values.copyFromSafe(fromIndex, toIndex, fromVector.values);
   }
@@ -488,12 +486,12 @@ public final class ${className} extends BaseDataValueVector implements <#if type
       return isSet(index) == 0;
     }
 
-    public int isSet(int index){
+    public int isSet(int index) {
       return bAccessor.get(index);
     }
 
     <#if type.major == "VarLen">
-    public long getStartEnd(int index){
+    public long getStartEnd(int index) {
       return vAccessor.getStartEnd(index);
     }
 
@@ -503,7 +501,7 @@ public final class ${className} extends BaseDataValueVector implements <#if type
     }
 
     </#if>
-    public void get(int index, Nullable${minor.class}Holder holder){
+    public void get(int index, Nullable${minor.class}Holder holder) {
       vAccessor.get(index, holder);
       holder.isSet = bAccessor.get(index);
 
@@ -540,18 +538,19 @@ public final class ${className} extends BaseDataValueVector implements <#if type
     public void reset() {}
   }
 
-  public final class Mutator extends BaseDataValueVector.BaseMutator implements NullableVectorDefinitionSetter<#if type.major = "VarLen">, VariableWidthVector.VariableWidthMutator</#if> {
-    private int setCount;
+  public final class Mutator extends BaseDataValueVector.BaseMutator
+      implements NullableVectorDefinitionSetter<#if type.major = "VarLen">, VariableWidthVector.VariableWidthMutator</#if>,
+                 NullableVector.Mutator {
     <#if type.major = "VarLen">private int lastSet = -1;</#if>
 
     private Mutator() { }
 
-    public ${valuesName} getVectorWithValues(){
+    public ${valuesName} getVectorWithValues() {
       return values;
     }
 
     @Override
-    public void setIndexDefined(int index){
+    public void setIndexDefined(int index) {
       bits.getMutator().set(index, 1);
     }
 
@@ -575,9 +574,8 @@ public final class ${className} extends BaseDataValueVector implements <#if type
      */
 
     public void set(int index, <#if type.major == "VarLen">byte[]<#elseif (type.width < 4)>int<#else>${minor.javaType!type.javaType}</#if> value) {
-      setCount++;
-      final ${valuesName}.Mutator valuesMutator = values.getMutator();
-      final UInt1Vector.Mutator bitsMutator = bits.getMutator();
+      ${valuesName}.Mutator valuesMutator = values.getMutator();
+      UInt1Vector.Mutator bitsMutator = bits.getMutator();
       <#if type.major == "VarLen">
       valuesMutator.fillEmpties(lastSet, index);
       </#if>
@@ -587,12 +585,24 @@ public final class ${className} extends BaseDataValueVector implements <#if type
     }
 
     <#if type.major == "VarLen">
-    private void fillEmpties(int index) {
-      final ${valuesName}.Mutator valuesMutator = values.getMutator();
-      valuesMutator.fillEmpties(lastSet, index+1);
-      while(index > bits.getValueCapacity()) {
+    /**
+     * Fill in missing values up to, but not including, the given
+     * index.
+     *
+     * @param index the index about to be written, or the total
+     * vector length about to be set
+     */
+
+    @VisibleForTesting
+    protected void fillEmpties(int index) {
+      values.getMutator().fillEmpties(lastSet, index);
+      while (index > bits.getValueCapacity()) {
         bits.reAlloc();
       }
+
+      // Set last set to the given index; which the caller
+      // will write to
+
       lastSet = index;
     }
 
@@ -609,7 +619,6 @@ public final class ${className} extends BaseDataValueVector implements <#if type
 
       bits.getMutator().setSafe(index, 1);
       values.getMutator().setSafe(index, value, start, length);
-      setCount++;
       lastSet = index;
     }
 
@@ -620,7 +629,6 @@ public final class ${className} extends BaseDataValueVector implements <#if type
 
       bits.getMutator().setSafe(index, 1);
       values.getMutator().setSafe(index, value, start, length);
-      setCount++;
       lastSet = index;
     }
 
@@ -638,7 +646,7 @@ public final class ${className} extends BaseDataValueVector implements <#if type
     }
 
     public void set(int index, Nullable${minor.class}Holder holder) {
-      final ${valuesName}.Mutator valuesMutator = values.getMutator();
+      ${valuesName}.Mutator valuesMutator = values.getMutator();
       <#if type.major == "VarLen">
       valuesMutator.fillEmpties(lastSet, index);
       </#if>
@@ -648,7 +656,7 @@ public final class ${className} extends BaseDataValueVector implements <#if type
     }
 
     public void set(int index, ${minor.class}Holder holder) {
-      final ${valuesName}.Mutator valuesMutator = values.getMutator();
+      ${valuesName}.Mutator valuesMutator = values.getMutator();
       <#if type.major == "VarLen">
       valuesMutator.fillEmpties(lastSet, index);
       </#if>
@@ -663,7 +671,7 @@ public final class ${className} extends BaseDataValueVector implements <#if type
 
     <#assign fields = minor.fields!type.fields />
     public void set(int index, int isSet<#list fields as field><#if field.include!true >, ${field.type} ${field.name}Field</#if></#list> ) {
-      final ${valuesName}.Mutator valuesMutator = values.getMutator();
+      ${valuesName}.Mutator valuesMutator = values.getMutator();
       <#if type.major == "VarLen">
       valuesMutator.fillEmpties(lastSet, index);
       </#if>
@@ -680,7 +688,6 @@ public final class ${className} extends BaseDataValueVector implements <#if type
       </#if>
       bits.getMutator().setSafe(index, isSet);
       values.getMutator().setSafe(index<#list fields as field><#if field.include!true >, ${field.name}Field</#if></#list>);
-      setCount++;
       <#if type.major == "VarLen">lastSet = index;</#if>
     }
 
@@ -692,7 +699,6 @@ public final class ${className} extends BaseDataValueVector implements <#if type
       </#if>
       bits.getMutator().setSafe(index, value.isSet);
       values.getMutator().setSafe(index, value);
-      setCount++;
       <#if type.major == "VarLen">lastSet = index;</#if>
     }
 
@@ -704,7 +710,6 @@ public final class ${className} extends BaseDataValueVector implements <#if type
       </#if>
       bits.getMutator().setSafe(index, 1);
       values.getMutator().setSafe(index, value);
-      setCount++;
       <#if type.major == "VarLen">lastSet = index;</#if>
     }
 
@@ -717,7 +722,6 @@ public final class ${className} extends BaseDataValueVector implements <#if type
       </#if>
       bits.getMutator().setSafe(index, 1);
       values.getMutator().setSafe(index, value);
-      setCount++;
     }
 
     </#if>
@@ -730,7 +734,6 @@ public final class ${className} extends BaseDataValueVector implements <#if type
       </#if>
       bits.getMutator().set(index, 1);
       values.getMutator().set(index, value);
-      setCount++;
       <#if type.major == "VarLen">lastSet = index;</#if>
     }
 
@@ -742,7 +745,6 @@ public final class ${className} extends BaseDataValueVector implements <#if type
       </#if>
       bits.getMutator().setSafe(index, 1);
       values.getMutator().setSafe(index, value);
-      setCount++;
       <#if type.major == "VarLen">lastSet = index;</#if>
     }
 
@@ -752,10 +754,15 @@ public final class ${className} extends BaseDataValueVector implements <#if type
       assert valueCount >= 0;
       <#if type.major == "VarLen">
       fillEmpties(valueCount);
+      // fillEmpties assumes we will write to the valueCount
+      // position, but we've actually only written the previous
+      // value.
+      lastSet = valueCount - 1;
       </#if>
       values.getMutator().setValueCount(valueCount);
       bits.getMutator().setValueCount(valueCount);
     }
+
     <#if type.major == "VarLen">
     /** Enables this wrapper container class to participate in bulk mutator logic */
     private final class VarLenBulkInputCallbackImpl implements VarLenBulkInput.BulkInputCallback<VarLenBulkEntry> {
@@ -770,10 +777,10 @@ public final class ${className} extends BaseDataValueVector implements <#if type
 
       /** {@inheritDoc} */
       @Override
-      public void onNewBulkEntry(final VarLenBulkEntry entry) {
-        final int[] lengths = entry.getValuesLength();
-        final ByteBuffer buffer = bitsMutator.getByteBuffer();
-        final byte[] bufferArray = buffer.array();
+      public void onNewBulkEntry(VarLenBulkEntry entry) {
+        int[] lengths = entry.getValuesLength();
+        ByteBuffer buffer = bitsMutator.getByteBuffer();
+        byte[] bufferArray = buffer.array();
         int remaining = entry.getNumValues();
         int srcPos = 0;
 
@@ -784,17 +791,16 @@ public final class ${className} extends BaseDataValueVector implements <#if type
             bitsMutator.flush();
           }
 
-          final int toCopy      = Math.min(remaining, buffer.remaining());
-          final int startTgtPos = buffer.position();
-          final int maxTgtPos   = startTgtPos + toCopy;
+          int toCopy      = Math.min(remaining, buffer.remaining());
+          int startTgtPos = buffer.position();
+          int maxTgtPos   = startTgtPos + toCopy;
 
           if (entry.hasNulls()) {
             for (int idx = startTgtPos; idx < maxTgtPos; idx++) {
-              final int valLen = lengths[srcPos++];
+              int valLen = lengths[srcPos++];
 
               if (valLen >= 0) {
                 bufferArray[idx] = 1;
-                ++setCount;
               } else {
                 // This is a null entry
                 bufferArray[idx] = 0;
@@ -804,7 +810,6 @@ public final class ${className} extends BaseDataValueVector implements <#if type
             for (int idx = startTgtPos; idx < maxTgtPos; idx++) {
               bufferArray[idx] = 1;
             }
-            setCount += toCopy;
           }
 
           // Update counters
@@ -836,7 +841,7 @@ public final class ${className} extends BaseDataValueVector implements <#if type
 
     </#if>
     @Override
-    public void generateTestData(int valueCount){
+    public void generateTestData(int valueCount) {
       bits.getMutator().generateTestDataAlt(valueCount);
       values.getMutator().generateTestData(valueCount);
       <#if type.major = "VarLen">lastSet = valueCount;</#if>
@@ -844,9 +849,18 @@ public final class ${className} extends BaseDataValueVector implements <#if type
     }
 
     @Override
-    public void reset(){
-      setCount = 0;
+    public void reset() {
       <#if type.major = "VarLen">lastSet = -1;</#if>
+    }
+
+    <#if type.major = "VarLen">
+    @VisibleForTesting
+    public int getLastSet() { return lastSet; }
+
+    </#if>
+    @Override
+    public void setSetCount(int n) {
+      <#if type.major = "VarLen">lastSet = n - 1;</#if>
     }
 
     // For nullable vectors, exchanging buffers (done elsewhere)
@@ -854,15 +868,17 @@ public final class ${className} extends BaseDataValueVector implements <#if type
 
     @Override
     public void exchange(ValueVector.Mutator other) {
-      final Mutator target = (Mutator) other;
-      int temp = setCount;
-      setCount = target.setCount;
-      target.setCount = temp;
+      <#if type.major == "VarLen">
+      Mutator target = (Mutator) other;
+      int temp = lastSet;
+      lastSet = target.lastSet;
+      target.lastSet = temp;
+      </#if>
     }
 
     public void fromNotNullable(${minor.class}Vector srce) {
       clear();
-      final int valueCount = srce.getAccessor().getValueCount();
+      int valueCount = srce.getAccessor().getValueCount();
 
       // Create a new bits vector, all values non-null
 

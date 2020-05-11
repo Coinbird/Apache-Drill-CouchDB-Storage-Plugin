@@ -23,7 +23,6 @@ import java.util.LinkedList;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 
-import org.apache.drill.shaded.guava.com.google.common.annotations.VisibleForTesting;
 import org.apache.drill.common.AutoCloseables;
 import org.apache.drill.common.exceptions.ExecutionSetupException;
 import org.apache.drill.exec.ExecConstants;
@@ -35,29 +34,33 @@ import org.apache.drill.exec.record.CloseableRecordBatch;
 import org.apache.drill.exec.record.RecordBatch;
 import org.apache.drill.exec.util.AssertionUtil;
 import org.apache.drill.exec.util.ImpersonationUtil;
-import org.apache.hadoop.security.UserGroupInformation;
-
+import org.apache.drill.shaded.guava.com.google.common.annotations.VisibleForTesting;
 import org.apache.drill.shaded.guava.com.google.common.base.Preconditions;
 import org.apache.drill.shaded.guava.com.google.common.base.Stopwatch;
 import org.apache.drill.shaded.guava.com.google.common.collect.Lists;
+import org.apache.hadoop.security.UserGroupInformation;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
- * Create RecordBatch tree (PhysicalOperator implementations) for a given PhysicalOperator tree.
+ * Create RecordBatch tree (PhysicalOperator implementations) for a given
+ * PhysicalOperator tree.
  */
 public class ImplCreator {
-  private static final org.slf4j.Logger logger = org.slf4j.LoggerFactory.getLogger(ImplCreator.class);
+  private static final Logger logger = LoggerFactory.getLogger(ImplCreator.class);
 
   private final LinkedList<CloseableRecordBatch> operators = Lists.newLinkedList();
 
-  private ImplCreator() {}
+  private ImplCreator() { }
 
   private List<CloseableRecordBatch> getOperators() {
     return operators;
   }
 
   /**
-   * Create and return fragment RootExec for given FragmentRoot. RootExec has one or more RecordBatches as children
-   * (which may contain child RecordBatches and so on).
+   * Create and return fragment RootExec for given FragmentRoot. RootExec has
+   * one or more RecordBatches as children (which may contain child
+   * RecordBatches and so on).
    *
    * @param context
    *          FragmentContext.
@@ -104,8 +107,10 @@ public class ImplCreator {
     return null;
   }
 
-  /** Create RootExec and its children (RecordBatches) for given FragmentRoot */
-
+  /**
+   * Create RootExec and its children (RecordBatches) for given FragmentRoot
+   */
+  @SuppressWarnings("unchecked")
   private RootExec getRootExec(final FragmentRoot root, final ExecutorFragmentContext context) throws ExecutionSetupException {
     final List<RecordBatch> childRecordBatches = getChildren(root, context);
 
@@ -128,8 +133,9 @@ public class ImplCreator {
     }
   }
 
-
-  /** Create a RecordBatch and its children for given PhysicalOperator */
+  /**
+   * Create a RecordBatch and its children for given PhysicalOperator
+   */
   @VisibleForTesting
   public RecordBatch getRecordBatch(final PhysicalOperator op, final ExecutorFragmentContext context) throws ExecutionSetupException {
     Preconditions.checkNotNull(op);

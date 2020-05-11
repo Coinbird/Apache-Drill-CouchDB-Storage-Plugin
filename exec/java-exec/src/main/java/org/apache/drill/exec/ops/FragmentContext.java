@@ -17,15 +17,15 @@
  */
 package org.apache.drill.exec.ops;
 
-import java.io.IOException;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.TimeUnit;
+
+import org.apache.drill.metastore.MetastoreRegistry;
 import org.apache.drill.shaded.guava.com.google.common.annotations.VisibleForTesting;
 import org.apache.calcite.schema.SchemaPlus;
 import org.apache.drill.common.config.DrillConfig;
 import org.apache.drill.exec.compile.CodeCompiler;
-import org.apache.drill.exec.exception.ClassTransformationException;
 import org.apache.drill.exec.expr.ClassGenerator;
 import org.apache.drill.exec.expr.CodeGenerator;
 import org.apache.drill.exec.expr.fn.FunctionLookupContext;
@@ -34,6 +34,7 @@ import org.apache.drill.exec.ops.QueryContext.SqlStatementType;
 import org.apache.drill.exec.physical.base.PhysicalOperator;
 import org.apache.drill.exec.proto.ExecProtos;
 import org.apache.drill.exec.proto.UserBitShared.QueryId;
+import org.apache.drill.exec.record.RecordBatch;
 import org.apache.drill.exec.server.options.OptionManager;
 import org.apache.drill.exec.testing.ExecutionControls;
 import org.apache.drill.exec.work.filter.RuntimeFilterWritable;
@@ -67,8 +68,7 @@ public interface FragmentContext extends UdfUtilities, AutoCloseable {
    * @param cg the class generator
    * @return an instance of the generated class
    */
-  <T> T getImplementationClass(final ClassGenerator<T> cg)
-      throws ClassTransformationException, IOException;
+  <T> T getImplementationClass(final ClassGenerator<T> cg);
 
   /**
    * Generates code for a class given a {@link CodeGenerator},
@@ -79,8 +79,7 @@ public interface FragmentContext extends UdfUtilities, AutoCloseable {
    * @param cg the code generator
    * @return an instance of the generated class
    */
-  <T> T getImplementationClass(final CodeGenerator<T> cg)
-      throws ClassTransformationException, IOException;
+  <T> T getImplementationClass(final CodeGenerator<T> cg);
 
   /**
    * Generates code for a class given a {@link ClassGenerator}, and returns the
@@ -91,21 +90,20 @@ public interface FragmentContext extends UdfUtilities, AutoCloseable {
    * @param cg the class generator
    * @return list of instances of the generated class
    */
-  <T> List<T> getImplementationClass(final ClassGenerator<T> cg, final int instanceCount)
-      throws ClassTransformationException, IOException;
+  <T> List<T> getImplementationClass(final ClassGenerator<T> cg, final int instanceCount);
 
   /**
    * Returns the statement type (e.g. SELECT, CTAS, ANALYZE) from the query context.
+   *
    * @return query statement type {@link SqlStatementType}, if known.
    */
-  public SqlStatementType getSQLStatementType();
+  SqlStatementType getSQLStatementType();
 
   /**
    * Get this node's identity.
    * @return A DrillbitEndpoint object.
    */
-  <T> List<T> getImplementationClass(final CodeGenerator<T> cg, final int instanceCount)
-      throws ClassTransformationException, IOException;
+  <T> List<T> getImplementationClass(final CodeGenerator<T> cg, final int instanceCount);
 
   /**
    * Return the set of execution controls used to inject faults into running
@@ -145,12 +143,12 @@ public interface FragmentContext extends UdfUtilities, AutoCloseable {
   /**
    * @return ID {@link java.util.UUID} of the current query
    */
-  public QueryId getQueryId();
+  QueryId getQueryId();
 
   /**
    * @return The string representation of the ID {@link java.util.UUID} of the current query
    */
-  public String getQueryIdString();
+  String getQueryIdString();
 
   OperatorContext newOperatorContext(PhysicalOperator popConfig);
 
@@ -169,34 +167,76 @@ public interface FragmentContext extends UdfUtilities, AutoCloseable {
 
   DrillBuf getManagedBuffer(int size);
 
+  BufferManager getManagedBufferManager();
+
   @Override
   void close();
+
   /**
-   * add a RuntimeFilter when the RuntimeFilter receiver belongs to the same MinorFragment
-   * @param runtimeFilter
+   * Add a RuntimeFilter when the RuntimeFilter receiver belongs to the same MinorFragment.
+   *
+   * @param runtimeFilter runtime filter
    */
-  public void addRuntimeFilter(RuntimeFilterWritable runtimeFilter);
+  void addRuntimeFilter(RuntimeFilterWritable runtimeFilter);
 
-  public RuntimeFilterWritable getRuntimeFilter(long rfIdentifier);
+  RuntimeFilterWritable getRuntimeFilter(long rfIdentifier);
 
   /**
-   * get the RuntimeFilter with a blocking wait, if the waiting option is enabled
-   * @param rfIdentifier
-   * @param maxWaitTime
-   * @param timeUnit
+   * Get the RuntimeFilter with a blocking wait, if the waiting option is enabled.
+   *
+   * @param rfIdentifier runtime filter identifier
+   * @param maxWaitTime max wait time
+   * @param timeUnit time unit
    * @return the RFW or null
    */
-  public RuntimeFilterWritable getRuntimeFilter(long rfIdentifier, long maxWaitTime, TimeUnit timeUnit);
+  RuntimeFilterWritable getRuntimeFilter(long rfIdentifier, long maxWaitTime, TimeUnit timeUnit);
+
+  /**
+   * Get instance of Metastore registry to obtain Metastore instance if needed.
+   *
+   * @return Metastore registry
+   */
+  MetastoreRegistry getMetastoreRegistry();
+
+  /**
+   * An operator is experiencing memory pressure. Asks the fragment
+   * executor to poll all operators to release an optional memory
+   * (such as by spilling.) The request is advisory. The caller should
+   * again try to allocate memory, and if the second request fails,
+   * throw an <code>OutOfMemoryException</code>.
+   */
+  void requestMemory(RecordBatch requestor);
 
   interface ExecutorState {
     /**
-     * Tells individual operations whether they should continue. In some cases, an external event (typically cancellation)
-     * will mean that the fragment should prematurely exit execution. Long running operations should check this every so
-     * often so that Drill is responsive to cancellation operations.
+     * Tells individual operations whether they should continue. In some cases,
+     * an external event (typically cancellation) will mean that the fragment
+     * should prematurely exit execution. Long running operations should check
+     * this every so often so that Drill is responsive to cancellation
+     * operations.
      *
-     * @return False if the action should terminate immediately, true if everything is okay.
+     * @return False if the action should terminate immediately, true if
+     *         everything is okay.
      */
     boolean shouldContinue();
+
+    /**
+     * Check if an operation should continue. In some cases,
+     * an external event (typically cancellation) will mean that the fragment
+     * should prematurely exit execution. Long running operations should check
+     * this every so often so that Drill is responsive to cancellation
+     * operations.
+     * <p>
+     * Throws QueryCancelledException if the query (fragment) should stop.
+     * The fragment executor interprets this as an exception it, itself,
+     * requested, and will call the operator's close() method to release
+     * resources. Operators should not catch and handle this exception,
+     * and should only call this method when the operator holds no
+     * transient resources (such as local variables.)
+     *
+     * @throws QueryCancelledException if the query (fragment) should stop.
+     */
+    void checkContinue();
 
     /**
      * Inform the executor if a exception occurs and fragment should be failed.

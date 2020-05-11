@@ -49,7 +49,6 @@ import com.sun.codemodel.JVar;
 import org.apache.hadoop.hive.serde2.objectinspector.PrimitiveObjectInspector;
 
 public class HiveFuncHolder extends AbstractFuncHolder {
-  static final org.slf4j.Logger logger = org.slf4j.LoggerFactory.getLogger(FunctionImplementationRegistry.class);
 
   private MajorType[] argTypes;
   private ObjectInspector returnOI;
@@ -116,7 +115,7 @@ public class HiveFuncHolder extends AbstractFuncHolder {
   }
 
   @Override
-  public MajorType getParmMajorType(int i) {
+  public MajorType getParamMajorType(int i) {
     return argTypes[i];
   }
 
@@ -145,7 +144,7 @@ public class HiveFuncHolder extends AbstractFuncHolder {
 
   @Override
   public HoldingContainer renderEnd(ClassGenerator<?> classGenerator, HoldingContainer[] inputVariables,
-                                    JVar[] workspaceJVars, FieldReference fieldReference) {
+                                    JVar[] workspaceJVars, FunctionHolderExpression holderExpr) {
     generateSetup(classGenerator, workspaceJVars);
     return generateEval(classGenerator, inputVariables, workspaceJVars);
   }

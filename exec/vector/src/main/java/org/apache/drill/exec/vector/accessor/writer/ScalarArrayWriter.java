@@ -46,7 +46,6 @@ import org.joda.time.Period;
  * each set advances the array to the next position. This is an abstract base class;
  * subclasses are generated for each repeated value vector type.
  */
-
 public class ScalarArrayWriter extends BaseArrayWriter {
 
   /**
@@ -54,30 +53,31 @@ public class ScalarArrayWriter extends BaseArrayWriter {
    * committing the current value is done automatically since
    * there is exactly one value per array element.
    */
-
   public class ScalarElementWriterIndex extends ArrayElementWriterIndex {
 
     @Override
     public final void nextElement() { next(); }
+
+    @Override
+    public final void prevElement() { prev(); }
   }
 
   private final ScalarWriter elementWriter;
 
   public ScalarArrayWriter(ColumnMetadata schema,
-      RepeatedValueVector vector, BaseScalarWriter elementWriter) {
+      RepeatedValueVector vector, BaseScalarWriter baseElementWriter) {
     super(schema, vector.getOffsetVector(),
-        new ScalarObjectWriter(elementWriter));
+        new ScalarObjectWriter(baseElementWriter));
 
     // Save the writer from the scalar object writer created above
     // which may have wrapped the element writer in a type convertor.
-
     this.elementWriter = elementObjWriter.scalar();
   }
 
   public static ArrayObjectWriter build(ColumnMetadata schema,
-      RepeatedValueVector repeatedVector, BaseScalarWriter elementWriter) {
+      RepeatedValueVector repeatedVector, BaseScalarWriter baseElementWriter) {
     return new ArrayObjectWriter(
-        new ScalarArrayWriter(schema, repeatedVector, elementWriter));
+        new ScalarArrayWriter(schema, repeatedVector, baseElementWriter));
   }
 
   @Override
@@ -98,37 +98,33 @@ public class ScalarArrayWriter extends BaseArrayWriter {
    * Set a repeated vector based on a Java array of the proper
    * type. This function involves parsing the array type and so is
    * suitable only for test code. The array can be either a primitive
-   * (<tt>int [], say</tt>) or a typed array of boxed values
-   * (<tt>Integer[], say</tt>).
+   * ({@code int [], say}) or a typed array of boxed values
+   * ({@code Integer[], say}).
    */
-
   @Override
   public void setObject(Object array) {
 
     // Accept an empty array (of any type) to mean
     // an empty array of the type of this writer.
-
     if (array == null || Array.getLength(array) == 0) {
 
       // Assume null means a 0-element array since Drill does
       // not support null for the whole array.
-
       return;
     }
     final String objClass = array.getClass().getName();
     if (! objClass.startsWith("[")) {
       throw new IllegalArgumentException(
           String.format("Argument must be an array. Column `%s`, value = %s",
-              schema.name(), array.toString()));
+              schema().name(), array.toString()));
     }
 
     // Figure out type
-
     final char second = objClass.charAt(1);
     switch ( second ) {
     case  '[':
-      // bytes is represented as an array of byte arrays.
 
+      // bytes is represented as an array of byte arrays.
       final char third = objClass.charAt(2);
       switch (third) {
       case 'B':
@@ -137,7 +133,7 @@ public class ScalarArrayWriter extends BaseArrayWriter {
       default:
         throw new IllegalArgumentException(
             String.format("Unknown Java array type: %s, for column `%s`",
-                objClass, schema.name()));
+                objClass, schema().name()));
       }
       break;
     case  'B':
@@ -165,7 +161,6 @@ public class ScalarArrayWriter extends BaseArrayWriter {
       final int posn = objClass.indexOf(';');
 
       // If the array is of type Object, then we have no type info.
-
       final String memberClassName = objClass.substring(2, posn);
       if (memberClassName.equals(String.class.getName())) {
         setStringArray((String[]) array);

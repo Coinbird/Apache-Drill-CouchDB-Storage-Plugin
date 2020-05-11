@@ -18,19 +18,24 @@
 package org.apache.drill.exec.store.parquet;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.apache.drill.categories.ParquetTest;
+import org.apache.drill.categories.UnlikelyTest;
 import org.apache.drill.common.config.DrillConfig;
 import org.apache.drill.exec.ExecConstants;
 import org.apache.drill.exec.server.options.SystemOptionManager;
+import org.apache.drill.test.BaseTest;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.parquet.ParquetReadOptions;
 import org.junit.Test;
+import org.junit.experimental.categories.Category;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 
-public class TestParquetReaderConfig {
+@Category({ParquetTest.class, UnlikelyTest.class})
+public class TestParquetReaderConfig extends BaseTest {
 
   @Test
   public void testDefaultsDeserialization() throws Exception {
@@ -91,6 +96,7 @@ public class TestParquetReaderConfig {
 
   @Test
   public void testPriorityAssignmentForStringsSignedMinMax() throws Exception {
+    @SuppressWarnings("resource")
     SystemOptionManager options = new SystemOptionManager(DrillConfig.create()).init();
 
     // use value from format config
@@ -99,7 +105,7 @@ public class TestParquetReaderConfig {
     assertEquals(formatConfig.isStringsSignedMinMaxEnabled(), readerConfig.enableStringsSignedMinMax());
 
     // change format config value
-    formatConfig.enableStringsSignedMinMax = true;
+    formatConfig = new ParquetFormatConfig(true, true);
     readerConfig = ParquetReaderConfig.builder().withFormatConfig(formatConfig).build();
     assertEquals(formatConfig.isStringsSignedMinMaxEnabled(), readerConfig.enableStringsSignedMinMax());
 

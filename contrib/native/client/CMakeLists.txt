@@ -15,7 +15,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
-cmake_minimum_required(VERSION 2.6)
+cmake_minimum_required(VERSION 3.1.3)
+
+set (CMAKE_CXX_STANDARD 11)
+set (CMAKE_CXX_STANDARD_REQUIRED ON)
 
 project(drillclient)
 cmake_policy(SET CMP0043 NEW)
@@ -97,7 +100,7 @@ else()
     #    set(Boost_NAMESPACE drill_boost)
 endif()
 
-find_package(Boost 1.53.0 REQUIRED COMPONENTS regex system date_time chrono thread random)
+find_package(Boost 1.54.0 REQUIRED COMPONENTS regex system date_time chrono thread random)
 include_directories(${Boost_INCLUDE_DIRS})
 
 

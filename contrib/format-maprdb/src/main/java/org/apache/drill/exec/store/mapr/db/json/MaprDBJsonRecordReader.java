@@ -38,6 +38,7 @@ import org.apache.drill.exec.ops.FragmentContext;
 import org.apache.drill.exec.ops.OperatorContext;
 import org.apache.drill.exec.ops.OperatorStats;
 import org.apache.drill.exec.physical.impl.OutputMutator;
+import org.apache.drill.exec.record.metadata.TupleMetadata;
 import org.apache.drill.exec.store.AbstractRecordReader;
 import org.apache.drill.exec.store.mapr.db.MapRDBFormatPlugin;
 import org.apache.drill.exec.store.mapr.db.MapRDBSubScanSpec;
@@ -64,7 +65,8 @@ import org.apache.drill.shaded.guava.com.google.common.collect.Iterables;
 import org.apache.drill.shaded.guava.com.google.common.collect.Sets;
 
 import java.time.Instant;
-import java.time.OffsetDateTime;
+import java.time.ZoneId;
+import java.time.ZonedDateTime;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.Iterator;
@@ -121,6 +123,7 @@ public class MaprDBJsonRecordReader extends AbstractRecordReader {
   private final boolean ignoreSchemaChange;
   private final boolean disableCountOptimization;
   private final boolean nonExistentColumnsProjection;
+  private final TupleMetadata schema;
 
   protected final MapRDBSubScanSpec subScanSpec;
   protected final MapRDBFormatPlugin formatPlugin;
@@ -132,8 +135,8 @@ public class MaprDBJsonRecordReader extends AbstractRecordReader {
   protected Document lastDocument;
 
   public MaprDBJsonRecordReader(MapRDBSubScanSpec subScanSpec, MapRDBFormatPlugin formatPlugin,
-                                List<SchemaPath> projectedColumns, FragmentContext context, int maxRecords) {
-    this(subScanSpec, formatPlugin, projectedColumns, context);
+                                List<SchemaPath> projectedColumns, FragmentContext context, int maxRecords, TupleMetadata schema) {
+    this(subScanSpec, formatPlugin, projectedColumns, context, schema);
     this.maxRecordsToRead = maxRecords;
     this.lastDocumentReader = null;
     this.lastDocument = null;
@@ -141,12 +144,13 @@ public class MaprDBJsonRecordReader extends AbstractRecordReader {
   }
 
   protected MaprDBJsonRecordReader(MapRDBSubScanSpec subScanSpec, MapRDBFormatPlugin formatPlugin,
-                                List<SchemaPath> projectedColumns, FragmentContext context) {
+                                List<SchemaPath> projectedColumns, FragmentContext context, TupleMetadata schema) {
     buffer = context.getManagedBuffer();
     final Path tablePath = new Path(Preconditions.checkNotNull(subScanSpec,
       "MapRDB reader needs a sub-scan spec").getTableName());
     this.subScanSpec = subScanSpec;
     this.formatPlugin = formatPlugin;
+    this.schema = schema;
     final IndexDesc indexDesc = subScanSpec.getIndexDesc();
     byte[] serializedFilter = subScanSpec.getSerializedFilter();
     condition = null;
@@ -307,7 +311,7 @@ public class MaprDBJsonRecordReader extends AbstractRecordReader {
           @Override
           protected void writeTimeStamp(MapOrListWriterImpl writer, String fieldName, DocumentReader reader) {
             String formattedTimestamp = Instant.ofEpochMilli(reader.getTimestampLong())
-                .atOffset(OffsetDateTime.now().getOffset()).format(DateUtility.UTC_FORMATTER);
+                .atZone(ZoneId.systemDefault()).format(DateUtility.UTC_FORMATTER);
             writeString(writer, fieldName, formattedTimestamp);
           }
         };
@@ -357,8 +361,11 @@ public class MaprDBJsonRecordReader extends AbstractRecordReader {
    * @param reader    document reader
    */
   private void writeTimestampWithLocalZoneOffset(MapOrListWriterImpl writer, String fieldName, DocumentReader reader) {
-    long timestamp = reader.getTimestampLong() + DateUtility.TIMEZONE_OFFSET_MILLIS;
-    writer.timeStamp(fieldName).writeTimeStamp(timestamp);
+    Instant utcInstant = Instant.ofEpochMilli(reader.getTimestampLong());
+    ZonedDateTime localZonedDateTime = utcInstant.atZone(ZoneId.systemDefault());
+    ZonedDateTime convertedZonedDateTime = localZonedDateTime.withZoneSameLocal(ZoneId.of("UTC"));
+    long timeStamp = convertedZonedDateTime.toInstant().toEpochMilli();
+    writer.timeStamp(fieldName).writeTimeStamp(timeStamp);
   }
 
   @Override
@@ -441,7 +448,11 @@ public class MaprDBJsonRecordReader extends AbstractRecordReader {
     }
 
     if (nonExistentColumnsProjection && recordCount > 0) {
-      JsonReaderUtils.ensureAtLeastOneField(vectorWriter, getColumns(), allTextMode, Collections.emptyList());
+      if (schema == null || schema.isEmpty()) {
+        JsonReaderUtils.ensureAtLeastOneField(vectorWriter, getColumns(), allTextMode, Collections.emptyList());
+      } else {
+        JsonReaderUtils.writeColumnsUsingSchema(vectorWriter, getColumns(), schema, allTextMode);
+      }
     }
     vectorWriter.setValueCount(recordCount);
     if (maxRecordsToRead > 0) {

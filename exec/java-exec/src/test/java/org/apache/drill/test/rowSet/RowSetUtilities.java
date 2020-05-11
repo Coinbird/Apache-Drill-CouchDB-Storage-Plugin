@@ -21,15 +21,25 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 
 import java.math.BigDecimal;
+import java.util.LinkedHashMap;
+import java.util.Map;
 
 import org.apache.drill.common.types.TypeProtos.MajorType;
 import org.apache.drill.common.types.TypeProtos.MinorType;
+import org.apache.drill.exec.physical.rowSet.RowSet;
+import org.apache.drill.exec.physical.rowSet.RowSetWriter;
+import org.apache.drill.exec.record.BatchSchema;
 import org.apache.drill.exec.record.MaterializedField;
+import org.apache.drill.exec.record.metadata.MetadataUtils;
+import org.apache.drill.exec.record.metadata.TupleMetadata;
 import org.apache.drill.exec.record.selection.SelectionVector2;
 import org.apache.drill.exec.vector.accessor.ScalarWriter;
 import org.apache.drill.exec.vector.accessor.ValueType;
 import org.bouncycastle.util.Arrays;
 import org.joda.time.Duration;
+import org.joda.time.Instant;
+import org.joda.time.LocalDate;
+import org.joda.time.LocalTime;
 import org.joda.time.Period;
 
 /**
@@ -62,17 +72,20 @@ public class RowSetUtilities {
    * accessor. The value set here is purely for testing; the mapping
    * from ints to intervals has no real meaning.
    *
-   * @param rowWriter
-   * @param index
-   * @param value
+   * @param rowWriter writer where value will be written to
+   * @param index     target index
+   * @param value     value to write
    */
-
   public static void setFromInt(RowSetWriter rowWriter, int index, int value) {
     ScalarWriter writer = rowWriter.scalar(index);
     MaterializedField field = rowWriter.tupleSchema().column(index);
     writer.setObject(testDataFromInt(writer.valueType(), field.getType(), value));
   }
 
+  /**
+   * Create a test value that can be passed to setObject(). This value matches the
+   * value type for a writer.
+   */
   public static Object testDataFromInt(ValueType valueType, MajorType dataType, int value) {
     switch (valueType) {
     case BYTES:
@@ -102,6 +115,12 @@ public class RowSetUtilities {
       return BigDecimal.valueOf(value, dataType.getScale());
     case PERIOD:
       return periodFromInt(dataType.getMinorType(), value);
+    case DATE:
+      return new LocalDate(value);
+    case TIME:
+      return new LocalTime(value);
+    case TIMESTAMP:
+      return new Instant(value);
     default:
       throw new IllegalStateException("Unknown writer type: " + valueType);
     }
@@ -115,12 +134,9 @@ public class RowSetUtilities {
    * of fields. The result has no meaning, but has the same comparison order as the
    * original ints.
    *
-   * @param writer column writer for a period column
    * @param minorType the Drill data type
    * @param value the integer value to apply
-   * @throws VectorOverflowException
    */
-
   public static Period periodFromInt(MinorType minorType, int value) {
     switch (minorType) {
     case INTERVAL:
@@ -145,8 +161,8 @@ public class RowSetUtilities {
   public static void assertEqualValues(String msg, ValueType type, Object expectedObj, Object actualObj) {
     switch (type) {
     case BYTES: {
-        byte expected[] = (byte[]) expectedObj;
-        byte actual[] = (byte[]) actualObj;
+        byte[] expected = (byte[]) expectedObj;
+        byte[] actual = (byte[]) actualObj;
         assertEquals(msg + " - byte lengths differ", expected.length, actual.length);
         assertTrue(msg, Arrays.areEqual(expected, actual));
         break;
@@ -158,6 +174,9 @@ public class RowSetUtilities {
      case LONG:
      case STRING:
      case DECIMAL:
+     case DATE:
+     case TIME:
+     case TIMESTAMP:
        assertEquals(msg, expectedObj, actualObj);
        break;
      case PERIOD: {
@@ -180,7 +199,7 @@ public class RowSetUtilities {
   }
 
   public static byte[] byteArray(Integer... elements) {
-    byte array[] = new byte[elements.length];
+    byte[] array = new byte[elements.length];
     for (int i = 0; i < elements.length; i++) {
       array[i] = (byte) (int) elements[i];
     }
@@ -192,7 +211,15 @@ public class RowSetUtilities {
   }
 
   public static double[] doubleArray(Double... elements) {
-    double array[] = new double[elements.length];
+    double[] array = new double[elements.length];
+    for (int i = 0; i < elements.length; i++) {
+      array[i] = elements[i];
+    }
+    return array;
+  }
+
+  public static boolean[] boolArray(Boolean... elements) {
+    boolean[] array = new boolean[elements.length];
     for (int i = 0; i < elements.length; i++) {
       array[i] = elements[i];
     }
@@ -203,8 +230,16 @@ public class RowSetUtilities {
     return elements;
   }
 
+  public static BigDecimal[] decArray(BigDecimal... elements) {
+    return elements;
+  }
+
+  public static byte[][] binArray(byte[]... elements) {
+    return elements;
+  }
+
   public static int[] intArray(Integer... elements) {
-    int array[] = new int[elements.length];
+    int[] array = new int[elements.length];
     for (int i = 0; i < elements.length; i++) {
       array[i] = elements[i];
     }
@@ -236,7 +271,7 @@ public class RowSetUtilities {
   }
 
   /**
-   * Convenience method to verify the actual results, then free memory
+   * Verify the actual results, then free memory
    * for both the expected and actual result sets.
    * @param expected The expected results.
    * @param actual the actual results to verify.
@@ -245,4 +280,28 @@ public class RowSetUtilities {
     new RowSetComparison(expected).verifyAndClearAll(actual);
   }
 
+  public static BigDecimal dec(String value) {
+    return new BigDecimal(value);
+  }
+
+  /**
+   * Bootstrap a map object given key-value sequence.
+   *
+   * @param entry key-value sequence
+   * @return map containing key-value pairs from passed sequence
+   */
+  public static Map<Object, Object> map(Object... entry) {
+    assert entry.length % 2 == 0 : "Array length should be even.";
+
+    // LinkedHashMap is chosen to preserve entry order
+    Map<Object, Object> map = new LinkedHashMap<>();
+    for (int i = 0; i < entry.length; i += 2) {
+      map.put(entry[i], entry[i + 1]);
+    }
+    return map;
+  }
+
+  public static void assertSchemasEqual(TupleMetadata expected, BatchSchema actual) {
+    assertTrue(expected.isEquivalent(MetadataUtils.fromFields(actual)));
+  }
 }

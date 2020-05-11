@@ -22,8 +22,8 @@ import org.apache.drill.exec.proto.UserBitShared.QueryId;
 import org.apache.drill.exec.proto.UserBitShared.QueryResult.QueryState;
 import org.apache.drill.exec.record.RecordBatchLoader;
 import org.apache.drill.test.BufferingQueryEventListener.QueryEvent;
-import org.apache.drill.test.rowSet.DirectRowSet;
-import org.apache.drill.test.rowSet.RowSet;
+import org.apache.drill.exec.physical.rowSet.DirectRowSet;
+import org.apache.drill.exec.physical.rowSet.RowSet;
 
 /**
  * Returns query results as an iterator over row sets. Provides
@@ -32,7 +32,7 @@ import org.apache.drill.test.rowSet.RowSet;
  */
 
 public class QueryResultSet {
-  private BufferingQueryEventListener listener;
+  private final BufferingQueryEventListener listener;
   private boolean eof;
   private int recordCount = 0;
   private int batchCount = 0;
@@ -58,7 +58,7 @@ public class QueryResultSet {
     if (eof) {
       return null;
     }
-    for (;;) {
+    while (true) {
       QueryEvent event = listener.get();
       switch (event.type)
       {

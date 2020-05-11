@@ -18,20 +18,24 @@
 package org.apache.drill.exec.physical.impl.scan;
 
 import static org.junit.Assert.assertFalse;
+
+import org.apache.drill.categories.RowSetTests;
 import org.apache.drill.common.types.TypeProtos.DataMode;
 import org.apache.drill.common.types.TypeProtos.MinorType;
+import org.apache.drill.exec.physical.impl.scan.ScanTestUtils.MockScanBuilder;
+import org.apache.drill.exec.physical.impl.scan.project.ReaderSchemaOrchestrator;
 import org.apache.drill.exec.physical.impl.scan.project.ScanSchemaOrchestrator;
-import org.apache.drill.exec.physical.impl.scan.project.ScanSchemaOrchestrator.ReaderSchemaOrchestrator;
-import org.apache.drill.exec.physical.rowSet.ResultSetLoader;
-import org.apache.drill.exec.physical.rowSet.RowSetLoader;
-import org.apache.drill.exec.physical.rowSet.impl.RowSetTestUtils;
-import org.apache.drill.exec.record.BatchSchema;
+import org.apache.drill.exec.physical.impl.scan.project.ScanSchemaOrchestrator.ScanOrchestratorBuilder;
+import org.apache.drill.exec.physical.resultSet.ResultSetLoader;
+import org.apache.drill.exec.physical.resultSet.RowSetLoader;
 import org.apache.drill.exec.record.metadata.SchemaBuilder;
 import org.apache.drill.exec.record.metadata.TupleMetadata;
 import org.apache.drill.test.SubOperatorTest;
-import org.apache.drill.test.rowSet.RowSet.SingleRowSet;
+import org.apache.drill.exec.physical.rowSet.RowSetTestUtils;
+import org.apache.drill.exec.physical.rowSet.RowSet.SingleRowSet;
 import org.apache.drill.test.rowSet.RowSetComparison;
 import org.junit.Test;
+import org.junit.experimental.categories.Category;
 
 /**
  * Test the late-schema support in the scan orchestrator. "Late schema" is the case
@@ -43,6 +47,7 @@ import org.junit.Test;
  * that tests for lower-level components have already passed.
  */
 
+@Category(RowSetTests.class)
 public class TestScanOrchestratorLateSchema extends SubOperatorTest {
 
   /**
@@ -51,11 +56,12 @@ public class TestScanOrchestratorLateSchema extends SubOperatorTest {
 
   @Test
   public void testLateSchemaWildcard() {
-    ScanSchemaOrchestrator orchestrator = new ScanSchemaOrchestrator(fixture.allocator());
+    ScanOrchestratorBuilder builder = new MockScanBuilder();
 
     // SELECT * ...
 
-    orchestrator.build(RowSetTestUtils.projectAll());
+    builder.projection(RowSetTestUtils.projectAll());
+    ScanSchemaOrchestrator orchestrator = new ScanSchemaOrchestrator(fixture.allocator(), builder);
 
     // ... FROM table
 
@@ -106,11 +112,12 @@ public class TestScanOrchestratorLateSchema extends SubOperatorTest {
 
   @Test
   public void testLateSchemaSelectDisjoint() {
-    ScanSchemaOrchestrator orchestrator = new ScanSchemaOrchestrator(fixture.allocator());
+    ScanOrchestratorBuilder builder = new MockScanBuilder();
 
     // SELECT a, c ...
 
-    orchestrator.build(RowSetTestUtils.projectList("a", "c"));
+    builder.projection(RowSetTestUtils.projectList("a", "c"));
+    ScanSchemaOrchestrator orchestrator = new ScanSchemaOrchestrator(fixture.allocator(), builder);
 
     // ... FROM file
 
@@ -136,10 +143,10 @@ public class TestScanOrchestratorLateSchema extends SubOperatorTest {
 
     // Verify
 
-    BatchSchema expectedSchema = new SchemaBuilder()
+    TupleMetadata expectedSchema = new SchemaBuilder()
         .add("a", MinorType.INT)
         .addNullable("c", MinorType.INT)
-        .build();
+        .buildSchema();
     SingleRowSet expected = fixture.rowSetBuilder(expectedSchema)
         .addRow(1, null)
         .addRow(2, null)

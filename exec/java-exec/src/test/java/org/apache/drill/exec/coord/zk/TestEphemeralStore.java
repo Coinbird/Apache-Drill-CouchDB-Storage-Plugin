@@ -30,13 +30,14 @@ import org.apache.curator.test.TestingServer;
 import org.apache.drill.exec.ZookeeperTestUtil;
 import org.apache.drill.exec.coord.store.TransientStoreConfig;
 import org.apache.drill.exec.serialization.InstanceSerializer;
+import org.apache.drill.test.BaseTest;
 import org.junit.After;
 import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Test;
 import org.mockito.Mockito;
 
-public class TestEphemeralStore {
+public class TestEphemeralStore extends BaseTest {
   private final static String root = "/test";
   private final static String path = "test-key";
   private final static String value = "testing";
@@ -59,7 +60,7 @@ public class TestEphemeralStore {
     }
   }
 
-
+  @SuppressWarnings("unchecked")
   @Before
   public void setUp() throws Exception {
     ZookeeperTestUtil.setZookeeperSaslTestConfigProps();
@@ -106,6 +107,7 @@ public class TestEphemeralStore {
    */
   @Test
   public void testStoreRegistersDispatcherAndStartsItsClient() throws Exception {
+    @SuppressWarnings("resource")
     final StoreWithMockClient<String> store = new StoreWithMockClient<>(config, curator);
 
     final PathChildrenCache cache = Mockito.mock(PathChildrenCache.class);
@@ -114,6 +116,7 @@ public class TestEphemeralStore {
         .when(client.getCache())
         .thenReturn(cache);
 
+    @SuppressWarnings("unchecked")
     final ListenerContainer<PathChildrenCacheListener> container = Mockito.mock(ListenerContainer.class);
     Mockito
         .when(cache.getListenable())
@@ -143,5 +146,4 @@ public class TestEphemeralStore {
     final String actual = store.get(path);
     Assert.assertEquals("value mismatch", value, actual);
   }
-
 }

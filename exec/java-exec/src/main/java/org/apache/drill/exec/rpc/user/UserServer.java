@@ -17,17 +17,16 @@
  */
 package org.apache.drill.exec.rpc.user;
 
-import java.io.IOException;
-import java.net.SocketAddress;
-import java.util.List;
-import java.util.Map.Entry;
-import java.util.Set;
-import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
-
-import javax.net.ssl.SSLEngine;
-import javax.security.sasl.SaslException;
-
+import com.google.protobuf.MessageLite;
+import io.netty.channel.Channel;
+import io.netty.channel.ChannelFuture;
+import io.netty.channel.ChannelHandlerContext;
+import io.netty.channel.ChannelPipeline;
+import io.netty.channel.EventLoopGroup;
+import io.netty.channel.socket.SocketChannel;
+import io.netty.handler.ssl.SslHandler;
+import io.netty.util.concurrent.Future;
+import io.netty.util.concurrent.GenericFutureListener;
 import org.apache.drill.common.config.DrillProperties;
 import org.apache.drill.common.exceptions.DrillException;
 import org.apache.drill.exec.exception.DrillbitStartupException;
@@ -65,17 +64,15 @@ import org.apache.hadoop.security.HadoopKerberosName;
 import org.joda.time.DateTime;
 import org.slf4j.Logger;
 
-import com.google.protobuf.MessageLite;
-
-import io.netty.channel.Channel;
-import io.netty.channel.ChannelFuture;
-import io.netty.channel.ChannelHandlerContext;
-import io.netty.channel.ChannelPipeline;
-import io.netty.channel.EventLoopGroup;
-import io.netty.channel.socket.SocketChannel;
-import io.netty.handler.ssl.SslHandler;
-import io.netty.util.concurrent.Future;
-import io.netty.util.concurrent.GenericFutureListener;
+import javax.net.ssl.SSLEngine;
+import javax.security.sasl.SaslException;
+import java.io.IOException;
+import java.net.SocketAddress;
+import java.util.List;
+import java.util.Map.Entry;
+import java.util.Set;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 
 public class UserServer extends BasicServer<RpcType, BitToUserConnection> {
   private static final org.slf4j.Logger logger = org.slf4j.LoggerFactory.getLogger(UserServer.class);
@@ -140,6 +137,7 @@ public class UserServer extends BasicServer<RpcType, BitToUserConnection> {
           .initializeSSLContext(true)
           .validateKeyStore(true)
           .build();
+      logger.info("Rpc server configured to use TLS protocol '{}'", sslConfig.getProtocol());
     } catch (DrillException e) {
       throw new DrillbitStartupException(e.getMessage(), e.getCause());
     }
@@ -197,13 +195,18 @@ public class UserServer extends BasicServer<RpcType, BitToUserConnection> {
   }
 
   /**
-   * {@link AbstractRemoteConnection} implementation for user connection. Also implements {@link UserClientConnection}.
+   * It represents a client connection accepted by Foreman Drillbit's UserServer from a DrillClient. This connection
+   * is used to get hold of {@link UserSession} which stores all session related information like session options
+   * changed over the lifetime of this connection. There is a 1:1 mapping between a BitToUserConnection and a
+   * UserSession. This connection object is also used to send query data and result back to the client submitted as part
+   * of the session tied to this connection.
    */
   public class BitToUserConnection extends AbstractServerConnection<BitToUserConnection>
       implements UserClientConnection {
 
     private UserSession session;
     private UserToBitHandshake inbound;
+    private String authenticatedUser;
 
     BitToUserConnection(SocketChannel channel) {
       super(channel, config, !config.isAuthEnabled()
@@ -229,8 +232,8 @@ public class UserServer extends BasicServer<RpcType, BitToUserConnection> {
     public void finalizeSaslSession() throws IOException {
       final String authorizationID = getSaslServer().getAuthorizationID();
       final String userName = new HadoopKerberosName(authorizationID).getShortName();
-      logger.debug("Created session for {}", userName);
       finalizeSession(userName);
+      logger.info("User {} logged in from {}", authenticatedUser, getRemoteAddress());
     }
 
     /**
@@ -250,6 +253,7 @@ public class UserServer extends BasicServer<RpcType, BitToUserConnection> {
           .setSupportComplexTypes(inbound.getSupportComplexTypes())
           .build();
 
+      this.authenticatedUser = userName;
       // if inbound impersonation is enabled and a target is mentioned
       final String targetName = session.getTargetUserName();
       if (config.getImpersonationManager() != null && targetName != null) {
@@ -293,6 +297,15 @@ public class UserServer extends BasicServer<RpcType, BitToUserConnection> {
     @Override
     public SocketAddress getRemoteAddress() {
       return getChannel().remoteAddress();
+    }
+
+    @Override
+    public void channelClosed(RpcException ex) {
+      // log the logged out event only when authentication is enabled
+      if (config.isAuthEnabled()) {
+        logger.info("User {} logged out from {}", authenticatedUser, getRemoteAddress());
+      }
+      super.channelClosed(ex);
     }
 
     private void cleanup() {
@@ -428,10 +441,8 @@ public class UserServer extends BasicServer<RpcType, BitToUserConnection> {
               connection.changeHandlerTo(config.getMessageHandler());
               connection.finalizeSession(userName);
               respBuilder.setStatus(HandshakeStatus.SUCCESS);
-              if (logger.isTraceEnabled()) {
-                logger.trace("Authenticated {} successfully using PLAIN from {}", userName,
-                    connection.getRemoteAddress());
-              }
+              logger.info("Authenticated {} from {} successfully using PLAIN", userName,
+                connection.getRemoteAddress());
               return respBuilder.build();
             } catch (UserAuthenticationException ex) {
               return handleFailure(respBuilder, HandshakeStatus.AUTH_FAILED, ex.getMessage(), ex);

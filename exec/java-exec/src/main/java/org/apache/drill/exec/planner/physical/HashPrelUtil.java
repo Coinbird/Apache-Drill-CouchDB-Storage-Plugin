@@ -17,6 +17,7 @@
  */
 package org.apache.drill.exec.planner.physical;
 
+import org.apache.drill.exec.planner.physical.DrillDistributionTrait.NamedDistributionField;
 import org.apache.drill.shaded.guava.com.google.common.base.Preconditions;
 import org.apache.drill.shaded.guava.com.google.common.collect.ImmutableList;
 import org.apache.calcite.rel.type.RelDataType;
@@ -41,6 +42,7 @@ public class HashPrelUtil {
   public static final String HASH_EXPR_NAME = "E_X_P_R_H_A_S_H_F_I_E_L_D";
 
   public static final int DIST_SEED = 1301011; // distribution seed
+
   /**
    * Interface for creating different forms of hash expression types.
    * @param <T>
@@ -52,13 +54,8 @@ public class HashPrelUtil {
   /**
    * Implementation of {@link HashExpressionCreatorHelper} for {@link LogicalExpression} type.
    */
-  public static HashExpressionCreatorHelper<LogicalExpression> HASH_HELPER_LOGICALEXPRESSION =
-      new HashExpressionCreatorHelper<LogicalExpression>() {
-        @Override
-        public LogicalExpression createCall(String funcName, List<LogicalExpression> inputFiled) {
-          return new FunctionCall(funcName, inputFiled, ExpressionPosition.UNKNOWN);
-        }
-      };
+  public static HashExpressionCreatorHelper<LogicalExpression> HASH_HELPER_LOGICAL_EXPRESSION =
+      (funcName, inputFiled) -> new FunctionCall(funcName, inputFiled, ExpressionPosition.UNKNOWN);
 
   public static class RexNodeBasedHashExpressionCreatorHelper implements HashExpressionCreatorHelper<RexNode> {
     private final RexBuilder rexBuilder;
@@ -67,6 +64,7 @@ public class HashPrelUtil {
       this.rexBuilder = rexBuilder;
     }
 
+    @SuppressWarnings("deprecation")
     @Override
     public RexNode createCall(String funcName, List<RexNode> inputFields) {
       final DrillSqlOperator op =
@@ -161,7 +159,7 @@ public class HashPrelUtil {
    * @return hash expression
    */
   public static LogicalExpression getHash64Expression(LogicalExpression field, LogicalExpression seed, boolean hashAsDouble) {
-    return createHash64Expression(ImmutableList.of(field), seed, HASH_HELPER_LOGICALEXPRESSION, hashAsDouble);
+    return createHash64Expression(ImmutableList.of(field), seed, HASH_HELPER_LOGICAL_EXPRESSION, hashAsDouble);
   }
 
   /**
@@ -173,33 +171,37 @@ public class HashPrelUtil {
    * @return hash expression
    */
   public static LogicalExpression getHashExpression(LogicalExpression field, LogicalExpression seed, boolean hashAsDouble) {
-    return createHashExpression(ImmutableList.of(field), seed, HASH_HELPER_LOGICALEXPRESSION, hashAsDouble);
+    return createHashExpression(ImmutableList.of(field), seed, HASH_HELPER_LOGICAL_EXPRESSION, hashAsDouble);
   }
-
 
   /**
    * Create a distribution hash expression.
    *
    * @param fields Distribution fields
    * @param rowType Row type
-   * @return
+   * @return distribution hash expression
    */
   public static LogicalExpression getHashExpression(List<DistributionField> fields, RelDataType rowType) {
     assert fields.size() > 0;
 
-    final List<String> childFields = rowType.getFieldNames();
+    List<String> childFields = rowType.getFieldNames();
 
     // If we already included a field with hash - no need to calculate hash further down
-    if ( childFields.contains(HASH_EXPR_NAME)) {
+    if (childFields.contains(HASH_EXPR_NAME)) {
       return new FieldReference(HASH_EXPR_NAME);
     }
 
-    final List<LogicalExpression> expressions = new ArrayList<LogicalExpression>(childFields.size());
-    for(int i =0; i < fields.size(); i++){
-      expressions.add(new FieldReference(childFields.get(fields.get(i).getFieldId()), ExpressionPosition.UNKNOWN));
+    List<LogicalExpression> expressions = new ArrayList<>();
+    for (DistributionField field : fields) {
+      if (field instanceof NamedDistributionField) {
+        NamedDistributionField namedDistributionField = (NamedDistributionField) field;
+        expressions.add(new FieldReference(namedDistributionField.getFieldName(), ExpressionPosition.UNKNOWN));
+      } else {
+        expressions.add(new FieldReference(childFields.get(field.getFieldId()), ExpressionPosition.UNKNOWN));
+      }
     }
 
-    final LogicalExpression distSeed = ValueExpressions.getInt(DIST_SEED);
-    return createHashBasedPartitionExpression(expressions, distSeed, HASH_HELPER_LOGICALEXPRESSION);
+    LogicalExpression distSeed = ValueExpressions.getInt(DIST_SEED);
+    return createHashBasedPartitionExpression(expressions, distSeed, HASH_HELPER_LOGICAL_EXPRESSION);
   }
 }

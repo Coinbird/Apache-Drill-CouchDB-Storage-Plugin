@@ -17,6 +17,18 @@
  */
 package org.apache.drill.exec.store.hive;
 
+import org.apache.calcite.rel.type.RelDataType;
+import org.apache.calcite.rel.type.RelDataTypeField;
+import org.apache.drill.common.types.Types;
+import org.apache.drill.exec.planner.sql.TypeInferenceUtils;
+import org.apache.drill.exec.planner.types.HiveToRelDataTypeConverter;
+import org.apache.drill.exec.record.MaterializedField;
+import org.apache.drill.exec.record.metadata.ColumnMetadata;
+import org.apache.drill.exec.record.metadata.MapColumnMetadata;
+import org.apache.drill.exec.record.metadata.MetadataUtils;
+import org.apache.drill.exec.record.metadata.PrimitiveColumnMetadata;
+import org.apache.drill.exec.record.metadata.TupleMetadata;
+import org.apache.drill.exec.record.metadata.TupleSchema;
 import org.apache.drill.shaded.guava.com.google.common.base.Preconditions;
 import org.apache.drill.shaded.guava.com.google.common.base.Strings;
 import io.netty.buffer.DrillBuf;
@@ -55,13 +67,14 @@ import org.apache.drill.exec.work.ExecErrorConstants;
 
 import org.apache.hadoop.hive.common.type.HiveDecimal;
 import org.apache.hadoop.hive.metastore.api.FieldSchema;
-import org.apache.hadoop.hive.metastore.MetaStoreUtils;
+import org.apache.hadoop.hive.metastore.api.Partition;
 import org.apache.hadoop.hive.metastore.api.StorageDescriptor;
 import org.apache.hadoop.hive.metastore.api.Table;
 import org.apache.hadoop.hive.ql.exec.Utilities;
 import org.apache.hadoop.hive.conf.HiveConf;
 import org.apache.hadoop.hive.ql.io.AcidUtils;
 import org.apache.hadoop.hive.ql.io.IOConstants;
+import org.apache.hadoop.hive.ql.metadata.HiveException;
 import org.apache.hadoop.hive.ql.metadata.HiveStorageHandler;
 import org.apache.hadoop.hive.ql.metadata.HiveUtils;
 import org.apache.hadoop.hive.ql.plan.TableDesc;
@@ -78,6 +91,8 @@ import org.apache.hadoop.mapred.InputFormat;
 import org.apache.hadoop.mapred.JobConf;
 import org.joda.time.DateTime;
 import org.joda.time.DateTimeZone;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -91,7 +106,7 @@ import java.util.stream.Collectors;
 import static org.apache.hadoop.hive.metastore.api.hive_metastoreConstants.META_TABLE_STORAGE;
 
 public class HiveUtilities {
-  private static final org.slf4j.Logger logger = org.slf4j.LoggerFactory.getLogger(HiveUtilities.class);
+  private static final Logger logger = LoggerFactory.getLogger(HiveUtilities.class);
 
   /**
    * Partition value is received in string format. Convert it into appropriate object based on the type.
@@ -432,7 +447,7 @@ public class HiveUtilities {
       }
       final HiveStorageHandler storageHandler = HiveUtils.getStorageHandler(job, storageHandlerClass);
       TableDesc tableDesc = new TableDesc();
-      tableDesc.setProperties(MetaStoreUtils.getTableMetadata(table));
+      tableDesc.setProperties(new org.apache.hadoop.hive.ql.metadata.Table(table).getMetadata());
       storageHandler.configureInputJobProperties(tableDesc, table.getParameters());
       return (Class<? extends InputFormat<?, ?>>) storageHandler.getInputFormatClass();
     } else {
@@ -453,7 +468,7 @@ public class HiveUtilities {
   }
 
   /**
-   * Wrapper around {@link MetaStoreUtils#getPartitionMetadata(org.apache.hadoop.hive.metastore.api.Partition, Table)}
+   * Wrapper around {@code MetaStoreUtils#getPartitionMetadata(org.apache.hadoop.hive.metastore.api.Partition, Table)}
    * which also adds parameters from table to properties returned by that method.
    *
    * @param partition the source of partition level parameters
@@ -462,16 +477,20 @@ public class HiveUtilities {
    */
   public static Properties getPartitionMetadata(final HivePartition partition, final HiveTableWithColumnCache table) {
     restoreColumns(table, partition);
-    Properties properties = MetaStoreUtils.getPartitionMetadata(partition, table);
+    try {
+      Properties properties = new org.apache.hadoop.hive.ql.metadata.Partition(new org.apache.hadoop.hive.ql.metadata.Table(table), partition).getMetadataFromPartitionSchema();
 
-    // SerDe expects properties from Table, but above call doesn't add Table properties.
-    // Include Table properties in final list in order to not to break SerDes that depend on
-    // Table properties. For example AvroSerDe gets the schema from properties (passed as second argument)
-    table.getParameters().entrySet().stream()
-        .filter(e -> e.getKey() != null && e.getValue() != null)
-        .forEach(e -> properties.put(e.getKey(), e.getValue()));
+      // SerDe expects properties from Table, but above call doesn't add Table properties.
+      // Include Table properties in final list in order to not to break SerDes that depend on
+      // Table properties. For example AvroSerDe gets the schema from properties (passed as second argument)
+      table.getParameters().entrySet().stream()
+          .filter(e -> e.getKey() != null && e.getValue() != null)
+          .forEach(e -> properties.put(e.getKey(), e.getValue()));
 
-    return properties;
+      return properties;
+    } catch (HiveException e) {
+      throw new DrillRuntimeException(e);
+    }
   }
 
   /**
@@ -492,17 +511,16 @@ public class HiveUtilities {
   }
 
   /**
-   * Wrapper around {@link MetaStoreUtils#getSchema(StorageDescriptor, StorageDescriptor, Map, String, String, List)}
+   * Wrapper around {@code MetaStoreUtils#getSchema(StorageDescriptor, StorageDescriptor, Map, String, String, List)}
    * which also sets columns from table cache to table and returns properties returned by
-   * {@link MetaStoreUtils#getSchema(StorageDescriptor, StorageDescriptor, Map, String, String, List)}.
+   * {@code MetaStoreUtils#getSchema(StorageDescriptor, StorageDescriptor, Map, String, String, List)}.
    *
    * @param table Hive table with cached columns
    * @return Hive table metadata
    */
   public static Properties getTableMetadata(HiveTableWithColumnCache table) {
     restoreColumns(table, null);
-    return MetaStoreUtils.getSchema(table.getSd(), table.getSd(), table.getParameters(),
-      table.getDbName(), table.getTableName(), table.getPartitionKeys());
+    return new org.apache.hadoop.hive.ql.metadata.Table(table).getMetadata();
   }
 
   /**
@@ -516,7 +534,7 @@ public class HiveUtilities {
         .append("Unsupported Hive data type ").append(unsupportedType).append(". ")
         .append(System.lineSeparator())
         .append("Following Hive data types are supported in Drill for querying: ")
-        .append("BOOLEAN, TINYINT, SMALLINT, INT, BIGINT, FLOAT, DOUBLE, DATE, TIMESTAMP, BINARY, DECIMAL, STRING, VARCHAR and CHAR");
+        .append("BOOLEAN, TINYINT, SMALLINT, INT, BIGINT, FLOAT, DOUBLE, DATE, TIMESTAMP, BINARY, DECIMAL, STRING, VARCHAR, CHAR, ARRAY.");
 
     throw UserException.unsupportedError()
         .message(errMsg.toString())
@@ -572,7 +590,7 @@ public class HiveUtilities {
   public static void verifyAndAddTransactionalProperties(JobConf job, StorageDescriptor sd) {
 
     if (AcidUtils.isTablePropertyTransactional(job)) {
-      AcidUtils.setTransactionalTableScan(job, true);
+      HiveConf.setBoolVar(job, HiveConf.ConfVars.HIVE_TRANSACTIONAL_TABLE_SCAN, true);
 
       // No work is needed, if schema evolution is used
       if (Utilities.isSchemaEvolutionEnabled(job, true) && job.get(IOConstants.SCHEMA_EVOLUTION_COLUMNS) != null &&
@@ -624,7 +642,7 @@ public class HiveUtilities {
     final HiveConf hiveConf = hiveScan.getHiveConf();
     final HiveTableWithColumnCache hiveTable = hiveScan.getHiveReadEntry().getTable();
 
-    if (HiveUtilities.containsUnsupportedDataTypes(hiveTable)) {
+    if (HiveUtilities.isParquetTableContainsUnsupportedType(hiveTable)) {
       return false;
     }
 
@@ -692,21 +710,16 @@ public class HiveUtilities {
   }
 
   /**
-   * This method allows to check whether the Hive Table contains
-   * <a href="https://cwiki.apache.org/confluence/display/Hive/LanguageManual+Types#LanguageManualTypes-ComplexTypes">
-   * Hive Complex Types</a><p>
-   * TODO: Need to implement it, DRILL-3290. Appropriate (new or existed) Drill types should be selected.
+   * Hive doesn't support union type for parquet tables yet.
+   * See <a href="https://github.com/apache/hive/blob/master/ql/src/java/org/apache/hadoop/hive/ql/io/parquet/convert/HiveSchemaConverter.java#L117">HiveSchemaConverter.java<a/>
    *
    * @param hiveTable Thrift table from Hive Metastore
    * @return true if table contains unsupported data types, false otherwise
    */
-  public static boolean containsUnsupportedDataTypes(final Table hiveTable) {
+  private static boolean isParquetTableContainsUnsupportedType(final Table hiveTable) {
     for (FieldSchema hiveField : hiveTable.getSd().getCols()) {
       final Category category = TypeInfoUtils.getTypeInfoFromTypeString(hiveField.getType()).getCategory();
-      if (category == Category.MAP ||
-          category == Category.STRUCT ||
-          category == Category.UNION ||
-          category == Category.LIST) {
+      if (category == Category.UNION) {
         logger.debug("Hive table contains unsupported data type: {}", category);
         return true;
       }
@@ -743,5 +756,108 @@ public class HiveUtilities {
     return newHiveConf;
   }
 
+  /**
+   * Helper method which stores partition columns in table columnListCache. If table columnListCache has exactly the
+   * same columns as partition, in partition stores columns index that corresponds to identical column list.
+   * If table columnListCache hasn't such column list, the column list adds to table columnListCache and in partition
+   * stores columns index that corresponds to column list.
+   *
+   * @param table     hive table instance
+   * @param partition partition instance
+   * @return hive partition wrapper
+   */
+  public static HiveTableWrapper.HivePartitionWrapper createPartitionWithSpecColumns(HiveTableWithColumnCache table, Partition partition) {
+    int listIndex = table.getColumnListsCache().addOrGet(partition.getSd().getCols());
+    return new HiveTableWrapper.HivePartitionWrapper(new HivePartition(partition, listIndex));
+  }
+
+  /**
+   * Converts specified {@code RelDataType relDataType} into {@link ColumnMetadata}.
+   * For the case when specified relDataType is struct, map with recursively converted children
+   * will be created.
+   *
+   * @param name        filed name
+   * @param relDataType filed type
+   * @return {@link ColumnMetadata} which corresponds to specified {@code RelDataType relDataType}
+   */
+  public static ColumnMetadata getColumnMetadata(String name, RelDataType relDataType) {
+    switch (relDataType.getSqlTypeName()) {
+      case ARRAY:
+        return getArrayMetadata(name, relDataType);
+      case MAP:
+      case OTHER:
+        throw new UnsupportedOperationException(String.format("Unsupported data type: %s", relDataType.getSqlTypeName()));
+      default:
+        if (relDataType.isStruct()) {
+          return getStructMetadata(name, relDataType);
+        } else {
+          return new PrimitiveColumnMetadata(
+              MaterializedField.create(name,
+                  TypeInferenceUtils.getDrillMajorTypeFromCalciteType(relDataType)));
+        }
+    }
+  }
+
+  /**
+   * Returns {@link ColumnMetadata} instance which corresponds to specified array {@code RelDataType relDataType}.
+   *
+   * @param name        name of the filed
+   * @param relDataType the source of type information to construct the schema
+   * @return {@link ColumnMetadata} instance
+   */
+  private static ColumnMetadata getArrayMetadata(String name, RelDataType relDataType) {
+    RelDataType componentType = relDataType.getComponentType();
+    ColumnMetadata childColumnMetadata = getColumnMetadata(name, componentType);
+    switch (componentType.getSqlTypeName()) {
+      case ARRAY:
+        // for the case when nested type is array, it should be placed into repeated list
+        return MetadataUtils.newRepeatedList(name, childColumnMetadata);
+      case MAP:
+      case OTHER:
+        throw new UnsupportedOperationException(String.format("Unsupported data type: %s", relDataType.getSqlTypeName()));
+      default:
+        if (componentType.isStruct()) {
+          // for the case when nested type is struct, it should be placed into repeated map
+          return MetadataUtils.newMapArray(name, childColumnMetadata.tupleSchema());
+        } else {
+          // otherwise creates column metadata with repeated data mode
+          return new PrimitiveColumnMetadata(
+              MaterializedField.create(name,
+                  Types.overrideMode(
+                      TypeInferenceUtils.getDrillMajorTypeFromCalciteType(componentType),
+                      DataMode.REPEATED)));
+        }
+    }
+  }
+
+  /**
+   * Returns {@link MapColumnMetadata} column metadata created based on specified {@code RelDataType relDataType} with
+   * converted to {@link ColumnMetadata} {@code relDataType}'s children.
+   *
+   * @param name        name of the filed
+   * @param relDataType {@link RelDataType} the source of the children for resulting schema
+   * @return {@link MapColumnMetadata} column metadata
+   */
+  private static MapColumnMetadata getStructMetadata(String name, RelDataType relDataType) {
+    TupleMetadata mapSchema = new TupleSchema();
+    for (RelDataTypeField relDataTypeField : relDataType.getFieldList()) {
+      mapSchema.addColumn(getColumnMetadata(relDataTypeField.getName(), relDataTypeField.getType()));
+    }
+    return MetadataUtils.newMap(name, mapSchema);
+  }
+
+  /**
+   * Converts specified {@code FieldSchema column} into {@link ColumnMetadata}.
+   * For the case when specified relDataType is struct, map with recursively converted children
+   * will be created.
+   *
+   * @param dataTypeConverter converter to obtain Calcite's types from Hive's ones
+   * @param column            column to convert
+   * @return {@link ColumnMetadata} which corresponds to specified {@code FieldSchema column}
+   */
+  public static ColumnMetadata getColumnMetadata(HiveToRelDataTypeConverter dataTypeConverter, FieldSchema column) {
+    RelDataType relDataType = dataTypeConverter.convertToNullableRelDataType(column);
+    return getColumnMetadata(column.getName(), relDataType);
+  }
 }
 

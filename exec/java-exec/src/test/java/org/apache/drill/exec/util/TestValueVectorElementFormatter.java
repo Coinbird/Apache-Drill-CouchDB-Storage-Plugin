@@ -20,11 +20,13 @@ package org.apache.drill.exec.util;
 import org.apache.drill.common.types.TypeProtos;
 import org.apache.drill.exec.ExecConstants;
 import org.apache.drill.exec.server.options.OptionManager;
+import org.apache.drill.test.BaseTest;
 import org.junit.Before;
 import org.junit.Test;
 import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
 
+import java.nio.charset.StandardCharsets;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
@@ -33,7 +35,7 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNull;
 import static org.mockito.Mockito.when;
 
-public class TestValueVectorElementFormatter {
+public class TestValueVectorElementFormatter extends BaseTest {
 
   @Mock
   private OptionManager options;
@@ -141,5 +143,15 @@ public class TestValueVectorElementFormatter {
     assertEquals("2012-11-05 13:00:30.12", formattedTimestamp);
     assertEquals("Mon, Nov 5, 2012", formattedDate);
     assertEquals("1:00:30 PM", formattedTime);
+  }
+
+  @Test // DRILL-7049
+  public void testFormatValueVectorElementBinary() {
+    ValueVectorElementFormatter formatter = new ValueVectorElementFormatter(options);
+    String testString = "Fred";
+    String formattedValue = formatter.format(
+            testString.getBytes(StandardCharsets.UTF_8),
+            TypeProtos.MinorType.VARBINARY);
+    assertEquals("Wrong Varbinary value formatting", testString, formattedValue);
   }
 }

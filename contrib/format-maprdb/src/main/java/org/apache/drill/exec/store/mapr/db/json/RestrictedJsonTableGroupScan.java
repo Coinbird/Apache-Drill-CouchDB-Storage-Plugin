@@ -24,6 +24,8 @@ import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.annotation.JsonTypeName;
+import org.apache.drill.exec.record.metadata.TupleMetadata;
+import org.apache.drill.exec.metastore.store.FileSystemMetadataProviderManager;
 import org.apache.drill.shaded.guava.com.google.common.base.Preconditions;
 import org.apache.drill.shaded.guava.com.google.common.collect.Lists;
 
@@ -53,12 +55,14 @@ public class RestrictedJsonTableGroupScan extends JsonTableGroupScan {
 
   @JsonCreator
   public RestrictedJsonTableGroupScan(@JsonProperty("userName") String userName,
-                            @JsonProperty("storage") FileSystemPlugin storagePlugin,
-                            @JsonProperty("format") MapRDBFormatPlugin formatPlugin,
-                            @JsonProperty("scanSpec") JsonScanSpec scanSpec, /* scan spec of the original table */
-                            @JsonProperty("columns") List<SchemaPath> columns,
-                            @JsonProperty("") MapRDBStatistics statistics) {
-    super(userName, storagePlugin, formatPlugin, scanSpec, columns, statistics);
+                                      @JsonProperty("storage") FileSystemPlugin storagePlugin,
+                                      @JsonProperty("format") MapRDBFormatPlugin formatPlugin,
+                                      @JsonProperty("scanSpec") JsonScanSpec scanSpec, /* scan spec of the original table */
+                                      @JsonProperty("columns") List<SchemaPath> columns,
+                                      @JsonProperty("") MapRDBStatistics statistics,
+                                      @JsonProperty("schema") TupleMetadata schema) {
+    super(userName, storagePlugin, formatPlugin, scanSpec, columns,
+        statistics, FileSystemMetadataProviderManager.getMetadataProviderForSchema(schema));
   }
 
   // TODO:  this method needs to be fully implemented
@@ -82,7 +86,7 @@ public class RestrictedJsonTableGroupScan extends JsonTableGroupScan {
         minorFragmentId);
     RestrictedMapRDBSubScan subscan =
         new RestrictedMapRDBSubScan(getUserName(), formatPlugin,
-        getEndPointFragmentMapping(minorFragmentId), columns, maxRecordsToRead, TABLE_JSON);
+        getEndPointFragmentMapping(minorFragmentId), columns, maxRecordsToRead, TABLE_JSON, getSchema());
 
     return subscan;
   }

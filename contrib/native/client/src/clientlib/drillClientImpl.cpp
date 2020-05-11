@@ -537,6 +537,23 @@ bool DrillClientImpl::clientNeedsAuthentication(const DrillUserProperties* userP
     return needsAuthentication;
 }
 
+/*
+* Check's if client has explicitly expressed interest in supporting complex types. It looks for USERPROP_SUPPORT_COMPLEX_TYPES
+* connection string property. If set to true then returns true else returns false
+*/
+bool DrillClientImpl::handleComplexTypes(const DrillUserProperties* userProperties) {
+    bool support_complex_types = false;
+    // check if userProperties is null
+    if (!userProperties) {
+        return support_complex_types;
+    }
+
+    std::string val;
+    support_complex_types = userProperties->isPropSet(USERPROP_SUPPORT_COMPLEX_TYPES) &&
+        boost::iequals(userProperties->getProp(USERPROP_SUPPORT_COMPLEX_TYPES, val), "true");
+    return support_complex_types;
+}
+
 connectionStatus_t DrillClientImpl::validateHandshake(DrillUserProperties* properties){
 
     DRILL_MT_LOG(DRILL_LOG(LOG_TRACE) << "validateHandShake\n";)
@@ -547,6 +564,7 @@ connectionStatus_t DrillClientImpl::validateHandshake(DrillUserProperties* prope
     u2b.set_support_listening(true);
     u2b.set_support_timeout(DrillClientConfig::getHeartbeatFrequency() > 0);
     u2b.set_sasl_support(exec::user::SASL_PRIVACY);
+    u2b.set_support_complex_types(handleComplexTypes(properties));
 
     // Adding version info
     exec::user::RpcEndpointInfos* infos = u2b.mutable_client_infos();
@@ -2311,9 +2329,14 @@ void DrillClientImpl::shutdownSocket(){
 
     // Delete the saslAuthenticatorImpl instance since connection is broken. It will recreated on next
     // call to connect.
-    if(m_saslAuthenticator != NULL) {
-        delete m_saslAuthenticator;
-        m_saslAuthenticator = NULL;
+    if (m_saslAuthenticator != NULL) {
+        {
+            boost::mutex::scoped_lock lock(m_sasl_dispose_mutex);
+            if (m_saslAuthenticator != NULL) {
+                delete m_saslAuthenticator;
+                m_saslAuthenticator = NULL;
+            }
+        }
     }
 
     // Reset the SASL states.

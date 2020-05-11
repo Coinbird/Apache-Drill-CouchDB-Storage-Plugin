@@ -17,19 +17,7 @@
  */
 package org.apache.drill.exec.server;
 
-import java.io.IOException;
-import java.nio.file.InvalidPathException;
-import java.nio.file.Path;
-import java.nio.file.Paths;
-import java.nio.file.StandardWatchEventKinds;
-import java.nio.file.WatchEvent;
-import java.nio.file.WatchKey;
-import java.nio.file.WatchService;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicInteger;
-
-import javax.tools.ToolProvider;
-
+import org.apache.curator.framework.api.ACLProvider;
 import org.apache.drill.common.AutoCloseables;
 import org.apache.drill.common.StackTrace;
 import org.apache.drill.common.concurrent.ExtendedLatch;
@@ -40,9 +28,11 @@ import org.apache.drill.common.scanner.persistence.ScanResult;
 import org.apache.drill.exec.ExecConstants;
 import org.apache.drill.exec.coord.ClusterCoordinator;
 import org.apache.drill.exec.coord.ClusterCoordinator.RegistrationHandle;
+import org.apache.drill.exec.coord.zk.ZKACLProviderFactory;
 import org.apache.drill.exec.coord.zk.ZKClusterCoordinator;
 import org.apache.drill.exec.exception.DrillbitStartupException;
 import org.apache.drill.exec.proto.CoordinationProtos.DrillbitEndpoint;
+import org.apache.drill.exec.proto.CoordinationProtos.DrillbitEndpoint.State;
 import org.apache.drill.exec.server.DrillbitStateManager.DrillbitState;
 import org.apache.drill.exec.server.options.OptionDefinition;
 import org.apache.drill.exec.server.options.OptionValue;
@@ -51,31 +41,52 @@ import org.apache.drill.exec.server.options.SystemOptionManager;
 import org.apache.drill.exec.server.rest.WebServer;
 import org.apache.drill.exec.service.ServiceEngine;
 import org.apache.drill.exec.store.StoragePluginRegistry;
-import org.apache.drill.exec.store.sys.store.provider.CachingPersistentStoreProvider;
-import org.apache.drill.exec.store.sys.store.provider.InMemoryStoreProvider;
 import org.apache.drill.exec.store.sys.PersistentStoreProvider;
 import org.apache.drill.exec.store.sys.PersistentStoreRegistry;
+import org.apache.drill.exec.store.sys.store.provider.CachingPersistentStoreProvider;
+import org.apache.drill.exec.store.sys.store.provider.InMemoryStoreProvider;
 import org.apache.drill.exec.store.sys.store.provider.LocalPersistentStoreProvider;
-import org.apache.drill.exec.util.GuavaPatcher;
+import org.apache.drill.common.util.GuavaPatcher;
+import org.apache.drill.common.util.ProtobufPatcher;
 import org.apache.drill.exec.work.WorkManager;
-import org.apache.zookeeper.Environment;
-
-import org.apache.drill.exec.proto.CoordinationProtos.DrillbitEndpoint.State;
 import org.apache.drill.shaded.guava.com.google.common.annotations.VisibleForTesting;
 import org.apache.drill.shaded.guava.com.google.common.base.Stopwatch;
+import org.apache.zookeeper.Environment;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.slf4j.bridge.SLF4JBridgeHandler;
+
+import javax.tools.ToolProvider;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.InvalidPathException;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.nio.file.StandardWatchEventKinds;
+import java.nio.file.WatchEvent;
+import java.nio.file.WatchKey;
+import java.nio.file.WatchService;
+import java.util.Objects;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Starts, tracks and stops all the required services for a Drillbit daemon to work.
  */
 public class Drillbit implements AutoCloseable {
-  private static final org.slf4j.Logger logger = org.slf4j.LoggerFactory.getLogger(Drillbit.class);
+
+  private static final Logger logger = LoggerFactory.getLogger(Drillbit.class);
 
   static {
     /*
-     * HBase client uses older version of Guava's Stopwatch API,
-     * while Drill ships with 18.x which has changes the scope of
-     * these API to 'package', this code make them accessible.
+     * HBase and MapR-DB clients use older version of protobuf,
+     * and override some methods that became final in recent versions.
+     * This code removes these final modifiers.
+     */
+    ProtobufPatcher.patch();
+    /*
+     * Some libraries, such as Hadoop or HBase, depend on incompatible versions of Guava.
+     * This code adds back some methods to so that the libraries can work with single Guava version.
      */
     GuavaPatcher.patch();
     Environment.logEnv("Drillbit environment: ", logger);
@@ -86,8 +97,6 @@ public class Drillbit implements AutoCloseable {
 
   public final static String SYSTEM_OPTIONS_NAME = "org.apache.drill.exec.server.Drillbit.system_options";
 
-  private boolean isClosed = false;
-
   private final ClusterCoordinator coord;
   private final ServiceEngine engine;
   private final PersistentStoreProvider storeProvider;
@@ -95,12 +104,13 @@ public class Drillbit implements AutoCloseable {
   private final BootStrapContext context;
   private final WebServer webServer;
   private final int gracePeriod;
-  private DrillbitStateManager stateManager;
-  private boolean quiescentMode;
-  private boolean forcefulShutdown = false;
+  private final DrillbitStateManager stateManager;
   private GracefulShutdownThread gracefulShutdownThread;
   private Thread shutdownHook;
-  private boolean interruptPollShutdown = true;
+
+  private volatile boolean quiescentMode;
+  private volatile boolean forcefulShutdown;
+  private volatile boolean interruptPollShutdown = true;
 
   public void setQuiescentMode(boolean quiescentMode) {
     this.quiescentMode = quiescentMode;
@@ -140,7 +150,6 @@ public class Drillbit implements AutoCloseable {
     this(config, SystemOptionManager.createDefaultOptionDefinitions(), serviceSet, classpathScan);
   }
 
-  @SuppressWarnings("resource")
   @VisibleForTesting
   public Drillbit(
     final DrillConfig config,
@@ -168,8 +177,12 @@ public class Drillbit implements AutoCloseable {
       coord = serviceSet.getCoordinator();
       storeProvider = new CachingPersistentStoreProvider(new LocalPersistentStoreProvider(config));
     } else {
-      coord = new ZKClusterCoordinator(config, context);
-      storeProvider = new PersistentStoreRegistry<ClusterCoordinator>(this.coord, config).newPStoreProvider();
+      String clusterId = config.getString(ExecConstants.SERVICE_NAME);
+      String zkRoot = config.getString(ExecConstants.ZK_ROOT);
+      String drillClusterPath = "/" + zkRoot + "/" +  clusterId;
+      ACLProvider aclProvider = ZKACLProviderFactory.getACLProvider(config, drillClusterPath, context);
+      coord = new ZKClusterCoordinator(config, aclProvider);
+      storeProvider = new PersistentStoreRegistry<>(this.coord, config).newPStoreProvider();
     }
 
     //Check if InMemory Profile Store, else use Default Store Provider
@@ -194,6 +207,12 @@ public class Drillbit implements AutoCloseable {
     return webServer.getPort();
   }
 
+  @VisibleForTesting
+  public WorkManager getManager() { return manager; }
+
+  @VisibleForTesting
+  public WebServer getWebServer() { return webServer; }
+
   public void run() throws Exception {
     final Stopwatch w = Stopwatch.createStarted();
     logger.debug("Startup begun.");
@@ -206,7 +225,6 @@ public class Drillbit implements AutoCloseable {
     }
     DrillbitEndpoint md = engine.start();
     manager.start(md, engine.getController(), engine.getDataConnectionCreator(), coord, storeProvider, profileStoreProvider);
-    @SuppressWarnings("resource")
     final DrillbitContext drillbitContext = manager.getContext();
     storageRegistry = drillbitContext.getStorage();
     storageRegistry.init();
@@ -229,33 +247,32 @@ public class Drillbit implements AutoCloseable {
     logger.info("Startup completed ({} ms).", w.elapsed(TimeUnit.MILLISECONDS));
   }
 
-  /*
-    Wait uninterruptibly
+  /**
+   * Wait uninterruptibly
    */
-  public void waitForGracePeriod() {
+  private void waitForGracePeriod() {
     ExtendedLatch exitLatch = new ExtendedLatch();
     exitLatch.awaitUninterruptibly(gracePeriod);
   }
 
   private void updateState(State state) {
-    if ( registrationHandle != null) {
+    if (registrationHandle != null) {
       coord.update(registrationHandle, state);
     }
   }
 
-  /*
-
-   */
   public void shutdown() {
     this.close();
   }
- /*
-  The drillbit is moved into Quiescent state and the drillbit waits for grace period amount of time.
-  Then drillbit moves into draining state and waits for all the queries and fragments to complete.
-  */
+
+  /**
+   * The drillbit is moved into Quiescent state and the drillbit waits for grace
+   * period amount of time. Then drillbit moves into draining state and waits
+   * for all the queries and fragments to complete.
+   */
   @Override
   public synchronized void close() {
-    if ( !stateManager.getState().equals(DrillbitState.ONLINE)) {
+    if (!stateManager.getState().equals(DrillbitState.ONLINE)) {
       return;
     }
     final Stopwatch w = Stopwatch.createStarted();
@@ -280,7 +297,7 @@ public class Drillbit implements AutoCloseable {
     //safe to exit
     updateState(State.OFFLINE);
     stateManager.setState(DrillbitState.OFFLINE);
-    if(quiescentMode == true) {
+    if (quiescentMode) {
       return;
     }
     if (coord != null && registrationHandle != null) {
@@ -320,7 +337,6 @@ public class Drillbit implements AutoCloseable {
     if (interruptPollShutdown) {
       gracefulShutdownThread.interrupt();
     }
-
   }
 
   private void javaPropertiesToSystemOptions() {
@@ -330,13 +346,12 @@ public class Drillbit implements AutoCloseable {
       return;
     }
 
-    @SuppressWarnings("resource")
     final SystemOptionManager optionManager = getContext().getOptionManager();
 
     // parse out the properties, validate, and then set them
-    final String systemProps[] = allSystemProps.split(",");
+    final String[] systemProps = allSystemProps.split(",");
     for (final String systemProp : systemProps) {
-      final String keyValue[] = systemProp.split("=");
+      final String[] keyValue = systemProp.split("=");
       if (keyValue.length != 2) {
         throwInvalidSystemOption(systemProp, "does not contain a key=value assignment");
       }
@@ -365,67 +380,109 @@ public class Drillbit implements AutoCloseable {
     }
   }
 
-
-  // Polls for graceful file to check if graceful shutdown is triggered from the script.
+  /**
+   * Polls for graceful file to check if graceful shutdown is triggered from the script.
+   */
   private static class GracefulShutdownThread extends Thread {
+
+    private static final String DRILL_HOME = "DRILL_HOME";
+    private static final String GRACEFUL_SIGFILE = "GRACEFUL_SIGFILE";
+    private static final String NOT_SUPPORTED_MESSAGE = "Graceful shutdown from command line will not be supported.";
 
     private final Drillbit drillbit;
     private final StackTrace stackTrace;
-    public GracefulShutdownThread(final Drillbit drillbit, final StackTrace stackTrace) {
+
+    GracefulShutdownThread(Drillbit drillbit, StackTrace stackTrace) {
       this.drillbit = drillbit;
       this.stackTrace = stackTrace;
+
+      setName("Drillbit-Graceful-Shutdown#" + getName());
     }
 
     @Override
     public void run () {
       try {
-        pollShutdown(drillbit);
-      } catch (InterruptedException  e) {
-        logger.debug("Interrupted GracefulShutdownThread");
+        pollShutdown();
+      } catch (InterruptedException e) {
+        drillbit.interruptPollShutdown = false;
+        logger.debug("Graceful Shutdown thread was interrupted", e);
       } catch (IOException e) {
-        throw new RuntimeException("Caught exception while polling for gracefulshutdown\n" + stackTrace, e);
+        throw new RuntimeException("Exception while polling for graceful shutdown\n" + stackTrace, e);
       }
     }
 
-    /*
-     * Poll for the graceful file, if the file is found cloase the drillbit. In case if the DRILL_HOME path is not
-     * set, graceful shutdown will not be supported from the command line.
+    /**
+     * Poll for the graceful file, if the file is found or modified, close the Drillbit.
+     * In case if the {@link #DRILL_HOME} or {@link #GRACEFUL_SIGFILE} environment variables are not set,
+     * graceful shutdown will not be supported from the command line.
      */
-    private void pollShutdown(Drillbit drillbit) throws IOException, InterruptedException {
-      final String drillHome = System.getenv("DRILL_HOME");
-      final String gracefulFile = System.getenv("GRACEFUL_SIGFILE");
-      final Path drillHomePath;
-      if (drillHome == null || gracefulFile == null) {
-        logger.warn("Cannot access graceful file. Graceful shutdown from command line will not be supported.");
+    private void pollShutdown() throws IOException, InterruptedException {
+      Path drillHomePath = getDrillHomePath();
+      String gracefulFile = System.getenv(GRACEFUL_SIGFILE);
+
+      if (!areShutdownArgsValid(drillHomePath, gracefulFile)) {
         return;
       }
-      try {
-        drillHomePath = Paths.get(drillHome);
-      } catch (InvalidPathException e) {
-        logger.warn("Cannot access graceful file. Graceful shutdown from command line will not be supported.");
-        return;
-      }
-      boolean triggered_shutdown = false;
-      WatchKey wk = null;
-      try (final WatchService watchService = drillHomePath.getFileSystem().newWatchService()) {
-        drillHomePath.register(watchService, StandardWatchEventKinds.ENTRY_MODIFY, StandardWatchEventKinds.ENTRY_CREATE);
-        while (!triggered_shutdown) {
-          wk = watchService.take();
-          for (WatchEvent<?> event : wk.pollEvents()) {
-            final Path changed = (Path) event.context();
-            if (changed != null && changed.endsWith(gracefulFile)) {
-              drillbit.interruptPollShutdown = false;
-              triggered_shutdown = true;
-              drillbit.close();
+
+      while (true) {
+        try (WatchService watchService = Objects.requireNonNull(drillHomePath).getFileSystem().newWatchService()) {
+          drillHomePath.register(watchService, StandardWatchEventKinds.ENTRY_CREATE, StandardWatchEventKinds.ENTRY_MODIFY);
+          while (true) {
+            WatchKey watchKey = watchService.take();
+            for (WatchEvent<?> event : watchKey.pollEvents()) {
+              if (StandardWatchEventKinds.OVERFLOW != event.kind()) {
+                Path changedPath = (Path) event.context();
+                if (changedPath != null && changedPath.endsWith(gracefulFile)) {
+                  drillbit.interruptPollShutdown = false;
+                  drillbit.close();
+                  return;
+                }
+              }
+            }
+
+            if (!watchKey.reset()) {
+              logger.debug("Watch key is no longer valid, attempting to re-register Drill home path in Watch Service");
               break;
             }
           }
         }
-      } finally {
-        if (wk != null) {
-          wk.cancel();
+      }
+    }
+
+    private Path getDrillHomePath() {
+      String drillHome = System.getenv(DRILL_HOME);
+      try {
+        return drillHome == null ? null : Paths.get(drillHome);
+      } catch (InvalidPathException e) {
+        logger.warn("Unable to construct {} path [{}]: {}.", DRILL_HOME, drillHome, e.getMessage());
+        logger.debug("Invalid {} path", DRILL_HOME, e);
+        return null;
+      }
+    }
+
+    private boolean areShutdownArgsValid(Path drillHomePath, String gracefulFile) {
+      StringBuilder builder = new StringBuilder();
+      if (drillHomePath == null) {
+        builder.append(DRILL_HOME).append(" is unset or invalid.");
+      } else {
+        if (!Files.exists(drillHomePath)) {
+          builder.append(DRILL_HOME).append("path [").append(drillHomePath).append("] does not exist.");
         }
       }
+
+      if (gracefulFile == null) {
+        if (builder.length() != 0) {
+          builder.append(" ");
+        }
+        builder.append(GRACEFUL_SIGFILE).append(" is unset.");
+      }
+
+      if (builder.length() != 0) {
+        logger.warn("{}. {}", NOT_SUPPORTED_MESSAGE, builder.toString());
+        return false;
+      }
+
+      return true;
     }
   }
 
@@ -445,7 +502,7 @@ public class Drillbit implements AutoCloseable {
      * @param stackTrace the stack trace from where the Drillbit was started;
      *   use new StackTrace() to generate this
      */
-    public ShutdownThread(final Drillbit drillbit, final StackTrace stackTrace) {
+    ShutdownThread(final Drillbit drillbit, final StackTrace stackTrace) {
       this.drillbit = drillbit;
       this.stackTrace = stackTrace;
       /*

@@ -21,13 +21,118 @@ import org.apache.drill.common.types.TypeProtos.DataMode;
 import org.apache.drill.common.types.TypeProtos.MajorType;
 import org.apache.drill.common.types.TypeProtos.MinorType;
 import org.apache.drill.exec.record.MaterializedField;
-import org.apache.drill.exec.vector.accessor.ColumnConversionFactory;
+import org.apache.drill.exec.vector.accessor.ColumnWriter;
+import org.joda.time.format.DateTimeFormatter;
 
 /**
  * Metadata description of a column including names, types and structure
  * information.
  */
-public interface ColumnMetadata {
+public interface ColumnMetadata extends Propertied {
+
+  /**
+   * Predicted number of elements per array entry. Default is
+   * taken from the often hard-coded value of 10.
+   */
+  String EXPECTED_CARDINALITY_PROP = DRILL_PROP_PREFIX + "cardinality";
+
+  /**
+   * Default value represented as a string.
+   */
+  String DEFAULT_VALUE_PROP = DRILL_PROP_PREFIX + "default";
+
+  /**
+   * Expected (average) width for variable-width columns.
+   */
+  String EXPECTED_WIDTH_PROP = DRILL_PROP_PREFIX + "width";
+
+  /**
+   * Optional format to use when converting to/from string values.
+   */
+  String FORMAT_PROP = DRILL_PROP_PREFIX + "format";
+
+  /**
+   * Indicates how to handle blanks. Must be one of the valid values defined
+   * in AbstractConvertFromString. Normally set on the converter by the plugin
+   * rather than by the user in the schema.
+   */
+  String BLANK_AS_PROP = DRILL_PROP_PREFIX + "blank-as";
+
+  /**
+   * Convert blanks to null values (if the column is nullable), or
+   * fill with the default value (non-nullable.)
+   */
+  String BLANK_AS_NULL = "null";
+
+  /**
+   * Convert blanks for numeric fields to 0. For non-numeric
+   * fields, convert to null (for nullable) or the default value
+   * (for non-nullable). Works best if non-numeric fields are declared
+   * as nullable.
+   */
+  String BLANK_AS_ZERO = "0";
+
+  /**
+   * Indicates whether to project the column in a wildcard (*) query.
+   * Special columns may be excluded from projection. Certain "special"
+   * columns may be available only when explicitly requested. For example,
+   * the log reader has a "_raw" column which includes the entire input
+   * line before parsing. This column can be requested explicitly:<br>
+   * <tt>SELECT foo, bar, _raw FROM ...</tt><br>
+   * but the column will <i>not</i> be included when using the wildcard:<br>
+   * <tt>SELECT * FROM ...</tt>
+   * <p>
+   * Marking a column (either in the provided schema or the reader schema)
+   * will prevent that column from appearing in a wildcard expansion.
+   */
+  String EXCLUDE_FROM_WILDCARD = DRILL_PROP_PREFIX + "special";
+
+  int DEFAULT_ARRAY_SIZE = 10;
+
+  /**
+   * Indicates that a provided schema column is an implicit column
+   * (one defined by Drill rather than the reader.) Allows the implicit
+   * schema to reify partition names, say, as reader-specific names.
+   * For example, {@code dir0} might be reified as {@code year}, etc.
+   * <p>
+   * Available when the underlying reader supports implicit columns.
+   * The value is the defined implicit column name (not the name
+   * set via system/session options.) Using the defined name makes
+   * the provided schema immune from runtime changes to column names.
+   * <p>
+   * As the result of adding this feature, any column <i>not</i>
+   * tagged as implicit is a reader column, even if that column
+   * happens to have the same (currently selected runtime) name
+   * as an implicit column.
+   */
+  String IMPLICIT_COL_TYPE = DRILL_PROP_PREFIX + "implicit";
+
+  /**
+   * Fully-qualified name implicit column type.
+   */
+  String IMPLICIT_FQN = "fqn";
+
+  /**
+   * File path implicit column type.
+   */
+  String IMPLICIT_FILEPATH = "filepath";
+
+  /**
+   * File name implicit column type.
+   */
+  String IMPLICIT_FILENAME = "filename";
+
+  /**
+   * File suffix implicit column type.
+   */
+  String IMPLICIT_SUFFIX = "suffix";
+
+  /**
+   * Prefix for partition directories. dir0 is the table root
+   * folder, dir1 the first subdirectory, and so on. Directories that
+   * don't exist in the actual file path take a {@code NULL} value.
+   */
+  String IMPLICIT_PARTITION_PREFIX = "dir";
 
   /**
    * Rough characterization of Drill types into metadata categories.
@@ -37,27 +142,23 @@ public interface ColumnMetadata {
    * the messy type system while staying close to the underlying
    * implementation.
    */
-
   enum StructureType {
 
     /**
      * Primitive column (all types except List, Map and Union.)
      * Includes (one-dimensional) arrays of those types.
      */
-
     PRIMITIVE,
 
     /**
      * Map or repeated map. Also describes the row as a whole.
      */
-
     TUPLE,
 
     /**
      * Union or (non-repeated) list. (A non-repeated list is,
      * essentially, a repeated union.)
      */
-
     VARIANT,
 
     /**
@@ -73,11 +174,19 @@ public interface ColumnMetadata {
      * a separate category for 1D lists. But, again, that is not how
      * the code has evolved.
      */
+    MULTI_ARRAY,
 
-    MULTI_ARRAY
+    /**
+     * Dict or repeated dict.
+     */
+    DICT,
+
+    /**
+     * Unknown, specified at runtime. (Only for logical columns,
+     * not for physical columns.)
+     */
+    DYNAMIC
   }
-
-  int DEFAULT_ARRAY_SIZE = 10;
 
   StructureType structureType();
 
@@ -86,15 +195,13 @@ public interface ColumnMetadata {
    *
    * @return the tuple schema
    */
-
-  TupleMetadata mapSchema();
+  TupleMetadata tupleSchema();
 
   /**
    * Schema for <tt>VARIANT</tt> columns.
    *
    * @return the variant schema
    */
-
   VariantMetadata variantSchema();
 
   /**
@@ -110,7 +217,6 @@ public interface ColumnMetadata {
    *
    * @return the description of the (n-1) st dimension.
    */
-
   ColumnMetadata childSchema();
   MaterializedField schema();
   MaterializedField emptySchema();
@@ -124,6 +230,18 @@ public interface ColumnMetadata {
   boolean isVariableWidth();
   boolean isMap();
   boolean isVariant();
+  boolean isDict();
+
+  /**
+   * Reports if the column is dynamic. A dynamic column is one with
+   * a "type to be named later." It is valid for describing a dynamic
+   * schema, but not for creating vectors; to create a vector the
+   * column must be resolved to a concrete type. The context should
+   * make it clear if any columns can be dynamic.
+   * @return {@code true} if the column does not yet have a concrete
+   * type, {@code false} if the column type is concrete
+   */
+  boolean isDynamic();
 
   /**
    * Determine if the schema represents a column with a LIST type with
@@ -132,15 +250,13 @@ public interface ColumnMetadata {
    *
    * @return true if the column is of type LIST of UNIONs
    */
-
   boolean isMultiList();
 
   /**
    * Report whether one column is equivalent to another. Columns are equivalent
    * if they have the same name, type and structure (ignoring internal structure
-   * such as offset vectors.)
+   * such as properties.)
    */
-
   boolean isEquivalent(ColumnMetadata other);
 
   /**
@@ -149,7 +265,6 @@ public interface ColumnMetadata {
    *
    * @param width the expected column width
    */
-
   void setExpectedWidth(int width);
 
   /**
@@ -159,7 +274,6 @@ public interface ColumnMetadata {
    * @return the expected column width of the each data value. Does not include
    * "overhead" space such as for the null-value vector or offset vector
    */
-
   int expectedWidth();
 
   /**
@@ -169,7 +283,6 @@ public interface ColumnMetadata {
    * @param childCount the expected average array cardinality. Defaults to
    * 1 for non-array columns, 10 for array columns
    */
-
   void setExpectedElementCount(int childCount);
 
   /**
@@ -179,47 +292,48 @@ public interface ColumnMetadata {
    * @return the expected value cardinality per value (per-row for top-level
    * columns, per array element for arrays within lists)
    */
-
   int expectedElementCount();
 
-  /**
-   * Set the default value to use for filling a vector when no real data is
-   * available, such as for columns added in new files but which does not
-   * exist in existing files. The "default default" is null, which works
-   * only for nullable columns.
-   *
-   * @param value column value, represented as a Java object, acceptable
-   * to the {@link ColumnWriter#setObject()} method for this column's writer.
-   */
-  void setDefaultValue(Object value);
+  void setFormat(String value);
+
+  String format();
 
   /**
-   * Returns the default value for this column.
+   * Returns the formatter to use for date/time values. Only valid for
+   * date/time columns.
    *
-   * @return the default value, or null if no default value has been set
+   * @return
    */
-  Object defaultValue();
+  DateTimeFormatter dateTimeFormatter();
 
   /**
-   * Set the factory for an optional shim writer that translates from the type of
-   * data available to the code that creates the vectors on the one hand,
-   * and the actual type of the column on the other. For example, a shim
-   * might parse a string form of a date into the form stored in vectors.
-   * <p>
-   * The shim must write to the base vector for this column using one of
-   * the supported base writer "set" methods.
-   * <p>
-   * The default is to use the "natural" type: that is, to insert no
-   * conversion shim.
+   * Sets the default value property using the string-encoded form of the value.
+   * The default value is used for filling a vector when no real data is available.
+   *
+   * @param value the default value in String representation
    */
-  void setTypeConverter(ColumnConversionFactory factory);
+  void setDefaultValue(String value);
 
   /**
-   * Returns the type conversion shim for this column.
+   * Returns the default value for this column in String literal representation.
    *
-   * @return the type conversion factory, or null if none is set
+   * @return the default value in String literal representation, or null if no
+   * default value has been set
    */
-  ColumnConversionFactory typeConverter();
+  String defaultValue();
+
+  /**
+   * Returns the default value decoded into object form. This is the same as:
+   * <pre><code>decodeValue(defaultValue());
+   * </code></pre>
+   *
+   * @return the default value decode as an object that can be passed to
+   * the {@link ColumnWriter#setObject()} method.
+   */
+  Object decodeDefaultValue();
+
+  String valueToString(Object value);
+  Object valueFromString(String value);
 
   /**
    * Create an empty version of this column. If the column is a scalar,
@@ -228,17 +342,7 @@ public interface ColumnMetadata {
    *
    * @return empty clone of this column
    */
-
   ColumnMetadata cloneEmpty();
-
-  /**
-   * Reports whether, in this context, the column is projected outside
-   * of the context. (That is, whether the column is backed by an actual
-   * value vector.)
-   */
-
-  boolean isProjected();
-  void setProjected(boolean projected);
 
   int precision();
   int scale();
@@ -262,5 +366,4 @@ public interface ColumnMetadata {
    * @return column metadata string representation
    */
   String columnString();
-
 }

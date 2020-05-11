@@ -17,22 +17,39 @@
  */
 package org.apache.drill.exec.store.log;
 
-import com.fasterxml.jackson.annotation.JsonIgnore;
-import com.fasterxml.jackson.annotation.JsonTypeName;
-import org.apache.drill.shaded.guava.com.google.common.base.Objects;
-import org.apache.drill.common.logical.FormatPluginConfig;
-
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.List;
 
-@JsonTypeName("logRegex")
+import org.apache.drill.common.PlanStringBuilder;
+import org.apache.drill.common.logical.FormatPluginConfig;
+import org.apache.drill.shaded.guava.com.google.common.base.Objects;
+import org.apache.drill.shaded.guava.com.google.common.collect.ImmutableList;
+
+import com.fasterxml.jackson.annotation.JsonCreator;
+import com.fasterxml.jackson.annotation.JsonIgnore;
+import com.fasterxml.jackson.annotation.JsonProperty;
+import com.fasterxml.jackson.annotation.JsonTypeName;
+
+@JsonTypeName(LogFormatPlugin.PLUGIN_NAME)
 public class LogFormatConfig implements FormatPluginConfig {
 
-  private String regex;
-  private String extension;
-  private int maxErrors = 10;
-  private List<LogFormatField> schema;
+  private final String regex;
+  private final String extension;
+  private final int maxErrors;
+  private final List<LogFormatField> schema;
+
+  @JsonCreator
+  public LogFormatConfig(
+      @JsonProperty("regex") String regex,
+      @JsonProperty("extension") String extension,
+      @JsonProperty("maxErrors") Integer maxErrors,
+      @JsonProperty("schema") List<LogFormatField> schema) {
+    this.regex = regex;
+    this.extension = extension;
+    this.maxErrors = maxErrors == null ? 10 : maxErrors;
+    this.schema = schema == null
+        ? ImmutableList.of() : schema;
+  }
 
   public String getRegex() {
     return regex;
@@ -50,23 +67,6 @@ public class LogFormatConfig implements FormatPluginConfig {
     return schema;
   }
 
-  //Setters
-  public void setExtension(String ext) {
-    this.extension = ext;
-  }
-
-  public void setMaxErrors(int errors) {
-    this.maxErrors = errors;
-  }
-
-  public void setRegex(String regex) {
-    this.regex = regex;
-  }
-
-  public void setSchema() {
-    this.schema = new ArrayList<LogFormatField>();
-  }
-
   @Override
   public boolean equals(Object obj) {
     if (this == obj) {
@@ -77,24 +77,29 @@ public class LogFormatConfig implements FormatPluginConfig {
     }
     LogFormatConfig other = (LogFormatConfig) obj;
     return Objects.equal(regex, other.regex) &&
-        Objects.equal(maxErrors, other.maxErrors) &&
-        Objects.equal(schema, other.schema) &&
-        Objects.equal(extension, other.extension);
+           Objects.equal(maxErrors, other.maxErrors) &&
+           Objects.equal(schema, other.schema) &&
+           Objects.equal(extension, other.extension);
   }
 
   @Override
   public int hashCode() {
-    return Arrays.hashCode(new Object[]{regex, maxErrors, schema, extension});
+    return Objects.hashCode(regex, maxErrors, schema, extension);
+  }
+
+  @JsonIgnore
+  public boolean hasSchema() {
+    return schema != null && ! schema.isEmpty();
   }
 
   @JsonIgnore
   public List<String> getFieldNames() {
-    List<String> result = new ArrayList<String>();
-    if (this.schema == null) {
+    List<String> result = new ArrayList<>();
+    if (! hasSchema()) {
       return result;
     }
 
-    for (LogFormatField field : this.schema) {
+    for (LogFormatField field : schema) {
       result.add(field.getFieldName());
     }
     return result;
@@ -102,18 +107,31 @@ public class LogFormatConfig implements FormatPluginConfig {
 
   @JsonIgnore
   public String getDataType(int fieldIndex) {
-    LogFormatField f = this.schema.get(fieldIndex);
-    return f.getFieldType().toUpperCase();
+    LogFormatField field = getField(fieldIndex);
+    return field == null ? null : field.getFieldType();
   }
 
   @JsonIgnore
   public LogFormatField getField(int fieldIndex) {
-    return this.schema.get(fieldIndex);
+    if (schema == null || fieldIndex >= schema.size()) {
+      return null;
+    }
+    return schema.get(fieldIndex);
   }
 
   @JsonIgnore
-  public String getDateFormat(int patternIndex) {
-    LogFormatField f = this.schema.get(patternIndex);
-    return f.getFormat();
+  public String getDateFormat(int fieldIndex) {
+    LogFormatField field = getField(fieldIndex);
+    return field == null ? null : field.getFormat();
+  }
+
+  @Override
+  public String toString() {
+    return new PlanStringBuilder(this)
+        .field("regex", regex)
+        .field("extension", extension)
+        .field("schema", schema)
+        .field("maxErrors", maxErrors)
+        .toString();
   }
 }

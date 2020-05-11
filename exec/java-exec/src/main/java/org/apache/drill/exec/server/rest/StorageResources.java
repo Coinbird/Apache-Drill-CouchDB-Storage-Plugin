@@ -17,15 +17,17 @@
  */
 package org.apache.drill.exec.server.rest;
 
-import java.io.IOException;
-import java.io.StringReader;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
-import java.util.Map;
+import java.util.Spliterator;
+import java.util.Spliterators;
+import java.util.stream.Collectors;
+import java.util.stream.StreamSupport;
 
 import javax.annotation.security.RolesAllowed;
 import javax.inject.Inject;
+import javax.servlet.http.HttpServletRequest;
 import javax.ws.rs.Consumes;
 import javax.ws.rs.DELETE;
 import javax.ws.rs.FormParam;
@@ -34,79 +36,111 @@ import javax.ws.rs.POST;
 import javax.ws.rs.Path;
 import javax.ws.rs.PathParam;
 import javax.ws.rs.Produces;
+import javax.ws.rs.core.HttpHeaders;
 import javax.ws.rs.core.MediaType;
 import javax.ws.rs.core.Response;
 import javax.ws.rs.core.SecurityContext;
 import javax.xml.bind.annotation.XmlRootElement;
 
-import org.apache.drill.common.exceptions.ExecutionSetupException;
-import org.apache.drill.common.logical.StoragePluginConfig;
+import org.apache.commons.lang3.StringUtils;
 import org.apache.drill.exec.server.rest.DrillRestServer.UserAuthEnabled;
-import org.apache.drill.exec.store.StoragePlugin;
 import org.apache.drill.exec.store.StoragePluginRegistry;
+import org.apache.drill.exec.store.StoragePluginRegistry.PluginEncodingException;
+import org.apache.drill.exec.store.StoragePluginRegistry.PluginException;
+import org.apache.drill.exec.store.StoragePluginRegistry.PluginFilter;
+import org.apache.drill.exec.store.StoragePluginRegistry.PluginNotFoundException;
 import org.glassfish.jersey.server.mvc.Viewable;
 
-import com.fasterxml.jackson.core.JsonParseException;
-import com.fasterxml.jackson.databind.JsonMappingException;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import org.apache.drill.shaded.guava.com.google.common.collect.Lists;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import static org.apache.drill.exec.server.rest.auth.DrillUserPrincipal.ADMIN_ROLE;
 
+// Serialization of plugins to JSON is handled by the Jetty framework
+// as configured in DrillRestServer.
 @Path("/")
 @RolesAllowed(ADMIN_ROLE)
 public class StorageResources {
-  static final org.slf4j.Logger logger = org.slf4j.LoggerFactory.getLogger(StorageResources.class);
+  private static final Logger logger = LoggerFactory.getLogger(StorageResources.class);
 
-  @Inject UserAuthEnabled authEnabled;
-  @Inject StoragePluginRegistry storage;
-  @Inject ObjectMapper mapper;
-  @Inject SecurityContext sc;
+  @Inject
+  UserAuthEnabled authEnabled;
 
-  private static final Comparator<PluginConfigWrapper> PLUGIN_COMPARATOR = new Comparator<PluginConfigWrapper>() {
-    @Override
-    public int compare(PluginConfigWrapper o1, PluginConfigWrapper o2) {
-      return o1.getName().compareTo(o2.getName());
-    }
-  };
+  @Inject
+  StoragePluginRegistry storage;
+
+  @Inject
+  SecurityContext sc;
+
+  @Inject
+  HttpServletRequest request;
+
+  private static final String JSON_FORMAT = "json";
+  private static final String HOCON_FORMAT = "conf";
+  private static final String ALL_PLUGINS = "all";
+  private static final String ENABLED_PLUGINS = "enabled";
+  private static final String DISABLED_PLUGINS = "disabled";
+
+  private static final Comparator<PluginConfigWrapper> PLUGIN_COMPARATOR =
+      Comparator.comparing(PluginConfigWrapper::getName);
+
+  /**
+   * Regex allows the following paths:<pre><code>
+   * /storage/{group}/plugins/export
+   * /storage/{group}/plugins/export/{format}</code></pre>
+   * <p>
+   * Note: for the second case the format involves the leading slash,
+   * therefore it should be removed then
+   */
+  // This code has a flaw: the Jackson ObjectMapper cannot serialize to
+  // HOCON format, though it can read HOCON. Thus, the only valid format
+  // is json.
+  @GET
+  @Path("/storage/{group}/plugins/export{format: (/[^/]+?)*}")
+  @Produces(MediaType.APPLICATION_JSON)
+  public Response getConfigsFor(@PathParam("group") String pluginGroup, @PathParam("format") String format) {
+    format = StringUtils.isNotEmpty(format) ? format.replace("/", "") : JSON_FORMAT;
+    return isSupported(format)
+        ? Response.ok()
+            .entity(getConfigsFor(pluginGroup).toArray())
+            .header(HttpHeaders.CONTENT_DISPOSITION, String.format("attachment;filename=\"%s_storage_plugins.%s\"",
+                pluginGroup, format))
+            .build()
+        : Response.status(Response.Status.NOT_FOUND.getStatusCode())
+            .entity(String.format("Unknown \"%s\" file format for \"%s\" Storage Plugin configs group",
+                    format, pluginGroup))
+            .build();
+  }
 
   @GET
   @Path("/storage.json")
   @Produces(MediaType.APPLICATION_JSON)
-  public List<PluginConfigWrapper> getStoragePluginsJSON() {
-
-    List<PluginConfigWrapper> list = Lists.newArrayList();
-    for (Map.Entry<String, StoragePluginConfig> entry : Lists.newArrayList(storage.getStore().getAll())) {
-      PluginConfigWrapper plugin = new PluginConfigWrapper(entry.getKey(), entry.getValue());
-      list.add(plugin);
-    }
-
-    Collections.sort(list, PLUGIN_COMPARATOR);
-
-    return list;
+  public List<PluginConfigWrapper> getPluginsJSON() {
+    return getConfigsFor(ALL_PLUGINS);
   }
 
   @GET
   @Path("/storage")
   @Produces(MediaType.TEXT_HTML)
-  public Viewable getStoragePlugins() {
-    List<PluginConfigWrapper> list = getStoragePluginsJSON();
-    return ViewableWithPermissions.create(authEnabled.get(), "/rest/storage/list.ftl", sc, list);
+  public Viewable getPlugins() {
+    List<StoragePluginModel> model = getPluginsJSON().stream()
+        .map(plugin -> new StoragePluginModel(plugin, request))
+        .collect(Collectors.toList());
+    // Creating an empty model with CSRF token, if there are no storage plugins
+    if (model.isEmpty()) {
+      model.add(new StoragePluginModel(null, request));
+    }
+    return ViewableWithPermissions.create(authEnabled.get(), "/rest/storage/list.ftl", sc, model);
   }
 
-  @SuppressWarnings("resource")
   @GET
   @Path("/storage/{name}.json")
   @Produces(MediaType.APPLICATION_JSON)
-  public PluginConfigWrapper getStoragePluginJSON(@PathParam("name") String name) {
+  public PluginConfigWrapper getPluginConfig(@PathParam("name") String name) {
     try {
-      // TODO: DRILL-6412: No need to get StoragePlugin. It is enough to have plugin name and config here
-      StoragePlugin plugin = storage.getPlugin(name);
-      if (plugin != null) {
-        return new PluginConfigWrapper(name, plugin.getConfig());
-      }
+      return new PluginConfigWrapper(name, storage.getStoredConfig(name));
     } catch (Exception e) {
-      logger.info("Failure while trying to access storage config: {}", name, e);
+      logger.error("Failure while trying to access storage config: {}", name, e);
     }
     return new PluginConfigWrapper(name, null);
   }
@@ -114,54 +148,57 @@ public class StorageResources {
   @GET
   @Path("/storage/{name}")
   @Produces(MediaType.TEXT_HTML)
-  public Viewable getStoragePlugin(@PathParam("name") String name) {
-    PluginConfigWrapper plugin = getStoragePluginJSON(name);
-    return ViewableWithPermissions.create(authEnabled.get(), "/rest/storage/update.ftl", sc, plugin);
+  public Viewable getPlugin(@PathParam("name") String name) {
+    StoragePluginModel model = new StoragePluginModel(getPluginConfig(name), request);
+    return ViewableWithPermissions.create(authEnabled.get(), "/rest/storage/update.ftl", sc,
+        model);
   }
 
   @GET
   @Path("/storage/{name}/enable/{val}")
   @Produces(MediaType.APPLICATION_JSON)
   public JsonResult enablePlugin(@PathParam("name") String name, @PathParam("val") Boolean enable) {
-    PluginConfigWrapper plugin = getStoragePluginJSON(name);
     try {
-      if (plugin.setEnabledInStorage(storage, enable)) {
-        return message("success");
-      } else {
-        return message("error (plugin does not exist)");
-      }
-    } catch (ExecutionSetupException e) {
-      logger.debug("Error in enabling storage name: " + name + " flag: " + enable);
-      return message("error (unable to enable/ disable storage)");
+      storage.setEnabled(name, enable);
+      return message("Success");
+    } catch (PluginNotFoundException e) {
+      return message("No plugin exists with the given name: " + name);
+    } catch (PluginException e) {
+      logger.debug("Error in enabling storage name: {} flag: {}",  name, enable);
+      return message("Unable to enable/disable plugin:" + e.getMessage());
     }
   }
 
+  /**
+   * Regex allows the following paths:
+   * /storage/{name}/export
+   * "/storage/{name}/export/{format}
+   * Note: for the second case the format involves the leading slash, therefore it should be removed then
+   */
   @GET
-  @Path("/storage/{name}/export")
+  @Path("/storage/{name}/export{format: (/[^/]+?)*}")
   @Produces(MediaType.APPLICATION_JSON)
-  public Response exportPlugin(@PathParam("name") String name) {
-    Response.ResponseBuilder response = Response.ok(getStoragePluginJSON(name));
-    response.header("Content-Disposition", String.format("attachment;filename=\"%s.json\"", name));
-    return response.build();
+  public Response exportPlugin(@PathParam("name") String name, @PathParam("format") String format) {
+    format = StringUtils.isNotEmpty(format) ? format.replace("/", "") : JSON_FORMAT;
+    return isSupported(format)
+        ? Response.ok(getPluginConfig(name))
+            .header(HttpHeaders.CONTENT_DISPOSITION, String.format("attachment;filename=\"%s.%s\"", name, format))
+            .build()
+        : Response.status(Response.Status.NOT_FOUND.getStatusCode())
+            .entity(String.format("Unknown \"%s\" file format for \"%s\" Storage Plugin config", format, name))
+            .build();
   }
 
   @DELETE
   @Path("/storage/{name}.json")
   @Produces(MediaType.APPLICATION_JSON)
-  public JsonResult deletePluginJSON(@PathParam("name") String name) {
-    PluginConfigWrapper plugin = getStoragePluginJSON(name);
-    if (plugin.deleteFromStorage(storage)) {
-      return message("success");
-    } else {
-      return message("error (unable to delete storage)");
-    }
-  }
-
-  @GET
-  @Path("/storage/{name}/delete")
-  @Produces(MediaType.APPLICATION_JSON)
   public JsonResult deletePlugin(@PathParam("name") String name) {
-    return deletePluginJSON(name);
+    try {
+      storage.remove(name);
+      return message("Success");
+    } catch (PluginException e) {
+      return message(e.getMessage());
+    }
   }
 
   @POST
@@ -171,41 +208,114 @@ public class StorageResources {
   public JsonResult createOrUpdatePluginJSON(PluginConfigWrapper plugin) {
     try {
       plugin.createOrUpdateInStorage(storage);
-      return message("success");
-    } catch (ExecutionSetupException e) {
+      return message("Success");
+    } catch (PluginException e) {
       logger.error("Unable to create/ update plugin: " + plugin.getName(), e);
-      return message("Error while creating/ updating storage : " + (e.getCause() != null ? e.getCause().getMessage() : e.getMessage()));
+      return message("Error while saving plugin: %s", e.getMessage());
     }
   }
 
+  // Allows JSON that includes comments. However, since the JSON is immediately
+  // serialized, the comments are lost. Would be better to validate the JSON,
+  // then write the original JSON directly to the persistent store, and read
+  // JSON from the store, rather than letting Jackson produce it. That way,
+  // comments are preserved.
   @POST
-  @Path("/storage/{name}")
-  @Consumes("application/x-www-form-urlencoded")
+  @Path("/storage/create_update")
+  @Consumes(MediaType.APPLICATION_FORM_URLENCODED)
   @Produces(MediaType.APPLICATION_JSON)
   public JsonResult createOrUpdatePlugin(@FormParam("name") String name, @FormParam("config") String storagePluginConfig) {
+    name = name.trim();
+    if (name.isEmpty()) {
+      return message("Error (a storage name cannot be empty)");
+    }
     try {
-      StoragePluginConfig config = mapper.readValue(new StringReader(storagePluginConfig), StoragePluginConfig.class);
-      return createOrUpdatePluginJSON(new PluginConfigWrapper(name, config));
-    } catch (JsonMappingException e) {
+      storage.putJson(name, storagePluginConfig);
+      return message("Success");
+    } catch (PluginEncodingException e) {
       logger.debug("Error in JSON mapping: {}", storagePluginConfig, e);
-      return message("error (invalid JSON mapping)");
-    } catch (JsonParseException e) {
-      logger.debug("Error parsing JSON: {}", storagePluginConfig, e);
-      return message("error (unable to parse JSON)");
-    } catch (IOException e) {
-      logger.debug("Failed to read: {}", storagePluginConfig, e);
-      return message("error (unable to read)");
+      return message("Invalid JSON");
+    } catch (PluginException e) {
+      return message(e.getMessage());
     }
   }
 
-  private JsonResult message(String message) {
-    return new JsonResult(message);
+  private JsonResult message(String message, Object... args) {
+    return new JsonResult(String.format(message, args));
+  }
+
+  private boolean isSupported(String format) {
+    return JSON_FORMAT.equalsIgnoreCase(format) || HOCON_FORMAT.equalsIgnoreCase(format);
+  }
+
+  /**
+   * Regex allows the following paths:<pre><code>
+   * /storage.json
+   * /storage/{group}-plugins.json</code></pre>
+   * Allowable groups:
+   * <ul>
+   * <li>"all" {@link #ALL_PLUGINS}</li>
+   * <li>"enabled" {@link #ENABLED_PLUGINS}</li>
+   * <li>"disabled" {@link #DISABLED_PLUGINS}</li>
+   * </ul>
+   * Any other group value results in an empty list.
+   * <p>
+   * Note: for the second case the group involves the leading slash,
+   * therefore it should be removed then
+   */
+  @GET
+  @Path("/storage{group: (/[^/]+?)*}-plugins.json")
+  @Produces(MediaType.APPLICATION_JSON)
+  public List<PluginConfigWrapper> getConfigsFor(@PathParam("group") String pluginGroup) {
+    PluginFilter filter;
+    switch (pluginGroup.trim()) {
+    case ALL_PLUGINS:
+      filter = PluginFilter.ALL;
+      break;
+    case ENABLED_PLUGINS:
+      filter = PluginFilter.ENABLED;
+      break;
+    case DISABLED_PLUGINS:
+      filter = PluginFilter.DISABLED;
+      break;
+    default:
+      return Collections.emptyList();
+    }
+    pluginGroup = StringUtils.isNotEmpty(pluginGroup) ? pluginGroup.replace("/", "") : ALL_PLUGINS;
+    return StreamSupport.stream(
+        Spliterators.spliteratorUnknownSize(storage.storedConfigs(filter).entrySet().iterator(), Spliterator.ORDERED), false)
+            .map(entry -> new PluginConfigWrapper(entry.getKey(), entry.getValue()))
+            .sorted(PLUGIN_COMPARATOR)
+            .collect(Collectors.toList());
+  }
+
+  /**
+   * @deprecated use {@link #createOrUpdatePluginJSON} instead
+   */
+  @POST
+  @Path("/storage/{name}")
+  @Consumes(MediaType.APPLICATION_JSON)
+  @Produces(MediaType.APPLICATION_JSON)
+  @Deprecated
+  public JsonResult createOrUpdatePlugin(PluginConfigWrapper plugin) {
+    return createOrUpdatePluginJSON(plugin);
+  }
+
+  /**
+   * @deprecated use the method with DELETE request {@link #deletePlugin(String)} instead
+   */
+  @GET
+  @Path("/storage/{name}/delete")
+  @Produces(MediaType.APPLICATION_JSON)
+  @Deprecated
+  public JsonResult deletePluginViaGet(@PathParam("name") String name) {
+    return deletePlugin(name);
   }
 
   @XmlRootElement
   public class JsonResult {
 
-    private String result;
+    private final String result;
 
     public JsonResult(String result) {
       this.result = result;
@@ -214,6 +324,27 @@ public class StorageResources {
     public String getResult() {
       return result;
     }
+  }
 
+  /**
+   * Model class for Storage Plugin page.
+   * It contains a storage plugin as well as the CSRK token for the page.
+   */
+  public static class StoragePluginModel {
+    private final PluginConfigWrapper plugin;
+    private final String csrfToken;
+
+    public StoragePluginModel(PluginConfigWrapper plugin, HttpServletRequest request) {
+      this.plugin = plugin;
+      csrfToken = WebUtils.getCsrfTokenFromHttpRequest(request);
+    }
+
+    public PluginConfigWrapper getPlugin() {
+      return plugin;
+    }
+
+    public String getCsrfToken() {
+      return csrfToken;
+    }
   }
 }

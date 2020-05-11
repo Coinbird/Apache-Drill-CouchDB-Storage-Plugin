@@ -18,6 +18,8 @@
 package org.apache.drill.exec.store.pcap.decoder;
 
 import org.apache.drill.shaded.guava.com.google.common.base.Preconditions;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -31,7 +33,7 @@ import static org.apache.drill.exec.store.pcap.PcapFormatUtils.getByte;
 import static org.apache.drill.exec.store.pcap.PcapFormatUtils.getIntFileOrder;
 import static org.apache.drill.exec.store.pcap.PcapFormatUtils.getShort;
 
-public class Packet {
+public class Packet implements Comparable<Packet> {
   // pcap header
   //        typedef struct pcaprec_hdr_s {
   //            guint32 ts_sec;         // timestamp seconds
@@ -40,6 +42,7 @@ public class Packet {
   //            guint32 orig_len;       // actual length of packet */
   //        } pcaprec_hdr_t;
   private long timestamp;
+  private long timestampMicro;
   private int originalLength;
 
   protected byte[] raw;
@@ -52,8 +55,11 @@ public class Packet {
   private int packetLength;
   protected int etherProtocol;
   protected int protocol;
-
   protected boolean isRoutingV6;
+  protected boolean isCorrupt = false;
+
+  private static final Logger logger = LoggerFactory.getLogger(Packet.class);
+
 
   @SuppressWarnings("WeakerAccess")
   public boolean readPcap(final InputStream in, final boolean byteOrder, final int maxLength) throws IOException {
@@ -161,6 +167,10 @@ public class Packet {
     return timestamp;
   }
 
+  public long getTimestampMicro() {
+    return timestampMicro;
+  }
+
   public int getPacketLength() {
     return packetLength;
   }
@@ -171,6 +181,24 @@ public class Packet {
 
   public InetAddress getDst_ip() {
     return getIPAddress(false);
+  }
+
+  public String getSourceIpAddressString() {
+    InetAddress address = getSrc_ip();
+    if (address == null) {
+      return null;
+    } else {
+      return address.getHostAddress();
+    }
+  }
+
+  public String getDestinationIpAddressString() {
+    InetAddress address = getDst_ip();
+    if (address == null) {
+      return null;
+    } else {
+      return address.getHostAddress();
+    }
   }
 
   public String getEthernetSource() {
@@ -207,6 +235,46 @@ public class Packet {
 
   public String getParsedFlags() {
     return formatFlags(getFlags());
+  }
+
+  public void setIsCorrupt(boolean value) {
+    isCorrupt = value;
+  }
+
+  public boolean getUrgFlag() {
+    return (getFlags() & 0x20) != 0;
+  }
+
+  public boolean getPshFlag() {
+    return (getFlags() & 0x8) != 0;
+  }
+
+  public boolean getEceFlag() {
+    return (getFlags() & 0x40) != 0;
+  }
+
+  public boolean getSynFlag() {
+    return (getFlags() & 0x2) != 0;
+  }
+
+  public boolean getAckFlag() {
+    return (getFlags() & 0x10) != 0;
+  }
+
+  public boolean getRstFlag() {
+    return (getFlags() & 0x4) != 0;
+  }
+
+  public boolean getFinFlag() {
+    return (getFlags() & 0x1) != 0;
+  }
+
+  public boolean getNSFlag() {
+    return (getFlags() & 0x100) != 0;
+  }
+
+  public boolean getCwrFlag() {
+    return (getFlags() & 0x80) != 0;
   }
 
   public static String formatFlags(int flags) {
@@ -307,6 +375,10 @@ public class Packet {
     return getPort(2);
   }
 
+  public boolean isCorrupt(){
+    return isCorrupt;
+  }
+
   public byte[] getData() {
     int payloadDataStart = getIPHeaderLength();
     if (isTcpPacket()) {
@@ -319,7 +391,13 @@ public class Packet {
     byte[] data = null;
     if (packetLength >= payloadDataStart) {
       data = new byte[packetLength - payloadDataStart];
-      System.arraycopy(raw, ipOffset + payloadDataStart, data, 0, data.length);
+      try {
+        System.arraycopy(raw, ipOffset + payloadDataStart, data, 0, data.length);
+      } catch (Exception e) {
+        isCorrupt = true;
+        String message = "Error while parsing PCAP data: {}";
+        logger.debug(message, e.getMessage());
+        logger.trace(message, e);      }
     }
     return data;
   }
@@ -384,16 +462,17 @@ public class Packet {
   }
 
   private void decodePcapHeader(final byte[] header, final boolean byteOrder, final int maxLength, final int offset) {
-    timestamp = getTimestamp(header, byteOrder, offset);
+    timestampMicro = getTimestampMicro(header, byteOrder, offset);
+    timestamp = timestampMicro / 1000L;
     originalLength = getIntFileOrder(byteOrder, header, offset + PacketConstants.ORIGINAL_LENGTH_OFFSET);
     packetLength = getIntFileOrder(byteOrder, header, offset + PacketConstants.ACTUAL_LENGTH_OFFSET);
-    Preconditions.checkState(originalLength < maxLength,
+    Preconditions.checkState(originalLength <= maxLength,
         "Packet too long (%d bytes)", originalLength);
   }
 
-  private long getTimestamp(final byte[] header, final boolean byteOrder, final int offset) {
-    return getIntFileOrder(byteOrder, header, offset + PacketConstants.TIMESTAMP_OFFSET) * 1000L +
-        getIntFileOrder(byteOrder, header, offset + PacketConstants.TIMESTAMP_MICRO_OFFSET) / 1000L;
+  private long getTimestampMicro(final byte[] header, final boolean byteOrder, final int offset) {
+    return getIntFileOrder(byteOrder, header, offset + PacketConstants.TIMESTAMP_OFFSET) * 1000000L +
+        getIntFileOrder(byteOrder, header, offset + PacketConstants.TIMESTAMP_MICRO_OFFSET);
   }
 
   private void decodeEtherPacket() {
@@ -434,12 +513,14 @@ public class Packet {
         case PacketConstants.AUTHENTICATION_V6:
         case PacketConstants.ENCAPSULATING_SECURITY_V6:
         case PacketConstants.MOBILITY_EXTENSION_V6:
+        case PacketConstants.HOST_IDENTITY_PROTOCOL:
+        case PacketConstants.SHIM6_PROTOCOL:
           nextHeader = getByte(raw, ipOffset + headerLength);
           headerLength += (getByte(raw, ipOffset + headerLength) + 1) * 8;
           break;
         default:
           //noinspection ConstantConditions
-          Preconditions.checkState(false, "Unknown V6 extension or protocol: ", nextHeader);
+          logger.warn("Unknown V6 extension or protocol: {}", nextHeader);
           return getByte(raw, ipOffset + headerLength);
       }
     }
@@ -465,5 +546,16 @@ public class Packet {
   private int getPort(int offset) {
     int dstPortOffset = ipOffset + getIPHeaderLength() + offset;
     return convertShort(raw, dstPortOffset);
+  }
+
+  /**
+   * This function is here so that packets can be sorted for re-sessionization. Packets in TCP streams
+   * are ordered by the sequence number, so being able to order the packets is necessary to reassemble the
+   * TCP session.
+   * @param o The packet to which the current packet is compared to.
+   * @return Returns the difference in sequence number.
+   */
+  public int compareTo(Packet o) {
+    return this.getSequenceNumber() - (o).getSequenceNumber();
   }
 }

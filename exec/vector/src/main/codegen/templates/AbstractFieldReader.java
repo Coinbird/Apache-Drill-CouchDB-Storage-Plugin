@@ -28,11 +28,9 @@ package org.apache.drill.exec.vector.complex.impl;
 /*
  * This class is generated using freemarker and the ${.template_name} template.
  */
-@SuppressWarnings("unused")
 public abstract class AbstractFieldReader extends AbstractBaseReader implements FieldReader {
 
-  public AbstractFieldReader() {
-  }
+  public MinorType getVectorType() { return getType().getMinorType(); }
 
   /**
    * Returns true if the current value of the reader is not null
@@ -42,12 +40,15 @@ public abstract class AbstractFieldReader extends AbstractBaseReader implements 
     return true;
   }
 
+  public void read(ValueHolder holder) {
+    fail("read(ValueHolder holder)");
+  }
+
   <#list ["Object", "BigDecimal", "Integer", "Long", "Boolean",
           "Character", "LocalDate", "LocalTime", "LocalDateTime", "Period", "Double", "Float",
           "Text", "String", "Byte", "Short", "byte[]"] as friendlyType>
   <#assign safeType=friendlyType />
   <#if safeType=="byte[]"><#assign safeType="ByteArray" /></#if>
-
   public ${friendlyType} read${safeType}(int arrayIndex) {
     fail("read${safeType}(int arrayIndex)");
     return null;
@@ -59,10 +60,10 @@ public abstract class AbstractFieldReader extends AbstractBaseReader implements 
   }
 
   </#list>
-
   public void copyAsValue(MapWriter writer) {
-    fail("CopyAsValue MapWriter");
+    fail("copyAsValue(MapWriter writer)");
   }
+
   public void copyAsField(String name, MapWriter writer) {
     fail("CopyAsField MapWriter");
   }
@@ -73,7 +74,6 @@ public abstract class AbstractFieldReader extends AbstractBaseReader implements 
 
   <#list vv.types as type><#list type.minor as minor><#assign name = minor.class?cap_first />
   <#assign boxedType = (minor.boxedType!type.boxedType) />
-
   public void read(${name}Holder holder) {
     fail("${name}");
   }
@@ -95,7 +95,7 @@ public abstract class AbstractFieldReader extends AbstractBaseReader implements 
   }
 
   <#if minor.class == "VarDecimal">
-  public void copyAsField(String name, ${name}Writer writer, int scale, int precision) {
+  public void copyAsField(String name, ${name}Writer writer, int precision, int scale) {
   <#else>
   public void copyAsField(String name, ${name}Writer writer) {
   </#if>
@@ -103,8 +103,12 @@ public abstract class AbstractFieldReader extends AbstractBaseReader implements 
   }
   </#list></#list>
 
+  public void copyAsValue(DictWriter writer) {
+    fail("CopyAsValue(DictWriter writer)");
+  }
+
   public void read(int arrayIndex, UntypedNullHolder holder) {
-      fail("UntypedNullHolder");
+    fail("UntypedNullHolder");
   }
 
   public FieldReader reader(String name) {
@@ -120,6 +124,33 @@ public abstract class AbstractFieldReader extends AbstractBaseReader implements 
   public int size() {
     fail("size()");
     return -1;
+  }
+
+  public int find(String key) {
+    fail("find(String key)");
+    return -1;
+  }
+
+  public int find(int key) {
+    fail("find(int key)");
+    return -1;
+  }
+
+  public int find(Object key){
+    fail("find(Object key)");
+    return -1;
+  }
+
+  public void read(String key, ValueHolder holder) {
+    fail("read(String key, ValueHolder holder)");
+  }
+
+  public void read(int key, ValueHolder holder) {
+    fail("read(int key, ValueHolder holder)");
+  }
+
+  public void read(Object key, ValueHolder holder) {
+    fail("read(Object key, ValueHolder holder)");
   }
 
   private void fail(String name) {

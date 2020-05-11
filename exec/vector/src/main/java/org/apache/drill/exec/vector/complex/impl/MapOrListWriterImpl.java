@@ -88,6 +88,17 @@ public class MapOrListWriterImpl implements MapOrListWriter {
     return new MapOrListWriterImpl(list.map());
   }
 
+  @Override
+  public MapOrListWriter dict(String name) {
+    return new MapOrListWriterImpl(map != null ? map.dict(name) : list.dict());
+  }
+
+  @Override
+  public MapOrListWriter listOfDict() {
+    assert list != null;
+    return new MapOrListWriterImpl(list.dict());
+  }
+
   public MapOrListWriter list(final String name) {
     assert map != null;
     return new MapOrListWriterImpl(map.list(name));
@@ -229,8 +240,8 @@ public class MapOrListWriterImpl implements MapOrListWriter {
   }
 
   @Override
-  public VarDecimalWriter varDecimal(String name, int scale, int precision) {
-    return (map != null) ? map.varDecimal(name, scale, precision) : list.varDecimal(scale, precision);
+  public VarDecimalWriter varDecimal(String name, int precision, int scale) {
+    return (map != null) ? map.varDecimal(name, precision, scale) : list.varDecimal(precision, scale);
   }
 
   @Override

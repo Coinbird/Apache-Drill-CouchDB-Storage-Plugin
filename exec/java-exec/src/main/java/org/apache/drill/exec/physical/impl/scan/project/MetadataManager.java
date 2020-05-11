@@ -18,8 +18,8 @@
 package org.apache.drill.exec.physical.impl.scan.project;
 
 import org.apache.drill.exec.physical.impl.scan.project.ScanLevelProjection.ScanProjectionParser;
-import org.apache.drill.exec.physical.impl.scan.project.SchemaLevelProjection.SchemaProjectionResolver;
-import org.apache.drill.exec.physical.rowSet.ResultVectorCache;
+import org.apache.drill.exec.physical.impl.scan.project.ReaderLevelProjection.ReaderProjectionResolver;
+import org.apache.drill.exec.physical.resultSet.ResultVectorCache;
 
 /**
  * Queries can contain a wildcard (*), table columns, or special
@@ -45,7 +45,7 @@ public interface MetadataManager {
 
   ScanProjectionParser projectionParser();
 
-  SchemaProjectionResolver resolver();
+  ReaderProjectionResolver resolver();
 
   /**
    * Define (materialize) the columns which this manager

@@ -23,6 +23,7 @@ import org.apache.drill.exec.physical.EndpointAffinity;
 import org.apache.drill.exec.physical.PhysicalOperatorSetupException;
 import org.apache.drill.exec.proto.CoordinationProtos.DrillbitEndpoint;
 import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.Collection;
 import java.util.List;
@@ -30,11 +31,12 @@ import java.util.Map;
 import java.util.Map.Entry;
 
 /**
- * Implementation of {@link FragmentParallelizer} where fragment requires running on a given set of endpoints. Width
- * per node is depended on the affinity to the endpoint and total width (calculated using costs)
+ * Implementation of {@link FragmentParallelizer} where fragment requires
+ * running on a given set of endpoints. Width per node is depended on the
+ * affinity to the endpoint and total width (calculated using costs).
  */
 public class HardAffinityFragmentParallelizer implements FragmentParallelizer {
-  private static final Logger logger = org.slf4j.LoggerFactory.getLogger(HardAffinityFragmentParallelizer.class);
+  private static final Logger logger = LoggerFactory.getLogger(HardAffinityFragmentParallelizer.class);
 
   public static final HardAffinityFragmentParallelizer INSTANCE = new HardAffinityFragmentParallelizer();
 
@@ -53,7 +55,7 @@ public class HardAffinityFragmentParallelizer implements FragmentParallelizer {
 
     // Go through the affinity map and extract the endpoints that have mandatory assignment requirement
     final Map<DrillbitEndpoint, EndpointAffinity> endpointPool = Maps.newHashMap();
-    for(Entry<DrillbitEndpoint, EndpointAffinity> entry : pInfo.getEndpointAffinityMap().entrySet()) {
+    for (Entry<DrillbitEndpoint, EndpointAffinity> entry : pInfo.getEndpointAffinityMap().entrySet()) {
       if (entry.getValue().isAssignmentRequired()) {
         endpointPool.put(entry.getKey(), entry.getValue());
 
@@ -87,17 +89,17 @@ public class HardAffinityFragmentParallelizer implements FragmentParallelizer {
             "width ({}).", endpointPool.size(), parameters.getMaxGlobalWidth());
 
     // 1.5 Cap the parallelization width by max allowed parallelization per node
-    width = Math.max(1, Math.min(width, endpointPool.size()*parameters.getMaxWidthPerNode()));
+    width = Math.max(1, Math.min(width, endpointPool.size() * parameters.getMaxWidthPerNode()));
 
-    // 1.6 Cap the parallelization width by total of max allowed width per node. The reason is if we the width is more,
-    // we end up allocating more work units to one or more endpoints that don't have those many work units.
+    // 1.6 Cap the parallelization width by total of max allowed width per node. The reason is if the width is more,
+    // we end up allocating more work units to one or more endpoints that don't have that many work units.
     width = Math.min(totalMaxWidth, width);
 
     // Step 2: Select the endpoints
     final Map<DrillbitEndpoint, Integer> endpoints = Maps.newHashMap();
 
     // 2.1 First add each endpoint from the pool once so that the mandatory assignment requirement is fulfilled.
-    for(Entry<DrillbitEndpoint, EndpointAffinity> entry : endpointPool.entrySet()) {
+    for (Entry<DrillbitEndpoint, EndpointAffinity> entry : endpointPool.entrySet()) {
       endpoints.put(entry.getKey(), 1);
     }
     int totalAssigned = endpoints.size();
@@ -105,15 +107,15 @@ public class HardAffinityFragmentParallelizer implements FragmentParallelizer {
     // 2.2 Assign the remaining slots to endpoints proportional to the affinity of each endpoint
     int remainingSlots = width - endpoints.size();
     while (remainingSlots > 0) {
-      for(EndpointAffinity epAf : endpointPool.values()) {
+      for (EndpointAffinity epAf : endpointPool.values()) {
         final int moreAllocation = (int) Math.ceil(epAf.getAffinity() * remainingSlots);
         int currentAssignments = endpoints.get(epAf.getEndpoint());
-        for(int i=0;
-            i < moreAllocation &&
+        for (int i=0;
+             i < moreAllocation &&
                 totalAssigned < width &&
                 currentAssignments < parameters.getMaxWidthPerNode() &&
                 currentAssignments < epAf.getMaxWidth();
-            i++) {
+             i++) {
           totalAssigned++;
           currentAssignments++;
         }

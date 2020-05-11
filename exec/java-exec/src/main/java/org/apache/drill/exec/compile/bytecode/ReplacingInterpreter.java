@@ -83,6 +83,13 @@ public class ReplacingInterpreter extends BasicInterpreter {
   }
 
   @Override
+  public void returnOperation(AbstractInsnNode insn, BasicValue value, BasicValue expected) {
+    if (value instanceof ReplacingBasicValue) {
+      ((ReplacingBasicValue) value).markFunctionReturn();
+    }
+  }
+
+  @Override
   public BasicValue unaryOperation(final AbstractInsnNode insn, final BasicValue value)
       throws AnalyzerException {
     /*
@@ -157,6 +164,16 @@ public class ReplacingInterpreter extends BasicInterpreter {
     }
 
     return super.naryOperation(insn,  values);
+  }
+
+  @Override
+  public BasicValue ternaryOperation(AbstractInsnNode insn, BasicValue value1, BasicValue value2, BasicValue value3) throws AnalyzerException {
+    // prevents scalar replacement for the case when a holder is stored to the array element
+    if (insn.getOpcode() == AASTORE && value3 instanceof ReplacingBasicValue) {
+      ReplacingBasicValue argument = (ReplacingBasicValue) value3;
+      argument.setAssignedToMember();
+    }
+    return super.ternaryOperation(insn, value1, value2, value3);
   }
 
   private static String desc(Class<?> c) {

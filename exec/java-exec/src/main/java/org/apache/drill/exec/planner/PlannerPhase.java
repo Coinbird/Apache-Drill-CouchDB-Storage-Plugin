@@ -17,7 +17,10 @@
  */
 package org.apache.drill.exec.planner;
 
-import org.apache.drill.exec.planner.logical.DrillSemiJoinRule;
+import org.apache.drill.exec.planner.logical.ConvertMetadataAggregateToDirectScanRule;
+import org.apache.drill.exec.planner.physical.MetadataAggPrule;
+import org.apache.drill.exec.planner.physical.MetadataControllerPrule;
+import org.apache.drill.exec.planner.physical.MetadataHandlerPrule;
 import org.apache.drill.shaded.guava.com.google.common.collect.ImmutableSet;
 import org.apache.drill.shaded.guava.com.google.common.collect.ImmutableSet.Builder;
 import org.apache.drill.shaded.guava.com.google.common.collect.Lists;
@@ -60,8 +63,9 @@ import org.apache.drill.exec.planner.logical.DrillValuesRule;
 import org.apache.drill.exec.planner.logical.DrillWindowRule;
 import org.apache.drill.exec.planner.logical.partition.ParquetPruneScanRule;
 import org.apache.drill.exec.planner.logical.partition.PruneScanRule;
+import org.apache.drill.exec.planner.logical.ConvertCountToDirectScanRule;
 import org.apache.drill.exec.planner.physical.AnalyzePrule;
-import org.apache.drill.exec.planner.physical.ConvertCountToDirectScan;
+import org.apache.drill.exec.planner.physical.ConvertCountToDirectScanPrule;
 import org.apache.drill.exec.planner.physical.LateralJoinPrule;
 import org.apache.drill.exec.planner.physical.DirectScanPrule;
 import org.apache.drill.exec.planner.physical.FilterPrule;
@@ -87,7 +91,7 @@ import org.apache.drill.exec.planner.physical.WindowPrule;
 import org.apache.drill.exec.planner.physical.WriterPrule;
 import org.apache.drill.exec.store.AbstractStoragePlugin;
 import org.apache.drill.exec.store.StoragePlugin;
-import org.apache.drill.exec.store.parquet.ParquetPushDownFilter;
+import org.apache.drill.exec.store.parquet.FilePushDownFilter;
 
 import java.util.ArrayList;
 import java.util.Collection;
@@ -99,9 +103,9 @@ import java.util.Set;
  * Only rules which use DrillRelFactories should be used in this enum.
  */
 public enum PlannerPhase {
-  //private static final org.slf4j.Logger logger = org.slf4j.LoggerFactory.getLogger(DrillRuleSets.class);
 
   LOGICAL_PRUNE_AND_JOIN("Logical Planning (with join and partition pruning)") {
+    @Override
     public RuleSet getRules(OptimizerRulesContext context, Collection<StoragePlugin> plugins) {
       return PlannerPhase.mergedRuleSets(
           getDrillBasicRules(context),
@@ -113,6 +117,7 @@ public enum PlannerPhase {
   },
 
   WINDOW_REWRITE("Window Function rewrites") {
+    @Override
     public RuleSet getRules(OptimizerRulesContext context, Collection<StoragePlugin> plugins) {
       return RuleSets.ofList(
           RuleInstance.CALC_INSTANCE,
@@ -122,6 +127,7 @@ public enum PlannerPhase {
   },
 
   SUBQUERY_REWRITE("Sub-queries rewrites") {
+    @Override
     public RuleSet getRules(OptimizerRulesContext context, Collection<StoragePlugin> plugins) {
       return RuleSets.ofList(
           RuleInstance.SUB_QUERY_FILTER_REMOVE_RULE,
@@ -132,6 +138,7 @@ public enum PlannerPhase {
   },
 
   LOGICAL_PRUNE("Logical Planning (with partition pruning)") {
+    @Override
     public RuleSet getRules(OptimizerRulesContext context, Collection<StoragePlugin> plugins) {
       return PlannerPhase.mergedRuleSets(
           getDrillBasicRules(context),
@@ -142,6 +149,7 @@ public enum PlannerPhase {
   },
 
   JOIN_PLANNING("LOPT Join Planning") {
+    @Override
     public RuleSet getRules(OptimizerRulesContext context, Collection<StoragePlugin> plugins) {
       List<RelOptRule> rules = Lists.newArrayList();
       if (context.getPlannerSettings().isJoinOptimizationEnabled()) {
@@ -157,6 +165,7 @@ public enum PlannerPhase {
   },
 
   ROWKEYJOIN_CONVERSION("Convert Join to RowKeyJoin") {
+    @Override
     public RuleSet getRules(OptimizerRulesContext context, Collection<StoragePlugin> plugins) {
       List<RelOptRule> rules = Lists.newArrayList();
       if (context.getPlannerSettings().isRowKeyJoinConversionEnabled()) {
@@ -169,15 +178,8 @@ public enum PlannerPhase {
     }
   },
 
-  SEMIJOIN_CONVERSION("Pushing down semi joins") {
-    public RuleSet getRules(OptimizerRulesContext context, Collection<StoragePlugin> plugins) {
-      return PlannerPhase.mergedRuleSets(
-              RuleSets.ofList(DrillSemiJoinRule.JOIN)
-      );
-    }
-  },
-
   SUM_CONVERSION("Convert SUM to $SUM0") {
+    @Override
     public RuleSet getRules(OptimizerRulesContext context, Collection<StoragePlugin> plugins) {
       return PlannerPhase.mergedRuleSets(
           RuleSets.ofList(
@@ -189,24 +191,28 @@ public enum PlannerPhase {
   },
 
   PARTITION_PRUNING("Partition Prune Planning") {
+    @Override
     public RuleSet getRules(OptimizerRulesContext context, Collection<StoragePlugin> plugins) {
       return PlannerPhase.mergedRuleSets(getPruneScanRules(context), getStorageRules(context, plugins, this));
     }
   },
 
   PHYSICAL_PARTITION_PRUNING("Physical Partition Prune Planning") {
+    @Override
     public RuleSet getRules(OptimizerRulesContext context, Collection<StoragePlugin> plugins) {
       return PlannerPhase.mergedRuleSets(getPhysicalPruneScanRules(context), getStorageRules(context, plugins, this));
     }
   },
 
   DIRECTORY_PRUNING("Directory Prune Planning") {
+    @Override
     public RuleSet getRules(OptimizerRulesContext context, Collection<StoragePlugin> plugins) {
       return PlannerPhase.mergedRuleSets(getDirPruneScanRules(context), getStorageRules(context, plugins, this));
     }
   },
 
   LOGICAL("Logical Planning (no pruning or join).") {
+    @Override
     public RuleSet getRules(OptimizerRulesContext context, Collection<StoragePlugin> plugins) {
       return PlannerPhase.mergedRuleSets(
           PlannerPhase.getDrillBasicRules(context),
@@ -216,6 +222,7 @@ public enum PlannerPhase {
   },
 
   PHYSICAL("Physical Planning") {
+    @Override
     public RuleSet getRules(OptimizerRulesContext context, Collection<StoragePlugin> plugins) {
       return PlannerPhase.mergedRuleSets(
           PlannerPhase.getPhysicalRules(context),
@@ -225,12 +232,14 @@ public enum PlannerPhase {
   },
 
   PRE_LOGICAL_PLANNING("Planning with Hep planner only for rules, which are failed for Volcano planner") {
+    @Override
     public RuleSet getRules (OptimizerRulesContext context, Collection<StoragePlugin> plugins) {
       return PlannerPhase.getSetOpTransposeRules();
     }
   },
 
   TRANSITIVE_CLOSURE("Transitive closure") {
+    @Override
     public RuleSet getRules(OptimizerRulesContext context, Collection<StoragePlugin> plugins) {
       return getJoinTransitiveClosureRules();
     }
@@ -244,19 +253,19 @@ public enum PlannerPhase {
 
   public abstract RuleSet getRules(OptimizerRulesContext context, Collection<StoragePlugin> plugins);
 
+  @SuppressWarnings("deprecation")
   private static RuleSet getStorageRules(OptimizerRulesContext context, Collection<StoragePlugin> plugins,
       PlannerPhase phase) {
     final Builder<RelOptRule> rules = ImmutableSet.builder();
-    for(StoragePlugin plugin : plugins){
-      if(plugin instanceof AbstractStoragePlugin){
+    for (StoragePlugin plugin : plugins) {
+      if (plugin instanceof AbstractStoragePlugin) {
         rules.addAll(((AbstractStoragePlugin) plugin).getOptimizerRules(context, phase));
-      }else{
+      } else {
         rules.addAll(plugin.getOptimizerRules(context));
       }
     }
     return RuleSets.ofList(rules.build());
   }
-
 
   static final RelOptRule DRILL_JOIN_TO_MULTIJOIN_RULE =
       new JoinToMultiJoinRule(DrillJoinRel.class, DrillRelFactories.LOGICAL_BUILDER);
@@ -389,6 +398,10 @@ public enum PlannerPhase {
             DrillMergeProjectRule.getInstance(true, RelFactories.DEFAULT_PROJECT_FACTORY,
                 optimizerRulesContext.getFunctionRegistry())
             );
+    if (optimizerRulesContext.getPlannerSettings().isHashJoinEnabled() &&
+        optimizerRulesContext.getPlannerSettings().isSemiJoinEnabled()) {
+      basicRules.add(RuleInstance.SEMI_JOIN_PROJECT_RULE);
+    }
 
     return RuleSets.ofList(basicRules.build());
   }
@@ -406,15 +419,14 @@ public enum PlannerPhase {
             ParquetPruneScanRule.getFilterOnScanParquet(optimizerRulesContext),
             // Include LIMIT_ON_PROJECT since LIMIT_ON_SCAN may not work without it
             DrillPushLimitToScanRule.LIMIT_ON_PROJECT,
-            DrillPushLimitToScanRule.LIMIT_ON_SCAN
+            DrillPushLimitToScanRule.LIMIT_ON_SCAN,
+            PruneScanRule.getConvertAggScanToValuesRule(optimizerRulesContext)
         )
         .build();
 
     return RuleSets.ofList(pruneRules);
   }
-  /**
-   *
-   */
+
   static RuleSet getIndexRules(OptimizerRulesContext optimizerRulesContext) {
     final PlannerSettings ps = optimizerRulesContext.getPlannerSettings();
     if (!ps.isIndexPlanningEnabled()) {
@@ -452,8 +464,8 @@ public enum PlannerPhase {
             // Before we can make such change, we have to figure out how to adjust the selectivity
             // estimation of filter operator, after filter is pushed down to scan.
 
-            ParquetPushDownFilter.getFilterOnProject(optimizerRulesContext),
-            ParquetPushDownFilter.getFilterOnScan(optimizerRulesContext),
+            FilePushDownFilter.getFilterOnProject(optimizerRulesContext),
+            FilePushDownFilter.getFilterOnScan(optimizerRulesContext),
             DrillPushProjectIntoScanRule.DRILL_PHYSICAL_INSTANCE
         )
         .build();
@@ -472,12 +484,14 @@ public enum PlannerPhase {
         .addAll(getItemStarRules())
         .add(
             PruneScanRule.getDirFilterOnProject(optimizerRulesContext),
-            PruneScanRule.getDirFilterOnScan(optimizerRulesContext)
-        )
+            PruneScanRule.getDirFilterOnScan(optimizerRulesContext),
+            PruneScanRule.getConvertAggScanToValuesRule(optimizerRulesContext),
+            ConvertCountToDirectScanRule.AGG_ON_PROJ_ON_SCAN,
+            ConvertCountToDirectScanRule.AGG_ON_SCAN
+          )
         .build();
 
     return RuleSets.ofList(pruneRules);
-
   }
 
   /**
@@ -499,8 +513,8 @@ public enum PlannerPhase {
   static RuleSet getPhysicalRules(OptimizerRulesContext optimizerRulesContext) {
     final List<RelOptRule> ruleList = new ArrayList<>();
     final PlannerSettings ps = optimizerRulesContext.getPlannerSettings();
-    ruleList.add(ConvertCountToDirectScan.AGG_ON_PROJ_ON_SCAN);
-    ruleList.add(ConvertCountToDirectScan.AGG_ON_SCAN);
+    ruleList.add(ConvertCountToDirectScanPrule.AGG_ON_PROJ_ON_SCAN);
+    ruleList.add(ConvertCountToDirectScanPrule.AGG_ON_SCAN);
     ruleList.add(SortConvertPrule.INSTANCE);
     ruleList.add(SortPrule.INSTANCE);
     ruleList.add(ProjectPrule.INSTANCE);
@@ -518,6 +532,11 @@ public enum PlannerPhase {
     ruleList.add(DirectScanPrule.INSTANCE);
     ruleList.add(RowKeyJoinPrule.INSTANCE);
     ruleList.add(AnalyzePrule.INSTANCE);
+
+    ruleList.add(MetadataControllerPrule.INSTANCE);
+    ruleList.add(MetadataHandlerPrule.INSTANCE);
+    ruleList.add(MetadataAggPrule.INSTANCE);
+    ruleList.add(ConvertMetadataAggregateToDirectScanRule.INSTANCE);
 
     ruleList.add(UnnestPrule.INSTANCE);
     ruleList.add(LateralJoinPrule.INSTANCE);

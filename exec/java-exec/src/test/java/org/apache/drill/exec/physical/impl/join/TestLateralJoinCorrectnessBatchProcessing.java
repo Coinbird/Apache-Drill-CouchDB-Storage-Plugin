@@ -17,7 +17,7 @@
  */
 package org.apache.drill.exec.physical.impl.join;
 
-import avro.shaded.com.google.common.collect.Lists;
+import org.apache.drill.shaded.guava.com.google.common.collect.Lists;
 import org.apache.calcite.rel.core.JoinRelType;
 import org.apache.drill.common.types.TypeProtos;
 import org.apache.drill.exec.ops.OperatorContext;
@@ -33,8 +33,8 @@ import org.apache.drill.exec.record.metadata.SchemaBuilder;
 import org.apache.drill.exec.record.metadata.TupleMetadata;
 import org.apache.drill.exec.store.mock.MockStorePOP;
 import org.apache.drill.test.SubOperatorTest;
-import org.apache.drill.test.rowSet.DirectRowSet;
-import org.apache.drill.test.rowSet.RowSet;
+import org.apache.drill.exec.physical.rowSet.DirectRowSet;
+import org.apache.drill.exec.physical.rowSet.RowSet;
 import org.apache.drill.test.rowSet.RowSetComparison;
 import org.junit.After;
 import org.junit.AfterClass;
@@ -48,7 +48,6 @@ import java.util.List;
 import static org.junit.Assert.assertTrue;
 
 public class TestLateralJoinCorrectnessBatchProcessing extends SubOperatorTest {
-  //private static final org.slf4j.Logger logger = org.slf4j.LoggerFactory.getLogger(TestNewLateralJoinCorrectness.class);
 
   // Operator Context for mock batch
   private static OperatorContext operatorContext;

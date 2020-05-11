@@ -20,6 +20,7 @@ package org.apache.drill.common.types;
 import static org.apache.drill.common.types.TypeProtos.DataMode.REPEATED;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 
@@ -30,7 +31,6 @@ import org.apache.drill.common.types.TypeProtos.MinorType;
 
 import com.google.protobuf.TextFormat;
 
-@SuppressWarnings("WeakerAccess")
 public class Types {
 
   public static final int MAX_VARCHAR_LENGTH = 65535;
@@ -50,6 +50,7 @@ public class Types {
     switch(type.getMinorType()) {
     case LIST:
     case MAP:
+    case DICT:
       return true;
     default:
       return false;
@@ -64,8 +65,11 @@ public class Types {
     if (type.getMode() == REPEATED) {
       return false;
     }
+    return isNumericType(type.getMinorType());
+  }
 
-    switch(type.getMinorType()) {
+  public static boolean isNumericType(final MinorType type) {
+    switch (type) {
     case BIGINT:
     case VARDECIMAL:
     case DECIMAL38SPARSE:
@@ -88,6 +92,55 @@ public class Types {
     default:
       return false;
     }
+  }
+
+  public static boolean isDateTimeType(MajorType type) {
+    if (type.getMode() == REPEATED) {
+      return false;
+    }
+    return isDateTimeType(type.getMinorType());
+  }
+
+  public static boolean isDateTimeType(MinorType type) {
+    switch (type) {
+      case TIME:
+      case TIMETZ:
+      case DATE:
+      case TIMESTAMP:
+      case TIMESTAMPTZ:
+        return true;
+      default:
+        return false;
+    }
+  }
+
+  public static boolean isIntervalType(MajorType type) {
+    if (type.getMode() == REPEATED) {
+      return false;
+    }
+    return isIntervalType(type.getMinorType());
+  }
+
+  public static boolean isIntervalType(MinorType type) {
+    switch (type) {
+      case INTERVAL:
+      case INTERVALDAY:
+      case INTERVALYEAR:
+        return true;
+      default:
+        return false;
+    }
+  }
+
+  /**
+   * Returns true if all specified types are decimal data types.
+   *
+   * @param types types to check
+   * @return true if all specified types are decimal data type.
+   */
+  public static boolean areDecimalTypes(MinorType... types) {
+    return Arrays.stream(types)
+        .allMatch(Types::isDecimalType);
   }
 
   /**
@@ -185,11 +238,13 @@ public class Types {
       // Composite types and other types that are not atomic types (SQL standard
       // or not) except ARRAY types (handled above):
 
-      case MAP:             return "MAP";
+      case MAP:             return "STRUCT"; // Drill map represents struct
+      case DICT:            return "MAP";
       case LATE:            return "ANY";
       case NULL:            return "NULL";
       case UNION:           return "UNION";
       case GENERIC_OBJECT:  return "JAVA_OBJECT";
+      case LIST:            return "LIST";
 
       // Internal types not actually used at level of SQL types(?):
 
@@ -212,9 +267,11 @@ public class Types {
    * if type is a decimal
    */
   public static String getExtendedSqlTypeName(MajorType type) {
-
-    String typeName = getSqlTypeName(type);
+    String typeName = getBaseSqlTypeName(type);
     switch (type.getMinorType()) {
+    case LIST:
+      typeName = "ARRAY";
+      break;
     case DECIMAL9:
     case DECIMAL18:
     case DECIMAL28SPARSE:
@@ -267,7 +324,8 @@ public class Types {
       case "INTERVAL":                      return java.sql.Types.OTHER;  // JDBC (4.1) has nothing for INTERVAL
       case "INTERVAL YEAR TO MONTH":        return java.sql.Types.OTHER;
       case "INTERVAL DAY TO SECOND":        return java.sql.Types.OTHER;
-      case "MAP":                           return java.sql.Types.OTHER; // Drill doesn't support java.sql.Struct
+      case "STRUCT":                        return java.sql.Types.OTHER; // Drill doesn't support java.sql.Struct
+      case "MAP":                           return java.sql.Types.OTHER;
       case "NATIONAL CHARACTER VARYING":    return java.sql.Types.NVARCHAR;
       case "NATIONAL CHARACTER":            return java.sql.Types.NCHAR;
       case "NULL":                          return java.sql.Types.NULL;
@@ -342,6 +400,7 @@ public class Types {
           case LATE:
           case LIST:
           case MAP:
+          case DICT:
           case UNION:
           case NULL:
           case TIMETZ:      // SQL TIME WITH TIME ZONE
@@ -429,6 +488,7 @@ public class Types {
 
       case INTERVAL:
       case MAP:
+      case DICT:
       case LATE:
       case NULL:
       case UNION:
@@ -463,22 +523,28 @@ public class Types {
     default:
       return true;
     }
-
   }
 
   public static boolean isFixedWidthType(final MajorType type) {
-    switch(type.getMinorType()) {
+    return isFixedWidthType(type.getMinorType());
+  }
+
+  public static boolean isFixedWidthType(final MinorType type) {
+    return ! isVarWidthType(type);
+  }
+
+  public static boolean isVarWidthType(final MinorType type) {
+    switch (type) {
     case VARBINARY:
     case VAR16CHAR:
     case VARCHAR:
     case UNION:
     case VARDECIMAL:
-      return false;
-    default:
       return true;
+    default:
+      return false;
     }
   }
-
 
   /**
    * Checks if given major type is string scalar type.
@@ -490,7 +556,7 @@ public class Types {
     if (type.getMode() == REPEATED) {
       return false;
     }
-    switch(type.getMinorType()) {
+    switch (type.getMinorType()) {
     case FIXEDCHAR:
     case FIXED16CHAR:
     case VARCHAR:
@@ -541,7 +607,7 @@ public class Types {
     return MajorType.newBuilder().setMinorType(type).setMode(mode).setPrecision(precision).build();
   }
 
-  public static MajorType withScaleAndPrecision(final MinorType type, final DataMode mode, final int scale, final int precision) {
+  public static MajorType withPrecisionAndScale(MinorType type, DataMode mode, int precision, int scale) {
     return MajorType.newBuilder().setMinorType(type).setMode(mode).setScale(scale).setPrecision(precision).build();
   }
 
@@ -558,7 +624,7 @@ public class Types {
   }
 
   public static MajorType overrideMode(final MajorType originalMajorType, final DataMode overrideMode) {
-    return withScaleAndPrecision(originalMajorType.getMinorType(), overrideMode, originalMajorType.getScale(), originalMajorType.getPrecision());
+    return originalMajorType.toBuilder().setMode(overrideMode).build();
   }
 
   public static MajorType getMajorTypeFromName(final String typeName) {
@@ -567,7 +633,6 @@ public class Types {
 
   public static MinorType getMinorTypeFromName(String typeName) {
     typeName = typeName.toLowerCase();
-
     switch (typeName) {
     case "bool":
     case "boolean":
@@ -720,8 +785,14 @@ public class Types {
    * @return true if type can be used in ORDER BY clause
    */
   public static boolean isSortable(MinorType type) {
-    // Currently only map and list columns are not sortable.
-    return type != MinorType.MAP && type != MinorType.LIST;
+    switch (type) {
+      case DICT:
+      case LIST:
+      case MAP:
+        return false;
+      default:
+        return true;
+    }
   }
 
   /**
@@ -739,38 +810,78 @@ public class Types {
       boolean isScalarString = Types.isScalarStringType(leftType) && Types.isScalarStringType(rightType);
       boolean isDecimal = isDecimalType(leftType);
 
-      if ((isScalarString || isDecimal) && leftType.hasPrecision() && rightType.hasPrecision()) {
+      if (isScalarString && leftType.hasPrecision() && rightType.hasPrecision()) {
         typeBuilder.setPrecision(Math.max(leftType.getPrecision(), rightType.getPrecision()));
       }
 
-      if (isDecimal && leftType.hasScale() && rightType.hasScale()) {
-        typeBuilder.setScale(Math.max(leftType.getScale(), rightType.getScale()));
+      if (isDecimal) {
+        int scale = Math.max(leftType.getScale(), rightType.getScale());
+        // resulting precision should take into account resulting scale value and be calculated as
+        // sum of two components:
+        // - max integer digits number (precision - scale) for left and right;
+        // - resulting scale.
+        // So for the case of cast(9999 as decimal(4,0)) and cast(1.23 as decimal(3,2))
+        // resulting scale would be Max(0, 2) = 2 and resulting precision
+        // would be Max(4 - 0, 3 - 2) + 2 = 6.
+        // In this case, both values would fit into decimal(6, 2): 9999.00, 1.23
+        int leftNumberOfDigits = leftType.getPrecision() - leftType.getScale();
+        int rightNumberOfDigits = rightType.getPrecision() - rightType.getScale();
+        int precision = Math.max(leftNumberOfDigits, rightNumberOfDigits) + scale;
+
+        typeBuilder.setPrecision(precision);
+        typeBuilder.setScale(scale);
       }
     }
     return typeBuilder;
   }
 
+  /**
+   * Check if two "core" types are the same, ignoring subtypes and
+   * children. Primarily for non-complex types.
+   *
+   * @param type1 first type
+   * @param type2 second type
+   * @return true if the two types have the same minor type, mode,
+   * precision and scale
+   */
+  public static boolean isSameType(MajorType type1, MajorType type2) {
+    return isSameTypeAndMode(type1, type2) &&
+           type1.getScale() == type2.getScale() &&
+           type1.getPrecision() == type2.getPrecision();
+  }
+
+  /**
+   * Check if two "core" types have the same minor type and data mode,
+   * ignoring subtypes and children. Primarily for non-complex types.
+   *
+   * @param first  first type to check
+   * @param second second type to check
+   * @return {@code true} if the two types have the same minor type and mode,
+   * {@code false} otherwise
+   */
+  public static boolean isSameTypeAndMode(MajorType first, MajorType second) {
+    return first.getMinorType() == second.getMinorType()
+        && first.getMode() == second.getMode();
+  }
+
+  /**
+   * Requires full type equality, including fields such as precision and scale.
+   * But, unset fields are equivalent to 0. Can't use the protobuf-provided
+   * isEquals() which treats set and unset fields as different.
+   */
   public static boolean isEquivalent(MajorType type1, MajorType type2) {
 
-    // Requires full type equality, including fields such as precision and scale.
-    // But, unset fields are equivalent to 0. Can't use the protobuf-provided
-    // isEquals() which treats set and unset fields as different.
-
-    if (type1.getMinorType() != type2.getMinorType() ||
-        type1.getMode() != type2.getMode() ||
-        type1.getScale() != type2.getScale() ||
-        type1.getPrecision() != type2.getPrecision()) {
+    if (!isSameType(type1, type2)) {
       return false;
     }
 
     // Subtypes are only for unions and are seldom used.
-
     if (type1.getMinorType() != MinorType.UNION) {
       return true;
     }
 
-    List<MinorType> subtypes1 = type1.getSubTypeList();
-    List<MinorType> subtypes2 = type2.getSubTypeList();
+    final List<MinorType> subtypes1 = type1.getSubTypeList();
+    final List<MinorType> subtypes2 = type2.getSubTypeList();
     if (subtypes1 == subtypes2) { // Only occurs if both are null
       return true;
     }
@@ -782,9 +893,8 @@ public class Types {
     }
 
     // Now it gets slow because subtype lists are not ordered.
-
-    List<MinorType> copy1 = new ArrayList<>(subtypes1);
-    List<MinorType> copy2 = new ArrayList<>(subtypes2);
+    final List<MinorType> copy1 = new ArrayList<>(subtypes1);
+    final List<MinorType> copy2 = new ArrayList<>(subtypes2);
     Collections.sort(copy1);
     Collections.sort(copy2);
     return copy1.equals(copy2);
@@ -799,8 +909,38 @@ public class Types {
    * @return string key to use for this type in a union vector type
    * map
    */
-
   public static String typeKey(MinorType type) {
     return type.name().toLowerCase();
+  }
+
+  public static int maxPrecision(MinorType type) {
+    switch (type) {
+    case DECIMAL18:
+      return 18;
+    case DECIMAL28DENSE:
+    case DECIMAL28SPARSE:
+      return 28;
+    case DECIMAL38DENSE:
+    case DECIMAL38SPARSE:
+      return 38;
+    case DECIMAL9:
+      return 9;
+    case VARDECIMAL:
+      return 38;
+    default:
+      return 0;
+    }
+  }
+
+  public static boolean isNullable(final MajorType type) {
+    switch (type.getMode()) {
+      case REQUIRED:
+      case REPEATED:
+        return false;
+      case OPTIONAL:
+        return !isComplex(type);
+      default:
+        throw new UnsupportedOperationException("Unexpected/unhandled DataMode value " + type.getMode());
+    }
   }
 }

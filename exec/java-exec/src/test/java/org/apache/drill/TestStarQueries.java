@@ -23,6 +23,7 @@ import org.apache.drill.categories.UnlikelyTest;
 import org.apache.drill.common.exceptions.UserException;
 import org.apache.drill.common.types.TypeProtos;
 import org.apache.drill.exec.record.BatchSchema;
+import org.apache.drill.exec.record.BatchSchemaBuilder;
 import org.apache.drill.exec.record.metadata.SchemaBuilder;
 import org.apache.drill.test.BaseTestQuery;
 import org.junit.BeforeClass;
@@ -35,7 +36,6 @@ import static org.junit.Assert.assertEquals;
 
 @Category({SqlTest.class, PlannerTest.class})
 public class TestStarQueries extends BaseTestQuery {
-  static final org.slf4j.Logger logger = org.slf4j.LoggerFactory.getLogger(TestStarQueries.class);
 
   @BeforeClass
   public static void setupTestFiles() {
@@ -297,7 +297,7 @@ public class TestStarQueries extends BaseTestQuery {
     try {
       test("select x.n_nationkey, x.n_name, x.n_regionkey, x.r_name from (select * from cp.`tpch/nation.parquet` n, cp.`tpch/region.parquet` r where n.n_regionkey = r.r_regionkey) x " );
     } catch (UserException e) {
-      logger.info("***** Test resulted in expected failure: " + e.getMessage());
+      // Expected
       throw e;
     }
   }
@@ -524,11 +524,13 @@ public class TestStarQueries extends BaseTestQuery {
   @Test // DRILL-5845
   public void testSchemaForStarOrderByLimit() throws Exception {
     final String query = "select * from cp.`tpch/nation.parquet` order by n_name limit 1";
-    final BatchSchema expectedSchema = new SchemaBuilder()
+    SchemaBuilder schemaBuilder = new SchemaBuilder()
         .add("n_nationkey", TypeProtos.MinorType.INT)
-        .add("n_name",TypeProtos.MinorType.VARCHAR)
+        .add("n_name", TypeProtos.MinorType.VARCHAR)
         .add("n_regionkey", TypeProtos.MinorType.INT)
-        .add("n_comment", TypeProtos.MinorType.VARCHAR)
+        .add("n_comment", TypeProtos.MinorType.VARCHAR);
+    BatchSchema expectedSchema = new BatchSchemaBuilder()
+        .withSchemaBuilder(schemaBuilder)
         .build();
 
     testBuilder()
@@ -540,11 +542,13 @@ public class TestStarQueries extends BaseTestQuery {
 
   @Test // DRILL-5822
   public void testSchemaForParallelizedStarOrderBy() throws Exception {
-    final String query = "select * from cp.`tpch/region.parquet` order by r_name";
-    final BatchSchema expectedSchema = new SchemaBuilder()
+    String query = "select * from cp.`tpch/region.parquet` order by r_name";
+    SchemaBuilder schemaBuilder = new SchemaBuilder()
         .add("r_regionkey", TypeProtos.MinorType.INT)
-        .add("r_name",TypeProtos.MinorType.VARCHAR)
-        .add("r_comment", TypeProtos.MinorType.VARCHAR)
+        .add("r_name", TypeProtos.MinorType.VARCHAR)
+        .add("r_comment", TypeProtos.MinorType.VARCHAR);
+    BatchSchema expectedSchema = new BatchSchemaBuilder()
+        .withSchemaBuilder(schemaBuilder)
         .build();
 
     testBuilder()

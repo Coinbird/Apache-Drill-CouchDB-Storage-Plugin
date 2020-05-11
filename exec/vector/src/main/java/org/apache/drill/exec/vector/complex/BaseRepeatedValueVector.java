@@ -17,8 +17,6 @@
  */
 package org.apache.drill.exec.vector.complex;
 
-import io.netty.buffer.DrillBuf;
-
 import java.util.Collections;
 import java.util.Iterator;
 import java.util.Set;
@@ -27,19 +25,21 @@ import org.apache.drill.common.types.TypeProtos;
 import org.apache.drill.common.types.Types;
 import org.apache.drill.exec.exception.SchemaChangeRuntimeException;
 import org.apache.drill.exec.expr.BasicTypeHelper;
-import org.apache.drill.exec.memory.BufferAllocator;
 import org.apache.drill.exec.memory.AllocationManager.BufferLedger;
+import org.apache.drill.exec.memory.BufferAllocator;
 import org.apache.drill.exec.proto.UserBitShared;
 import org.apache.drill.exec.record.MaterializedField;
+import org.apache.drill.exec.record.TransferPair;
 import org.apache.drill.exec.vector.AddOrGetResult;
 import org.apache.drill.exec.vector.BaseValueVector;
 import org.apache.drill.exec.vector.UInt4Vector;
 import org.apache.drill.exec.vector.ValueVector;
 import org.apache.drill.exec.vector.VectorDescriptor;
 import org.apache.drill.exec.vector.ZeroVector;
-
 import org.apache.drill.shaded.guava.com.google.common.base.Preconditions;
 import org.apache.drill.shaded.guava.com.google.common.collect.ObjectArrays;
+
+import io.netty.buffer.DrillBuf;
 
 public abstract class BaseRepeatedValueVector extends BaseValueVector implements RepeatedValueVector {
 
@@ -177,7 +177,7 @@ public abstract class BaseRepeatedValueVector extends BaseValueVector implements
   /**
    * Returns 1 if inner vector is explicitly set via #addOrGetVector else 0
    *
-   * @see {@link org.apache.drill.exec.vector.complex.ContainerVectorLike#size()}
+   * @see org.apache.drill.exec.vector.complex.ContainerVectorLike#size()
    */
   @Override
   public int size() {
@@ -250,6 +250,54 @@ public abstract class BaseRepeatedValueVector extends BaseValueVector implements
     offsets.exchange(target.offsets);
   }
 
+  protected abstract class BaseRepeatedValueVectorTransferPair<T extends BaseRepeatedValueVector> implements TransferPair {
+
+    protected final T target;
+    protected final TransferPair[] children;
+
+    protected BaseRepeatedValueVectorTransferPair(T target) {
+      this.target = Preconditions.checkNotNull(target);
+      if (target.getDataVector() == DEFAULT_DATA_VECTOR) {
+        target.addOrGetVector(VectorDescriptor.create(getDataVector().getField()));
+        target.getDataVector().allocateNew();
+      }
+      this.children = new TransferPair[] {
+          getOffsetVector().makeTransferPair(target.getOffsetVector()),
+          getDataVector().makeTransferPair(target.getDataVector())
+      };
+    }
+
+    @Override
+    public void transfer() {
+      for (TransferPair child : children) {
+        child.transfer();
+      }
+    }
+
+    @Override
+    public ValueVector getTo() {
+      return target;
+    }
+
+    @Override
+    public void splitAndTransfer(int startIndex, int length) {
+      target.allocateNew();
+      for (int i = 0; i < length; i++) {
+        copyValueSafe(startIndex + i, i);
+      }
+    }
+
+    protected void copyValueSafe(int destIndex, int start, int end) {
+      TransferPair vectorTransfer = children[1];
+      int newIndex = target.getOffsetVector().getAccessor().get(destIndex);
+      // TODO: make this a bulk copy.
+      for (int i = start; i < end; i++, newIndex++) {
+        vectorTransfer.copyValueSafe(i, newIndex);
+      }
+      target.getOffsetVector().getMutator().setSafe(destIndex + 1, newIndex);
+    }
+  }
+
   public abstract class BaseRepeatedAccessor extends BaseValueVector.BaseAccessor implements RepeatedAccessor {
 
     @Override
@@ -285,28 +333,26 @@ public abstract class BaseRepeatedValueVector extends BaseValueVector implements
       while (offsets.getValueCapacity() <= index) {
         offsets.reAlloc();
       }
-      offsets.getMutator().setSafe(index+1, offsets.getAccessor().get(index));
-      setValueCount(index+1);
-    }
-
-    public boolean startNewValueBounded(int index) {
-      if (index >= MAX_ROW_COUNT) {
-        return false;
-      }
-      startNewValue(index);
-      return true;
+      offsets.getMutator().setSafe(index + 1, offsets.getAccessor().get(index));
+      setValueCount(index + 1);
     }
 
     @Override
     public void setValueCount(int valueCount) {
       // TODO: populate offset end points
-      offsets.getMutator().setValueCount(valueCount == 0 ? 0 : valueCount+1);
+      // Convention seems to be that if the "outer" value count
+      // is zero, then the offset vector can also be zero-length:
+      // the normal initial zero position is omitted. While this
+      // saves a bit of memory, it greatly complicates code that
+      // works with vectors because of the special case for zero-length
+      // vectors.
+      offsets.getMutator().setValueCount(valueCount == 0 ? 0 : valueCount + 1);
       final int childValueCount = valueCount == 0 ? 0 : offsets.getAccessor().get(valueCount);
       vector.getMutator().setValueCount(childValueCount);
     }
 
     public int getInnerValueCountAt(int index) {
-      return offsets.getAccessor().get(index+1) - offsets.getAccessor().get(index);
+      return offsets.getAccessor().get(index + 1) - offsets.getAccessor().get(index);
     }
   }
 }

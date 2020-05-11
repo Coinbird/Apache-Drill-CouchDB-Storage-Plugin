@@ -26,6 +26,7 @@ import org.apache.drill.common.logical.FormatPluginConfig;
 import org.apache.drill.common.logical.StoragePluginConfig;
 import org.apache.drill.exec.physical.base.AbstractGroupScan;
 import org.apache.drill.exec.physical.base.AbstractWriter;
+import org.apache.drill.exec.metastore.MetadataProviderManager;
 import org.apache.drill.exec.physical.base.PhysicalOperator;
 import org.apache.drill.exec.planner.common.DrillStatsTable.TableStatistics;
 import org.apache.drill.exec.server.DrillbitContext;
@@ -52,26 +53,39 @@ public interface FormatPlugin {
 
   FormatMatcher getMatcher();
 
-  public AbstractWriter getWriter(PhysicalOperator child, String location, List<String> partitionColumns) throws IOException;
+  AbstractWriter getWriter(PhysicalOperator child, String location,
+      List<String> partitionColumns) throws IOException;
 
   Set<StoragePluginOptimizerRule> getOptimizerRules();
 
-  AbstractGroupScan getGroupScan(String userName, FileSelection selection, List<SchemaPath> columns) throws IOException;
+  AbstractGroupScan getGroupScan(String userName, FileSelection selection,
+      List<SchemaPath> columns) throws IOException;
 
-  default AbstractGroupScan getGroupScan(String userName, FileSelection selection, List<SchemaPath> columns, OptionManager options) throws IOException {
+  default AbstractGroupScan getGroupScan(String userName, FileSelection selection,
+      List<SchemaPath> columns, OptionManager options) throws IOException {
     return getGroupScan(userName, selection, columns);
   }
 
-  public boolean supportsStatistics();
+  default AbstractGroupScan getGroupScan(String userName, FileSelection selection,
+      List<SchemaPath> columns, MetadataProviderManager metadataProviderManager) throws IOException {
+    return getGroupScan(userName, selection, columns);
+  }
 
-  public TableStatistics readStatistics(FileSystem fs, Path statsTablePath) throws IOException;
+  default AbstractGroupScan getGroupScan(String userName, FileSelection selection,
+      List<SchemaPath> columns, OptionManager options,
+      MetadataProviderManager metadataProvider) throws IOException {
+    return getGroupScan(userName, selection, columns, metadataProvider);
+  }
 
-  public void writeStatistics(TableStatistics statistics, FileSystem fs, Path statsTablePath) throws IOException;
+  boolean supportsStatistics();
+
+  TableStatistics readStatistics(FileSystem fs, Path statsTablePath) throws IOException;
+
+  void writeStatistics(TableStatistics statistics, FileSystem fs, Path statsTablePath) throws IOException;
 
   FormatPluginConfig getConfig();
   StoragePluginConfig getStorageConfig();
   Configuration getFsConf();
   DrillbitContext getContext();
   String getName();
-
 }

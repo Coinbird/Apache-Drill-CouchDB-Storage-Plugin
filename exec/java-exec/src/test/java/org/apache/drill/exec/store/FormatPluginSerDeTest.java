@@ -19,7 +19,7 @@ package org.apache.drill.exec.store;
 
 import org.apache.drill.PlanTestBase;
 import org.apache.drill.exec.ExecConstants;
-import org.apache.drill.exec.store.avro.AvroTestUtil;
+import org.apache.drill.exec.store.avro.AvroDataGenerator;
 import org.junit.Test;
 
 import java.nio.file.Paths;
@@ -63,8 +63,8 @@ public class FormatPluginSerDeTest extends PlanTestBase {
 
   @Test
   public void testAvro() throws Exception {
-    AvroTestUtil.AvroTestRecordWriter testSetup = AvroTestUtil.generateSimplePrimitiveSchema_NoNullValues(5);
-    String file = testSetup.getFileName();
+    AvroDataGenerator dataGenerator = new AvroDataGenerator(dirTestWatcher);
+    String file = dataGenerator.generateSimplePrimitiveSchema_NoNullValues(5).getFileName();
     testPhysicalPlanSubmission(
         String.format("select * from dfs.`%s`", file),
         String.format("select * from table(dfs.`%s`(type=>'avro'))", file)
@@ -93,9 +93,9 @@ public class FormatPluginSerDeTest extends PlanTestBase {
 
   @Test
   public void testHttpd() throws Exception {
-    String path = "store/httpd/dfs-bootstrap.httpd";
+    String path = "store/httpd/dfs-test-bootstrap-test.httpd";
     dirTestWatcher.copyResourceToRoot(Paths.get(path));
-    String logFormat = "%h %t \"%r\" %>s %b \"%{Referer}i\"";
+    String logFormat = "%h %l %u %t \"%r\" %>s %b \"%{Referer}i\" \"%{User-agent}i\"";
     String timeStampFormat = "dd/MMM/yyyy:HH:mm:ss ZZ";
     testPhysicalPlanSubmission(
         String.format("select * from dfs.`%s`", path),
@@ -135,6 +135,4 @@ public class FormatPluginSerDeTest extends PlanTestBase {
       PlanTestBase.testPhysicalPlanExecutionBasedOnQuery(query);
     }
   }
-
 }
-

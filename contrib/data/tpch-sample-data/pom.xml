@@ -23,7 +23,7 @@
   <parent>
     <artifactId>drill-contrib-data-parent</artifactId>
     <groupId>org.apache.drill.contrib.data</groupId>
-    <version>1.16.0-SNAPSHOT</version>
+    <version>1.18.0-SNAPSHOT</version>
   </parent>
 
   <artifactId>tpch-sample-data</artifactId>
@@ -35,21 +35,23 @@
   <build>
     <plugins>
       <plugin>
-        <groupId>com.googlecode.maven-download-plugin</groupId>
-        <artifactId>download-maven-plugin</artifactId>
-        <version>1.2.0</version>
+        <artifactId>maven-resources-plugin</artifactId>
         <executions>
           <execution>
-            <id>install-tgz</id>
-            <phase>prepare-package</phase>
+            <id>copy-tpch-data</id>
+            <phase>process-resources</phase>
             <goals>
-              <goal>wget</goal>
+              <goal>copy-resources</goal>
             </goals>
             <configuration>
-              <url>http://apache-drill.s3.amazonaws.com/files/sf-0.01_tpc-h_parquet_typed.tgz</url>
-              <outputFileName>tpch.tgz</outputFileName>
-              <unpack>true</unpack>
-              <outputDirectory>${project.build.directory}/classes/tpch</outputDirectory>
+              <outputDirectory>${basedir}/target/classes/tpch
+              </outputDirectory>
+              <resources>
+                <resource>
+                  <directory>parquet</directory>
+                  <filtering>false</filtering>
+                </resource>
+              </resources>
             </configuration>
           </execution>
         </executions>

@@ -21,13 +21,13 @@ import static org.apache.drill.exec.planner.index.Statistics.ROWCOUNT_HUGE;
 import static org.apache.drill.exec.planner.index.Statistics.ROWCOUNT_UNKNOWN;
 import static org.apache.drill.exec.planner.index.Statistics.AVG_ROWSIZE_UNKNOWN;
 
-import java.io.IOException;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.NavigableMap;
 import java.util.TreeMap;
 
+import com.fasterxml.jackson.annotation.JsonCreator;
 import com.mapr.db.impl.ConditionImpl;
 import com.mapr.db.impl.ConditionNode.RowkeyRange;
 
@@ -43,6 +43,7 @@ import org.apache.drill.exec.physical.base.IndexGroupScan;
 import org.apache.drill.exec.physical.base.PhysicalOperator;
 import org.apache.drill.exec.physical.base.ScanStats;
 import org.apache.drill.exec.physical.base.ScanStats.GroupScanProperty;
+import org.apache.drill.exec.record.metadata.TupleMetadata;
 import org.apache.drill.exec.store.AbstractStoragePlugin;
 import org.apache.drill.exec.planner.index.IndexDescriptor;
 import org.apache.drill.exec.planner.index.MapRDBIndexDescriptor;
@@ -64,7 +65,9 @@ import org.apache.drill.exec.store.mapr.db.MapRDBSubScanSpec;
 import org.apache.drill.exec.store.mapr.db.MapRDBTableStats;
 import org.apache.drill.exec.store.mapr.db.TabletFragmentInfo;
 import org.apache.drill.exec.util.Utilities;
-import org.codehaus.jackson.annotate.JsonCreator;
+import org.apache.drill.exec.metastore.store.FileSystemMetadataProviderManager;
+import org.apache.drill.exec.metastore.MetadataProviderManager;
+import org.apache.drill.metastore.metadata.TableMetadataProvider;
 import org.ojai.store.QueryCondition;
 
 import com.fasterxml.jackson.annotation.JacksonInject;
@@ -119,26 +122,24 @@ public class JsonTableGroupScan extends MapRDBGroupScan implements IndexGroupSca
                             @JsonProperty("storage") FileSystemConfig storagePluginConfig,
                             @JsonProperty("format") MapRDBFormatPluginConfig formatPluginConfig,
                             @JsonProperty("columns") List<SchemaPath> columns,
-                            @JacksonInject StoragePluginRegistry pluginRegistry) throws IOException, ExecutionSetupException {
-    this (userName,
-          (AbstractStoragePlugin) pluginRegistry.getPlugin(storagePluginConfig),
-          (MapRDBFormatPlugin) pluginRegistry.getFormatPlugin(storagePluginConfig, formatPluginConfig),
-          scanSpec, columns);
+                            @JsonProperty("schema") TupleMetadata schema,
+                            @JacksonInject StoragePluginRegistry pluginRegistry) throws ExecutionSetupException {
+    this(userName, pluginRegistry.resolve(storagePluginConfig, AbstractStoragePlugin.class),
+        pluginRegistry.resolveFormat(storagePluginConfig, formatPluginConfig, MapRDBFormatPlugin.class),
+        scanSpec, columns, new MapRDBStatistics(), FileSystemMetadataProviderManager.getMetadataProviderForSchema(schema));
   }
 
   public JsonTableGroupScan(String userName, AbstractStoragePlugin storagePlugin,
-                            MapRDBFormatPlugin formatPlugin, JsonScanSpec scanSpec, List<SchemaPath> columns) {
-    super(storagePlugin, formatPlugin, columns, userName);
-    this.scanSpec = scanSpec;
-    this.stats = new MapRDBStatistics();
-    this.forcedRowCountMap = new HashMap<>();
-    init();
+                            MapRDBFormatPlugin formatPlugin, JsonScanSpec scanSpec, List<SchemaPath> columns,
+                            MetadataProviderManager metadataProviderManager) {
+    this(userName, storagePlugin, formatPlugin, scanSpec, columns,
+        new MapRDBStatistics(), FileSystemMetadataProviderManager.getMetadataProvider(metadataProviderManager));
   }
 
-  public JsonTableGroupScan(String userName, FileSystemPlugin storagePlugin,
+  public JsonTableGroupScan(String userName, AbstractStoragePlugin storagePlugin,
                             MapRDBFormatPlugin formatPlugin, JsonScanSpec scanSpec, List<SchemaPath> columns,
-                            MapRDBStatistics stats) {
-    super(storagePlugin, formatPlugin, columns, userName);
+                            MapRDBStatistics stats, TableMetadataProvider metadataProvider) {
+    super(storagePlugin, formatPlugin, columns, userName, metadataProvider);
     this.scanSpec = scanSpec;
     this.stats = stats;
     this.forcedRowCountMap = new HashMap<>();
@@ -205,6 +206,7 @@ public class JsonTableGroupScan extends MapRDBGroupScan implements IndexGroupSca
     }
   }
 
+  @Override
   protected NavigableMap<TabletFragmentInfo, String> getRegionsToScan() {
     return getRegionsToScan(formatPlugin.getScanRangeSizeMB());
   }
@@ -269,6 +271,7 @@ public class JsonTableGroupScan extends MapRDBGroupScan implements IndexGroupSca
     return doNotAccessRegionsToScan;
   }
 
+  @Override
   protected MapRDBSubScanSpec getSubScanSpec(final TabletFragmentInfo tfi) {
     // XXX/TODO check filter/Condition
     final JsonScanSpec spec = scanSpec;
@@ -293,7 +296,7 @@ public class JsonTableGroupScan extends MapRDBGroupScan implements IndexGroupSca
     assert minorFragmentId < endpointFragmentMapping.size() : String.format(
         "Mappings length [%d] should be greater than minor fragment id [%d] but it isn't.", endpointFragmentMapping.size(),
         minorFragmentId);
-    return new MapRDBSubScan(getUserName(), formatPlugin, endpointFragmentMapping.get(minorFragmentId), columns, maxRecordsToRead, TABLE_JSON);
+    return new MapRDBSubScan(getUserName(), formatPlugin, endpointFragmentMapping.get(minorFragmentId), columns, maxRecordsToRead, TABLE_JSON, getSchema());
   }
 
   @Override
@@ -436,6 +439,7 @@ public class JsonTableGroupScan extends MapRDBGroupScan implements IndexGroupSca
     return !formatPluginConfig.isEnablePushdown();
   }
 
+  @Override
   @JsonIgnore
   public boolean canPushdownProjects(List<SchemaPath> columns) {
     return formatPluginConfig.isEnablePushdown();
@@ -471,13 +475,14 @@ public class JsonTableGroupScan extends MapRDBGroupScan implements IndexGroupSca
 
   @Override
   public RestrictedJsonTableGroupScan getRestrictedScan(List<SchemaPath> columns) {
-    RestrictedJsonTableGroupScan newScan =
-        new RestrictedJsonTableGroupScan(this.getUserName(),
-            (FileSystemPlugin) this.getStoragePlugin(),
-            this.getFormatPlugin(),
-            this.getScanSpec(),
-            this.getColumns(),
-            this.getStatistics());
+    RestrictedJsonTableGroupScan newScan = new RestrictedJsonTableGroupScan(this.getUserName(),
+        (FileSystemPlugin) this.getStoragePlugin(),
+        this.getFormatPlugin(),
+        this.getScanSpec(),
+        this.getColumns(),
+        this.getStatistics(),
+        this.getSchema());
+
     newScan.columns = columns;
     return newScan;
   }
@@ -661,7 +666,7 @@ public class JsonTableGroupScan extends MapRDBGroupScan implements IndexGroupSca
     double fullTableSize;
 
     if (useNumRegions) {
-      return getMaxParallelizationWidth() > 1 ? true: false;
+      return getMaxParallelizationWidth() > 1;
     }
 
     // This function gets called multiple times during planning. To avoid performance
@@ -686,7 +691,7 @@ public class JsonTableGroupScan extends MapRDBGroupScan implements IndexGroupSca
       fullTableSize = rowCount * rowSize;
     }
 
-    return (long) fullTableSize / scanRangeSize > 1 ? true : false;
+    return (long) fullTableSize / scanRangeSize > 1;
   }
 
   @Override
@@ -729,8 +734,9 @@ public class JsonTableGroupScan extends MapRDBGroupScan implements IndexGroupSca
   }
 
   /**
-   * Json table reader support limit
-   * @return
+   * Checks if Json table reader supports limit push down.
+   *
+   * @return true if limit push down is supported, false otherwise
    */
   @Override
   public boolean supportsLimitPushdown() {

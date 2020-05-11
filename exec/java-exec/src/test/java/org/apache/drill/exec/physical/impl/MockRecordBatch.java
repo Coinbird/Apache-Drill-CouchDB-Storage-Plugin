@@ -17,11 +17,22 @@
  */
 package org.apache.drill.exec.physical.impl;
 
-import org.apache.drill.shaded.guava.com.google.common.base.Preconditions;
+import java.util.ArrayList;
+import java.util.Iterator;
+import java.util.List;
+import java.util.function.Supplier;
+import java.util.stream.Collectors;
+
+import javax.annotation.Nullable;
+import javax.validation.constraints.NotNull;
+
 import org.apache.drill.common.expression.SchemaPath;
 import org.apache.drill.exec.memory.BufferAllocator;
 import org.apache.drill.exec.ops.FragmentContext;
 import org.apache.drill.exec.ops.OperatorContext;
+import org.apache.drill.exec.physical.rowSet.DirectRowSet;
+import org.apache.drill.exec.physical.rowSet.IndirectRowSet;
+import org.apache.drill.exec.physical.rowSet.RowSet;
 import org.apache.drill.exec.record.BatchSchema;
 import org.apache.drill.exec.record.CloseableRecordBatch;
 import org.apache.drill.exec.record.TypedFieldId;
@@ -30,20 +41,9 @@ import org.apache.drill.exec.record.VectorWrapper;
 import org.apache.drill.exec.record.WritableBatch;
 import org.apache.drill.exec.record.selection.SelectionVector2;
 import org.apache.drill.exec.record.selection.SelectionVector4;
-import org.apache.drill.test.rowSet.DirectRowSet;
-import org.apache.drill.test.rowSet.IndirectRowSet;
-import org.apache.drill.test.rowSet.RowSet;
-
-import javax.annotation.Nullable;
-import javax.validation.constraints.NotNull;
-import java.util.ArrayList;
-import java.util.Iterator;
-import java.util.List;
-import java.util.function.Supplier;
-import java.util.stream.Collectors;
+import org.apache.drill.shaded.guava.com.google.common.base.Preconditions;
 
 public class MockRecordBatch implements CloseableRecordBatch {
-  private static final org.slf4j.Logger logger = org.slf4j.LoggerFactory.getLogger(MockRecordBatch.class);
 
   // These resources are owned by this RecordBatch
   protected VectorContainer container;
@@ -61,12 +61,12 @@ public class MockRecordBatch implements CloseableRecordBatch {
   protected final OperatorContext oContext;
   protected final BufferAllocator allocator;
 
-  private MockRecordBatch(@NotNull final FragmentContext context,
-                          @Nullable final OperatorContext oContext,
-                          @NotNull final List<RowSet> testRowSets,
-                          @NotNull final List<IterOutcome> iterOutcomes,
-                          @NotNull final BatchSchema schema,
-                          final boolean dummy) {
+  private MockRecordBatch(@NotNull FragmentContext context,
+                          @Nullable OperatorContext oContext,
+                          @NotNull List<RowSet> testRowSets,
+                          @NotNull List<IterOutcome> iterOutcomes,
+                          @NotNull BatchSchema schema,
+                          boolean dummy) {
     Preconditions.checkNotNull(testRowSets);
     Preconditions.checkNotNull(iterOutcomes);
     Preconditions.checkNotNull(schema);
@@ -77,17 +77,13 @@ public class MockRecordBatch implements CloseableRecordBatch {
     this.allocator = context.getAllocator();
     this.container = new VectorContainer(allocator, schema);
     this.allOutcomes = iterOutcomes;
-    this.currentContainerIndex = 0;
-    this.currentOutcomeIndex = 0;
-    this.isDone = false;
   }
 
-  @Deprecated
-  public MockRecordBatch(@Nullable final FragmentContext context,
-                         @Nullable final OperatorContext oContext,
-                         @NotNull final List<VectorContainer> testContainers,
-                         @NotNull final List<IterOutcome> iterOutcomes,
-                         final BatchSchema schema) {
+  public MockRecordBatch(@Nullable FragmentContext context,
+                         @Nullable OperatorContext oContext,
+                         @NotNull List<VectorContainer> testContainers,
+                         @NotNull List<IterOutcome> iterOutcomes,
+                         BatchSchema schema) {
     this(context,
          oContext,
          testContainers.stream().
@@ -99,12 +95,12 @@ public class MockRecordBatch implements CloseableRecordBatch {
   }
 
   @Deprecated
-  public MockRecordBatch(@Nullable final FragmentContext context,
-                         @Nullable final OperatorContext oContext,
-                         @NotNull final List<VectorContainer> testContainers,
-                         @NotNull final List<IterOutcome> iterOutcomes,
-                         @NotNull final List<SelectionVector2> selectionVector2s,
-                         final BatchSchema schema) {
+  public MockRecordBatch(@Nullable FragmentContext context,
+                         @Nullable OperatorContext oContext,
+                         @NotNull List<VectorContainer> testContainers,
+                         @NotNull List<IterOutcome> iterOutcomes,
+                         @NotNull List<SelectionVector2> selectionVector2s,
+                         BatchSchema schema) {
     this(context,
       oContext,
       new Supplier<List<RowSet>>() {
@@ -130,7 +126,7 @@ public class MockRecordBatch implements CloseableRecordBatch {
   @Override
   public void close() {
     container.clear();
-    container.setRecordCount(0);
+    container.setEmpty();
     currentContainerIndex = 0;
     currentOutcomeIndex = 0;
     if (sv2 != null) {
@@ -164,14 +160,9 @@ public class MockRecordBatch implements CloseableRecordBatch {
   }
 
   @Override
-  public void kill(boolean sendUpstream) {
+  public void cancel() {
     if (!limitWithUnnest) {
       isDone = true;
-      container.clear();
-      container.setRecordCount(0);
-      if (sv2 != null) {
-        sv2.clear();
-      }
     }
   }
 
@@ -193,18 +184,18 @@ public class MockRecordBatch implements CloseableRecordBatch {
   @Override
   public IterOutcome next() {
 
-    if(isDone) {
+    if (isDone) {
       return IterOutcome.NONE;
     }
 
     IterOutcome currentOutcome;
 
     if (currentContainerIndex < rowSets.size()) {
-      final RowSet rowSet = rowSets.get(currentContainerIndex);
-      final VectorContainer input = rowSet.container();
+      RowSet rowSet = rowSets.get(currentContainerIndex);
+      VectorContainer input = rowSet.container();
       // We need to do this since the downstream operator expects vector reference to be same
       // after first next call in cases when schema is not changed
-      final BatchSchema inputSchema = input.getSchema();
+      BatchSchema inputSchema = input.getSchema();
       if (!container.getSchema().isEquivalent(inputSchema)) {
         container.clear();
         container = new VectorContainer(allocator, inputSchema);
@@ -213,16 +204,18 @@ public class MockRecordBatch implements CloseableRecordBatch {
       switch (rowSet.indirectionType()) {
         case NONE:
         case TWO_BYTE:
-          container.transferIn(input);
-          if ( input.hasRecordCount() ) { // in case special test of uninitialized input container
-            container.setRecordCount(input.getRecordCount());
+          if (input.hasRecordCount()) { // in case special test of uninitialized input container
+            container.transferIn(input);
+          } else {
+            // Not normally a valid condition, supported here just for testing
+            container.rawTransferIn(input);
           }
-          final SelectionVector2 inputSv2 = ((RowSet.SingleRowSet) rowSet).getSv2();
+          SelectionVector2 inputSv2 = ((RowSet.SingleRowSet) rowSet).getSv2();
 
           if (sv2 != null) {
             // Operators assume that new values for an Sv2 are transferred in.
             sv2.allocateNewSafe(inputSv2.getCount());
-            for (int i=0; i<inputSv2.getCount(); ++i) {
+            for (int i=0; i < inputSv2.getCount(); ++i) {
               sv2.setIndex(i, inputSv2.getIndex(i));
             }
             sv2.setRecordCount(inputSv2.getCount());
@@ -256,8 +249,6 @@ public class MockRecordBatch implements CloseableRecordBatch {
         ++currentContainerIndex;
         return currentOutcome;
       case NONE:
-      case STOP:
-      case OUT_OF_MEMORY:
         isDone = true;
       case NOT_YET:
         container.setRecordCount(0);
@@ -289,13 +280,7 @@ public class MockRecordBatch implements CloseableRecordBatch {
   }
 
   @Override
-  public boolean hasFailed() {
-    return false;
-  }
-
-  @Override
-  public void dump() {
-  }
+  public void dump() { }
 
   public static class Builder {
     private final List<RowSet> rowSets = new ArrayList<>();
@@ -307,46 +292,43 @@ public class MockRecordBatch implements CloseableRecordBatch {
     public Builder() {
     }
 
-    private Builder sendData(final RowSet rowSet, final IterOutcome outcome) {
+    private Builder sendData(RowSet rowSet, IterOutcome outcome) {
       Preconditions.checkState(batchSchema == null);
       rowSets.add(rowSet);
       iterOutcomes.add(outcome);
       return this;
     }
 
-    public Builder sendData(final RowSet rowSet) {
-      final IterOutcome outcome = rowSets.isEmpty()? IterOutcome.OK_NEW_SCHEMA: IterOutcome.OK;
+    public Builder sendData(RowSet rowSet) {
+      IterOutcome outcome = rowSets.isEmpty()? IterOutcome.OK_NEW_SCHEMA: IterOutcome.OK;
       return sendData(rowSet, outcome);
     }
 
-    public Builder sendDataWithNewSchema(final RowSet rowSet) {
+    public Builder sendDataWithNewSchema(RowSet rowSet) {
       return sendData(rowSet, IterOutcome.OK_NEW_SCHEMA);
     }
 
-    public Builder sendDataAndEmit(final RowSet rowSet) {
+    public Builder sendDataAndEmit(RowSet rowSet) {
       return sendData(rowSet, IterOutcome.EMIT);
     }
 
     public Builder terminateWithError(IterOutcome errorOutcome) {
-      Preconditions.checkArgument(errorOutcome != IterOutcome.STOP);
-      Preconditions.checkArgument(errorOutcome != IterOutcome.OUT_OF_MEMORY);
-
       iterOutcomes.add(errorOutcome);
       return this;
     }
 
-    public Builder setSchema(final BatchSchema batchSchema) {
+    public Builder setSchema(BatchSchema batchSchema) {
       Preconditions.checkState(!rowSets.isEmpty());
       this.batchSchema = Preconditions.checkNotNull(batchSchema);
       return this;
     }
 
-    public Builder withOperatorContext(final OperatorContext oContext) {
+    public Builder withOperatorContext(OperatorContext oContext) {
       this.oContext = Preconditions.checkNotNull(oContext);
       return this;
     }
 
-    public MockRecordBatch build(final FragmentContext context) {
+    public MockRecordBatch build(FragmentContext context) {
       BatchSchema tempSchema = batchSchema;
 
       if (tempSchema == null && !rowSets.isEmpty()) {

@@ -21,6 +21,8 @@ import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.IOException;
 import java.io.InputStream;
+import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -35,6 +37,7 @@ import org.apache.drill.exec.exception.OutOfMemoryException;
 import org.apache.drill.exec.ops.FragmentContext;
 import org.apache.drill.exec.physical.base.AbstractFileGroupScan;
 import org.apache.drill.exec.physical.base.AbstractWriter;
+import org.apache.drill.exec.metastore.MetadataProviderManager;
 import org.apache.drill.exec.physical.base.PhysicalOperator;
 import org.apache.drill.exec.physical.base.SchemalessScan;
 import org.apache.drill.exec.physical.impl.WriterRecordBatch;
@@ -58,13 +61,11 @@ import org.apache.drill.exec.store.dfs.FormatPlugin;
 import org.apache.drill.exec.store.dfs.FormatSelection;
 import org.apache.drill.exec.store.dfs.MagicString;
 import org.apache.drill.exec.store.dfs.MetadataContext;
-import org.apache.drill.exec.store.mock.MockStorageEngine;
 import org.apache.drill.exec.store.parquet.metadata.Metadata;
 import org.apache.drill.exec.store.parquet.metadata.ParquetTableMetadataDirs;
 import org.apache.drill.exec.util.DrillFileSystemUtil;
 import org.apache.drill.shaded.guava.com.google.common.base.Stopwatch;
 import org.apache.drill.shaded.guava.com.google.common.collect.ImmutableSet;
-import org.apache.drill.shaded.guava.com.google.common.collect.Lists;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FSDataInputStream;
 import org.apache.hadoop.fs.FileStatus;
@@ -72,19 +73,21 @@ import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.parquet.format.converter.ParquetMetadataConverter;
 import org.apache.parquet.hadoop.ParquetFileWriter;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 public class ParquetFormatPlugin implements FormatPlugin {
 
-  private static final org.slf4j.Logger logger = org.slf4j.LoggerFactory.getLogger(MockStorageEngine.class);
+  private static final Logger logger = LoggerFactory.getLogger(ParquetFormatPlugin.class);
 
   public static final ParquetMetadataConverter parquetMetadataConverter = new ParquetMetadataConverter();
 
   private static final String DEFAULT_NAME = "parquet";
 
-  private static final List<Pattern> PATTERNS = Lists.newArrayList(
+  private static final List<Pattern> PATTERNS = Arrays.asList(
       Pattern.compile(".*\\.parquet$"),
       Pattern.compile(".*/" + ParquetFileWriter.PARQUET_METADATA_FILE));
-  private static final List<MagicString> MAGIC_STRINGS = Lists.newArrayList(new MagicString(0, ParquetFileWriter.MAGIC));
+  private static final List<MagicString> MAGIC_STRINGS = Collections.singletonList(new MagicString(0, ParquetFileWriter.MAGIC));
 
   private final DrillbitContext context;
   private final Configuration fsConf;
@@ -181,16 +184,22 @@ public class ParquetFormatPlugin implements FormatPlugin {
 
   @Override
   public AbstractFileGroupScan getGroupScan(String userName, FileSelection selection, List<SchemaPath> columns) throws IOException {
-    return getGroupScan(userName, selection, columns, null);
+    return getGroupScan(userName, selection, columns, (OptionManager) null);
   }
 
   @Override
   public AbstractFileGroupScan getGroupScan(String userName, FileSelection selection, List<SchemaPath> columns, OptionManager options) throws IOException {
+    return getGroupScan(userName, selection, columns, options, null);
+  }
+
+  @Override
+  public AbstractFileGroupScan getGroupScan(String userName, FileSelection selection,
+      List<SchemaPath> columns, OptionManager options, MetadataProviderManager metadataProviderManager) throws IOException {
     ParquetReaderConfig readerConfig = ParquetReaderConfig.builder()
-      .withFormatConfig(getConfig())
-      .withOptions(options)
-      .build();
-    ParquetGroupScan parquetGroupScan = new ParquetGroupScan(userName, selection, this, columns, readerConfig);
+        .withFormatConfig(getConfig())
+        .withOptions(options)
+        .build();
+    ParquetGroupScan parquetGroupScan = new ParquetGroupScan(userName, selection, this, columns, readerConfig, metadataProviderManager);
     if (parquetGroupScan.getEntries().isEmpty()) {
       // If ParquetGroupScan does not contain any entries, it means selection directories are empty and
       // metadata cache files are invalid, return schemaless scan
@@ -276,6 +285,7 @@ public class ParquetFormatPlugin implements FormatPlugin {
           ParquetReaderConfig readerConfig = ParquetReaderConfig.builder().withFormatConfig(formatConfig).build();
           ParquetTableMetadataDirs mDirs = Metadata.readMetadataDirs(fs, dirMetaPath, metaContext, readerConfig);
           if (mDirs != null && mDirs.getDirectories().size() > 0) {
+            metaContext.setDirectories(mDirs.getDirectories());
             FileSelection dirSelection = FileSelection.createFromDirectories(mDirs.getDirectories(), selection,
                 selection.getSelectionRoot() /* cacheFileRoot initially points to selectionRoot */);
             dirSelection.setExpandedPartial();
@@ -296,12 +306,34 @@ public class ParquetFormatPlugin implements FormatPlugin {
       return super.isReadable(fs, selection, fsPlugin, storageEngineName, schemaConfig);
     }
 
-    private Path getMetadataPath(FileStatus dir) {
-      return new Path(dir.getPath(), Metadata.METADATA_FILENAME);
+    private Path getOldMetadataPath(FileStatus dir) {
+      return new Path(dir.getPath(), Metadata.OLD_METADATA_FILENAME);
     }
 
+    /**
+     * Check if the metadata cache files exist
+     * @param dir the path of the directory
+     * @param fs
+     * @return true if both file metadata and summary cache file exist
+     * @throws IOException in case of problems during accessing files
+     */
     private boolean metaDataFileExists(FileSystem fs, FileStatus dir) throws IOException {
-      return fs.exists(getMetadataPath(dir));
+      boolean fileExists = true;
+      for (String metaFileName : Metadata.CURRENT_METADATA_FILENAMES) {
+        Path path = new Path(dir.getPath(), metaFileName);
+        if (!fs.exists(path)) {
+          fileExists = false;
+        }
+      }
+      if (fileExists) {
+        return true;
+      } else {
+        // Check if the older version of metadata file exists
+        if (fs.exists(getOldMetadataPath(dir))) {
+          return true;
+        }
+      }
+      return false;
     }
 
     boolean isDirReadable(DrillFileSystem fs, FileStatus dir) {

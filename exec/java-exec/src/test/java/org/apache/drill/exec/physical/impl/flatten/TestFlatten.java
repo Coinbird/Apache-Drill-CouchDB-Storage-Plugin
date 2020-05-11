@@ -28,21 +28,20 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.List;
 
-import org.apache.drill.test.BaseTestQuery;
 import org.apache.drill.categories.OperatorTest;
-import org.apache.drill.test.TestBuilder;
 import org.apache.drill.categories.UnlikelyTest;
 import org.apache.drill.exec.fn.interp.TestConstantFolding;
 import org.apache.drill.exec.store.easy.json.JSONRecordReader;
 import org.apache.drill.exec.util.JsonStringHashMap;
+import org.apache.drill.shaded.guava.com.google.common.collect.Lists;
+import org.apache.drill.test.BaseTestQuery;
 import org.apache.drill.test.SubDirTestWatcher;
+import org.apache.drill.test.TestBuilder;
 import org.junit.BeforeClass;
 import org.junit.Ignore;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
-
-import org.apache.drill.shaded.guava.com.google.common.collect.Lists;
 
 @Category(OperatorTest.class)
 public class TestFlatten extends BaseTestQuery {
@@ -88,7 +87,6 @@ public class TestFlatten extends BaseTestQuery {
         .setRecord(jsonRecords)
         .createFiles(1, numCopies, "json");
 
-    @SuppressWarnings("unchecked")
     List<JsonStringHashMap<String,Object>> data = Lists.newArrayList(
         mapOf("uid", 1l,
             "lst_lst_0", listOf(1l, 2l, 3l, 4l, 5l),
@@ -123,7 +121,6 @@ public class TestFlatten extends BaseTestQuery {
 
   @Test
   public void testFlattenReferenceImpl() throws Exception {
-    @SuppressWarnings("unchecked")
     List<JsonStringHashMap<String,Object>> data = Lists.newArrayList(
         mapOf("a",1,
               "b",2,
@@ -133,7 +130,6 @@ public class TestFlatten extends BaseTestQuery {
                   listOf(1000,999)
             )));
     List<JsonStringHashMap<String, Object>> result = flatten(flatten(flatten(data, "list_col"), "nested_list_col"), "nested_list_col");
-     @SuppressWarnings("unchecked")
     List<JsonStringHashMap<String, Object>> expectedResult = Lists.newArrayList(
         mapOf("nested_list_col", 100,  "list_col", 10,"a", 1, "b",2),
         mapOf("nested_list_col", 99,   "list_col", 10,"a", 1, "b",2),
@@ -195,7 +191,6 @@ public class TestFlatten extends BaseTestQuery {
         .setRecord(jsonRecord)
         .createFiles(1, numRecords, "json");
 
-    @SuppressWarnings("unchecked")
     List<JsonStringHashMap<String,Object>> data = Lists.newArrayList(
         mapOf("int_list", inputList)
     );
@@ -281,7 +276,7 @@ public class TestFlatten extends BaseTestQuery {
   @Test
   @Category(UnlikelyTest.class)
   public void drill1652() throws Exception {
-    if(RUN_ADVANCED_TESTS){
+    if (RUN_ADVANCED_TESTS) {
       test("select uid, flatten(transactions) from dfs.`tmp/bigfile.json`");
     }
   }
@@ -335,7 +330,7 @@ public class TestFlatten extends BaseTestQuery {
   public void testKVGenFlatten2() throws Exception {
     // currently runs
     // TODO - re-verify results by hand
-    if(RUN_ADVANCED_TESTS){
+    if (RUN_ADVANCED_TESTS) {
       test("select flatten(kvgen(visited_cellid_counts)) as mytb from dfs.`tmp/mapkv.json`");
     }
   }
@@ -356,7 +351,7 @@ public class TestFlatten extends BaseTestQuery {
 
     // FIXED BY RETURNING PROPER SCHEMA DURING FAST SCHEMA STEP
     // these types of problems are being solved more generally as we develp better support for chaning schema
-    if(RUN_ADVANCED_TESTS){
+    if (RUN_ADVANCED_TESTS) {
       test("select celltbl.catl from (\n" +
           "        select flatten(categories) catl from dfs.`tmp/yelp_academic_dataset_business.json` b limit 100\n" +
           "    )  celltbl where celltbl.catl = 'Doctors'");
@@ -365,7 +360,7 @@ public class TestFlatten extends BaseTestQuery {
 
   @Test
   public void countAggFlattened() throws Exception {
-    if(RUN_ADVANCED_TESTS){
+    if (RUN_ADVANCED_TESTS) {
       test("select celltbl.catl, count(celltbl.catl) from ( " +
           "select business_id, flatten(categories) catl from dfs.`tmp/yelp_academic_dataset_business.json` b limit 100 " +
           ")  celltbl group by celltbl.catl limit 10 ");
@@ -374,35 +369,33 @@ public class TestFlatten extends BaseTestQuery {
 
   @Test
   public void flattenAndAdditionalColumn() throws Exception {
-    if(RUN_ADVANCED_TESTS){
+    if (RUN_ADVANCED_TESTS) {
       test("select business_id, flatten(categories) from dfs.`tmp/yelp_academic_dataset_business.json` b");
     }
   }
 
   @Test
   public void testFailingFlattenAlone() throws Exception {
-    if(RUN_ADVANCED_TESTS){
+    if (RUN_ADVANCED_TESTS) {
       test("select flatten(categories) from dfs.`tmp/yelp_academic_dataset_business.json` b  ");
     }
   }
 
   @Test
   public void testDistinctAggrFlattened() throws Exception {
-    if(RUN_ADVANCED_TESTS){
+    if (RUN_ADVANCED_TESTS) {
       test(" select distinct(celltbl.catl) from (\n" +
           "        select flatten(categories) catl from dfs.`tmp/yelp_academic_dataset_business.json` b\n" +
           "    )  celltbl");
     }
-
   }
 
   @Test
   @Category(UnlikelyTest.class)
   public void testDrill1665() throws Exception {
-    if(RUN_ADVANCED_TESTS){
+    if (RUN_ADVANCED_TESTS) {
       test("select id, flatten(evnts) as rpt from dfs.`tmp/drill1665.json`");
     }
-
   }
 
   @Test
@@ -484,7 +477,6 @@ public class TestFlatten extends BaseTestQuery {
         .unOrdered()
         .jsonBaselineFile("flatten/drill-2106-result.json")
         .go();
-
   }
 
   @Test // see DRILL-2146

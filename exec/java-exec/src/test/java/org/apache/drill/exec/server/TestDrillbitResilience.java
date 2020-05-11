@@ -47,7 +47,6 @@ import org.apache.drill.exec.ZookeeperHelper;
 import org.apache.drill.exec.ZookeeperTestUtil;
 import org.apache.drill.exec.client.DrillClient;
 import org.apache.drill.exec.exception.DrillbitStartupException;
-import org.apache.drill.exec.exception.SchemaChangeException;
 import org.apache.drill.exec.memory.BufferAllocator;
 import org.apache.drill.exec.memory.RootAllocatorFactory;
 import org.apache.drill.exec.physical.impl.ScreenCreator;
@@ -125,7 +124,6 @@ public class TestDrillbitResilience extends DrillTest {
     }
 
     try {
-      @SuppressWarnings("resource")
       final Drillbit drillbit = Drillbit.start(zkHelper.getConfig(), remoteServiceSet);
       drillbits.put(name, drillbit);
     } catch (final DrillbitStartupException e) {
@@ -174,7 +172,6 @@ public class TestDrillbitResilience extends DrillTest {
    * @param name name of the drillbit
    * @return endpoint of the drillbit
    */
-  @SuppressWarnings("resource")
   private static DrillbitEndpoint getEndpoint(final String name) {
     final Drillbit drillbit = drillbits.get(name);
     if (drillbit == null) {
@@ -251,13 +248,9 @@ public class TestDrillbitResilience extends DrillTest {
           public void rowArrived(final QueryDataBatch queryResultBatch) {
             // load the single record
             final QueryData queryData = queryResultBatch.getHeader();
-            try {
-              loader.load(queryData.getDef(), queryResultBatch.getData());
-              // TODO:  Clean:  DRILL-2933:  That load(...) no longer throws
-              // SchemaChangeException, so check/clean catch clause below.
-            } catch (final SchemaChangeException e) {
-              fail(e.toString());
-            }
+            // TODO:  Clean:  DRILL-2933:  That load(...) no longer throws
+            // SchemaChangeException.
+            loader.load(queryData.getDef(), queryResultBatch.getData());
             assertEquals(1, loader.getRecordCount());
 
             // there should only be one column

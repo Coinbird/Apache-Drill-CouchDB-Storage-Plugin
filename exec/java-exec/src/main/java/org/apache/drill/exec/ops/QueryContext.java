@@ -41,6 +41,7 @@ import org.apache.drill.exec.rpc.user.UserSession;
 import org.apache.drill.exec.server.DrillbitContext;
 import org.apache.drill.exec.server.QueryProfileStoreContext;
 import org.apache.drill.exec.server.options.OptionValue;
+import org.apache.drill.exec.server.options.OptionValue.OptionScope;
 import org.apache.drill.exec.server.options.QueryOptionManager;
 import org.apache.drill.exec.store.PartitionExplorer;
 import org.apache.drill.exec.store.PartitionExplorerImpl;
@@ -51,6 +52,7 @@ import org.apache.drill.exec.store.StoragePluginRegistry;
 import org.apache.drill.exec.testing.ExecutionControls;
 import org.apache.drill.exec.util.Utilities;
 
+import org.apache.drill.metastore.MetastoreRegistry;
 import org.apache.drill.shaded.guava.com.google.common.base.Function;
 import org.apache.drill.shaded.guava.com.google.common.collect.Lists;
 import org.apache.drill.shaded.guava.com.google.common.collect.Maps;
@@ -60,7 +62,6 @@ import io.netty.buffer.DrillBuf;
 // TODO - consider re-name to PlanningContext, as the query execution context actually appears
 // in fragment contexts
 public class QueryContext implements AutoCloseable, OptimizerRulesContext, SchemaConfigInfoProvider {
-
   private static final org.slf4j.Logger logger = org.slf4j.LoggerFactory.getLogger(QueryContext.class);
   public enum SqlStatementType {OTHER, ANALYZE, CTAS, EXPLAIN, DESCRIBE_TABLE, DESCRIBE_SCHEMA, REFRESH, SELECT, SETOPTION};
 
@@ -77,6 +78,7 @@ public class QueryContext implements AutoCloseable, OptimizerRulesContext, Schem
   private final QueryContextInformation queryContextInfo;
   private final ViewExpansionContext viewExpansionContext;
   private final SchemaTreeProvider schemaTreeProvider;
+  private boolean skipProfileWrite;
   /** Stores constants and their holders by type */
   private final Map<String, Map<MinorType, ValueHolder>> constantValueHolderCache;
   private SqlStatementType stmtType;
@@ -92,6 +94,7 @@ public class QueryContext implements AutoCloseable, OptimizerRulesContext, Schem
     this.drillbitContext = drillbitContext;
     this.session = session;
     this.queryId = queryId;
+    this.skipProfileWrite = false;
     queryOptions = new QueryOptionManager(session.getOptions());
     executionControls = new ExecutionControls(queryOptions, drillbitContext.getEndpoint());
     plannerSettings = new PlannerSettings(queryOptions, getFunctionRegistry());
@@ -103,6 +106,23 @@ public class QueryContext implements AutoCloseable, OptimizerRulesContext, Schem
       this.table = new DrillOperatorTable(drillbitContext.getFunctionImplementationRegistry(), drillbitContext.getOptionManager());
     } else {
       this.table = drillbitContext.getOperatorTable();
+    }
+
+    // Checking for limit on ResultSet rowcount and if user attempting to override the system value
+    int sessionMaxRowCount = queryOptions.getOption(ExecConstants.QUERY_MAX_ROWS).num_val.intValue();
+    int defaultMaxRowCount = queryOptions.getOptionManager(OptionScope.SYSTEM).getOption(ExecConstants.QUERY_MAX_ROWS).num_val.intValue();
+    int autoLimitRowCount = 0;
+    if (sessionMaxRowCount > 0 && defaultMaxRowCount > 0) {
+      autoLimitRowCount = Math.min(sessionMaxRowCount, defaultMaxRowCount);
+    } else {
+      autoLimitRowCount = Math.max(sessionMaxRowCount, defaultMaxRowCount);
+    }
+    if (autoLimitRowCount == defaultMaxRowCount && defaultMaxRowCount != sessionMaxRowCount) {
+      // Required to indicate via OptionScope=QueryLevel that session limit is overridden by system limit
+      queryOptions.setLocalOption(ExecConstants.QUERY_MAX_ROWS, autoLimitRowCount);
+    }
+    if (autoLimitRowCount > 0) {
+      logger.debug("ResultSet size is auto-limited to {} rows [Session: {} / Default: {}]", autoLimitRowCount, sessionMaxRowCount, defaultMaxRowCount);
     }
 
     queryContextInfo = Utilities.createQueryContextInfo(session.getDefaultSchemaPath(), session.getSessionId());
@@ -341,11 +361,10 @@ public class QueryContext implements AutoCloseable, OptimizerRulesContext, Schem
     }
   }
 
-  /*
-   * Clears the type {@link SqlStatementType} of the statement. Ideally we should not clear the statement type
-   * so this should never be exposed outside the QueryContext
+  /**
+   * Clears the type {@link SqlStatementType} of the statement.
    */
-  private void clearSQLStatementType() {
+  public void clearSQLStatementType() {
     this.stmtType = null;
   }
 
@@ -354,5 +373,24 @@ public class QueryContext implements AutoCloseable, OptimizerRulesContext, Schem
    */
   public SqlStatementType getSQLStatementType() {
     return stmtType;
+  }
+
+  /**
+   * Skip writing profile
+   * @param skipWriting
+   */
+  public void skipWritingProfile(boolean skipWriting) {
+    this.skipProfileWrite = skipWriting;
+  }
+
+  /**
+   * @return Check if to skip writing
+   */
+  public boolean isSkipProfileWrite() {
+    return skipProfileWrite;
+  }
+
+  public MetastoreRegistry getMetastoreRegistry() {
+    return drillbitContext.getMetastoreRegistry();
   }
 }

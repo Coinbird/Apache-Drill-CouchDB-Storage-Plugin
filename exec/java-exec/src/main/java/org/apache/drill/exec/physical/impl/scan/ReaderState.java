@@ -19,6 +19,10 @@ package org.apache.drill.exec.physical.impl.scan;
 
 import org.apache.drill.common.exceptions.UserException;
 import org.apache.drill.exec.record.VectorContainer;
+import org.apache.drill.exec.vector.accessor.InvalidConversionError;
+import org.apache.drill.exec.vector.accessor.UnsupportedConversionError;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Manages a row batch reader through its lifecycle. Created when the reader
@@ -126,13 +130,16 @@ import org.apache.drill.exec.record.VectorContainer;
  */
 
 class ReaderState {
-  static final org.slf4j.Logger logger = org.slf4j.LoggerFactory.getLogger(ReaderState.class);
+  static final Logger logger = LoggerFactory.getLogger(ReaderState.class);
 
   private enum State {
+
     /**
      * Initial state before opening the reader.
      */
+
     START,
+
     /**
      * The scan operator is obligated to provide a "fast schema", without data,
      * before the first row of data. "Early schema" readers (those that provide
@@ -150,7 +157,9 @@ class ReaderState {
      * the next call to {@link ReaderState#next()} will return this look-ahead
      * batch rather than reading a new one.
      */
+
     LOOK_AHEAD,
+
     /**
      * As above, but the reader hit EOF during the read of the look-ahead batch.
      * The {@link ReaderState#next()} checks if the lookahead batch has any
@@ -164,26 +173,33 @@ class ReaderState {
      * row in the result set loader. That look-ahead is handled by the
      * (shim) reader which this class manages.
      */
+
     LOOK_AHEAD_WITH_EOF,
+
     /**
      * Normal state: the reader has supplied data but not yet reported EOF.
      */
+
     ACTIVE,
+
     /**
      * The reader has reported EOF. No look-ahead batch is active. The
      * reader's next() method will no longer be called.
      */
+
     EOF,
+
     /**
      * The reader is closed: no further operations are allowed.
      */
-    CLOSED };
+
+    CLOSED
+  };
 
   final ScanOperatorExec scanOp;
   private final RowBatchReader reader;
   private State state = State.START;
   private VectorContainer lookahead;
-  private int schemaVersion = -1;
 
   public ReaderState(ScanOperatorExec scanOp, RowBatchReader reader) {
     this.scanOp = scanOp;
@@ -210,7 +226,7 @@ class ReaderState {
       // Handle this by immediately moving to EOF. The scanner will quietly
       // pass over this reader and move onto the next, if any.
 
-      if (! reader.open()) {
+      if (!reader.open()) {
         state = State.EOF;
         return false;
       }
@@ -223,6 +239,17 @@ class ReaderState {
       // Throw user exceptions as-is
 
       throw e;
+    } catch (UnsupportedConversionError e) {
+
+      // Occurs if the provided schema asks to convert a reader-provided
+      // schema in a way that Drill (or the reader) cannot support.
+      // Example: implicit conversion of a float to an INTERVAL
+      // In such a case, there are no "natural" rules, a reader would have
+      // to provide ad-hoc rules or no conversion is possible.
+
+      throw UserException.validationError(e)
+        .message("Invalid runtime type conversion")
+        .build(logger);
     } catch (Throwable t) {
 
       // Wrap all others in a user exception.
@@ -238,8 +265,11 @@ class ReaderState {
 
   /**
    * Prepare the schema for this reader. Called for the first reader within a
-   * scan batch, if the reader returns <tt>true</tt> from <tt>open()</tt>. If
-   * this is an early-schema reader, then the result set loader already has
+   * scan batch, if the reader returns <tt>true</tt> from <tt>open()</tt>.
+   * Asks the reader if it can provide a schema-only empty batch by calling
+   * the reader's <tt>defineSchema()</tt> method. If this is an early-schema
+   * reader, and it can provide a schema, then it should create an empty
+   * batch so that the the result set loader already has
    * the proper value vectors set up. If this is a late-schema reader, we must
    * read one batch to get the schema, then set aside the data for the next
    * call to <tt>next()</tt>.
@@ -255,9 +285,10 @@ class ReaderState {
    * <li>If if turned out that the file was
    * empty when trying to read the schema, <tt>open()</tt> returned false
    * and this method should never be called.</tt>
-   * <li>Otherwise, if a schema was available, then the schema is already
-   * set up in the result set loader as the result of schema negotiation, and
-   * this method simply returns <tt>true</tt>.
+   * <li>Otherwise, the reader does not know if it is the first reader or
+   * not. The call to <tt>defineSchema()</tt> notifies the reader that it
+   * is the first one. The reader should set up in the result set loader
+   * with an empty batch.
    * </ul>
    * <p>
    * Semantics for late-schema readers:
@@ -277,38 +308,32 @@ class ReaderState {
    * to read the schema.
    * @throws UserException for all errors
    */
-
   protected boolean buildSchema() {
 
-    VectorContainer container = reader.output();
-
-    if (container != null) {
+    if (reader.defineSchema()) {
 
       // Bind the output container to the output of the scan operator.
       // This returns an empty batch with the schema filled in.
-
-      scanOp.containerAccessor.setContainer(container);
-      schemaVersion = reader.schemaVersion();
+      scanOp.containerAccessor.setSchema(reader.output());
       return true;
     }
 
     // Late schema. Read a batch.
-
     if (! next()) {
       return false;
     }
-    container = reader.output();
+    VectorContainer container = reader.output();
     if (container.getRecordCount() == 0) {
       return true;
     }
 
     // The reader returned actual data. Just forward the schema
-    // in a dummy container, saving the data for next time.
-
+    // in the operator's container, saving the data for next time
+    // in a dummy container.
     assert lookahead == null;
-    lookahead = new VectorContainer(scanOp.context.getAllocator(), scanOp.containerAccessor.getSchema());
+    lookahead = new VectorContainer(scanOp.context.getAllocator(), scanOp.containerAccessor.schema());
     lookahead.setRecordCount(0);
-    lookahead.exchange(scanOp.containerAccessor.getOutgoingContainer());
+    lookahead.exchange(scanOp.containerAccessor.container());
     state = state == State.EOF ? State.LOOK_AHEAD_WITH_EOF : State.LOOK_AHEAD;
     return true;
   }
@@ -321,17 +346,20 @@ class ReaderState {
    * false if EOF was hit
    * @throws UserException for all reader errors
    */
-
   protected boolean next() {
     switch (state) {
     case LOOK_AHEAD:
     case LOOK_AHEAD_WITH_EOF:
       // Use batch previously read.
       assert lookahead != null;
-      lookahead.exchange(scanOp.containerAccessor.getOutgoingContainer());
+      lookahead.exchange(scanOp.containerAccessor.container());
       assert lookahead.getRecordCount() == 0;
       lookahead = null;
-      state = state == State.LOOK_AHEAD_WITH_EOF ? State.EOF : State.ACTIVE;
+      if (state == State.LOOK_AHEAD_WITH_EOF) {
+        state = State.EOF;
+      } else {
+        state = State.ACTIVE;
+      }
       return true;
 
     case ACTIVE:
@@ -371,20 +399,23 @@ class ReaderState {
    * @return true if a batch was read, false if the reader hit EOF
    * @throws UserException for all reader errors
    */
-
   private boolean readBatch() {
 
-    // Try to read a batch. This may fail. If so, clean up the
-    // mess.
-
+    // Try to read a batch. This may fail. If so, clean up the mess.
     boolean more;
     try {
       more = reader.next();
-      if (! more) {
-        state = State.EOF;
-      }
     } catch (UserException e) {
       throw e;
+    } catch (InvalidConversionError e) {
+
+      // Occurs when a specific data value to be converted to another type
+      // is not valid for that conversion. For example, providing the value
+      // "foo" to a string-to-int conversion.
+      throw UserException.unsupportedError(e)
+        .message("Invalid data value for automatic type conversion")
+        .addContext("Read failed for reader", reader.name())
+        .build(logger);
     } catch (Throwable t) {
       throw UserException.executionError(t)
         .addContext("Read failed for reader", reader.name())
@@ -392,8 +423,32 @@ class ReaderState {
     }
 
     VectorContainer output = reader.output();
-    if (! more && output.getRecordCount() == 0) {
-      return false;
+    if (!more) {
+      state = State.EOF;
+      if (output == null) {
+        return false;
+      }
+
+      // The reader can indicate EOF (they can't return any more rows)
+      // while returning a non-empty final batch. This is the typical
+      // case with files: the reader read some records and then hit
+      // EOF. Avoids the need for the reader to keep an EOF state.
+      if (output.getRecordCount() == 0) {
+
+        // No results, possibly from the first batch.
+        // If the scan has no schema, but this (possibly empty) reader
+        // does have a schema, then pass along this empty batch
+        // as a candidate empty result set of the entire scan.
+        if (scanOp.containerAccessor.schemaVersion() == 0 &&
+            reader.schemaVersion() > 0) {
+          scanOp.containerAccessor.setSchema(output);
+        }
+        output.zeroVectors();
+        return false;
+      }
+
+      // EOF (the reader can provide no more batches), but
+      // the reader did provide rows in this batch. Fall through.
     }
 
     // Late schema readers may change their schema between batches.
@@ -401,12 +456,7 @@ class ReaderState {
     // reader. (This is not a hard and fast rule, only a definition:
     // a reader that starts with a schema, but later changes it, has
     // morphed from an early- to late-schema reader.)
-
-    int newVersion = reader.schemaVersion();
-    if (newVersion > schemaVersion) {
-      scanOp.containerAccessor.setContainer(output);
-      schemaVersion = newVersion;
-    }
+    scanOp.containerAccessor.addBatch(output);
     return true;
   }
 
@@ -414,14 +464,12 @@ class ReaderState {
    * Close the current reader. The hard part is handling the possible
    * error conditions, and cleaning up despite those errors.
    */
-
   void close() {
     if (state == State.CLOSED) {
       return;
     }
 
     // Close the reader. This can fail.
-
     try {
       reader.close();
     } catch (UserException e) {
@@ -433,7 +481,6 @@ class ReaderState {
     } finally {
 
       // Will not throw exceptions
-
       if (lookahead != null) {
         lookahead.clear();
         lookahead = null;

@@ -33,12 +33,14 @@ import org.apache.drill.exec.record.MaterializedField;
 import org.apache.drill.exec.vector.accessor.*;
 import org.apache.drill.exec.vector.complex.RepeatedMapVector;
 import org.apache.drill.exec.util.CallBack;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /*
  * This class is generated using freemarker and the ${.template_name} template.
  */
 public class TypeHelper extends BasicTypeHelper {
-  static final org.slf4j.Logger logger = org.slf4j.LoggerFactory.getLogger(TypeHelper.class);
+  static final Logger logger = LoggerFactory.getLogger(TypeHelper.class);
 
   public static SqlAccessor getSqlAccessor(ValueVector vector){
     final MajorType type = vector.getField().getType();
@@ -59,42 +61,81 @@ public class TypeHelper extends BasicTypeHelper {
     </#list>
     </#list>
     case MAP:
+    case DICT:
     case LIST:
     case NULL:
       return new GenericAccessor(vector);
+    default:
+      throw new UnsupportedOperationException(buildErrorMessage("find sql accessor", type));
     }
-    throw new UnsupportedOperationException(buildErrorMessage("find sql accessor", type));
   }
-  
+
   public static JType getHolderType(JCodeModel model, MinorType type, DataMode mode){
     switch (type) {
     case UNION:
       return model._ref(UnionHolder.class);
+    case DICT:
+      switch (mode) {
+        case REQUIRED:
+        case OPTIONAL:
+          return model._ref(DictHolder.class);
+        case REPEATED:
+          return model._ref(RepeatedDictHolder.class);
+      }
     case MAP:
     case LIST:
       return model._ref(ComplexHolder.class);
-      
+
 <#list vv.types as type>
   <#list type.minor as minor>
-      case ${minor.class?upper_case}:
-        switch (mode) {
-          case REQUIRED:
-            return model._ref(${minor.class}Holder.class);
-          case OPTIONAL:
-            return model._ref(Nullable${minor.class}Holder.class);
-          case REPEATED:
-            return model._ref(Repeated${minor.class}Holder.class);
-        }
+    case ${minor.class?upper_case}:
+      switch (mode) {
+        case REQUIRED:
+          return model._ref(${minor.class}Holder.class);
+        case OPTIONAL:
+          return model._ref(Nullable${minor.class}Holder.class);
+        case REPEATED:
+          return model._ref(Repeated${minor.class}Holder.class);
+      }
   </#list>
 </#list>
-      case GENERIC_OBJECT:
-        return model._ref(ObjectHolder.class);
+    case GENERIC_OBJECT:
+      return model._ref(ObjectHolder.class);
     case NULL:
       return model._ref(UntypedNullHolder.class);
-      default:
-        break;
-      }
+    default:
       throw new UnsupportedOperationException(buildErrorMessage("get holder type", type, mode));
+    }
   }
 
+  public static JType getComplexHolderType(JCodeModel model, MinorType type, DataMode mode) {
+    switch (type) {
+      case DICT:
+        switch (mode) {
+          case REQUIRED:
+          case OPTIONAL:
+            return model._ref(DictHolder.class);
+          case REPEATED:
+            return model._ref(RepeatedDictHolder.class);
+        }
+      case MAP:
+        switch (mode) {
+          case REQUIRED:
+          case OPTIONAL:
+            return model._ref(MapHolder.class);
+          case REPEATED:
+            return model._ref(RepeatedMapHolder.class);
+        }
+      case LIST:
+        switch (mode) {
+          case REQUIRED:
+          case OPTIONAL:
+            return model._ref(ListHolder.class);
+          case REPEATED:
+            return model._ref(RepeatedListHolder.class);
+        }
+      default:
+        throw new IllegalArgumentException("Complex type expected. Found: " + type);
+    }
+  }
 }

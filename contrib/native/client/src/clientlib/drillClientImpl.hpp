@@ -473,6 +473,7 @@ class DrillClientImpl : public DrillClientImplBase{
 
         static bool clientNeedsAuthentication(const DrillUserProperties* userProperties);
 
+        bool handleComplexTypes(const DrillUserProperties* userProperties);
 
     private:
         friend class meta::DrillMetadata;
@@ -582,6 +583,8 @@ class DrillClientImpl : public DrillClientImplBase{
         int m_saslResultCode;
         bool m_saslDone;
         boost::mutex m_saslMutex; // mutex to protect m_saslDone
+        // mutex to protect deallocation of sasl connection
+        boost::mutex m_sasl_dispose_mutex;
         boost::condition_variable m_saslCv; // to signal completion of SASL exchange
 
         // Used for encryption and is set when server notifies in first handshake response.

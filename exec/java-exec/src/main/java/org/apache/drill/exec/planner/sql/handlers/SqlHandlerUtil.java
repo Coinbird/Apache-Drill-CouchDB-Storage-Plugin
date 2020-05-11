@@ -19,6 +19,8 @@ package org.apache.drill.exec.planner.sql.handlers;
 
 import org.apache.drill.shaded.guava.com.google.common.collect.Lists;
 import org.apache.drill.shaded.guava.com.google.common.collect.Sets;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.apache.calcite.rel.type.RelDataTypeField;
 import org.apache.calcite.rex.RexBuilder;
 import org.apache.calcite.rex.RexInputRef;
@@ -45,7 +47,7 @@ import java.util.HashSet;
 import java.util.List;
 
 public class SqlHandlerUtil {
-  private static final org.slf4j.Logger logger = org.slf4j.LoggerFactory.getLogger(SqlHandlerUtil.class);
+  private static final Logger logger = LoggerFactory.getLogger(SqlHandlerUtil.class);
 
   /**
    * Resolve final RelNode of the new table (or view) for given table field list and new table definition.
@@ -272,4 +274,26 @@ public class SqlHandlerUtil {
     }
   }
 
+  /**
+   * Unparses given {@link SqlNodeList} into key / values pairs: (k1 = v1, k2 = v2).
+   *
+   * @param writer sql writer
+   * @param leftPrec left precedence
+   * @param rightPrec right precedence
+   * @param list sql node list
+   */
+  public static void unparseKeyValuePairs(SqlWriter writer, int leftPrec, int rightPrec, SqlNodeList list) {
+    writer.keyword("(");
+
+    for (int i = 1; i < list.size(); i += 2) {
+      if (i != 1) {
+        writer.keyword(",");
+      }
+      list.get(i - 1).unparse(writer, leftPrec, rightPrec);
+      writer.keyword("=");
+      list.get(i).unparse(writer, leftPrec, rightPrec);
+    }
+
+    writer.keyword(")");
+  }
 }

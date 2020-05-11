@@ -29,7 +29,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.util.StdConverter;
 
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -99,22 +98,27 @@ public class DynamicPojoRecordReader<T> extends AbstractPojoRecordReader<List<T>
 
     private final ObjectMapper mapper;
 
-    public Converter(ObjectMapper mapper)
-    {
+    public Converter(ObjectMapper mapper) {
       this.mapper = mapper;
     }
 
     @Override
     public DynamicPojoRecordReader convert(JsonNode value) {
       LinkedHashMap<String, Class<?>> schema = mapper.convertValue(value.get("schema"), schemaType);
+      List<List<?>> records = new ArrayList<>();
 
-      ArrayList records = new ArrayList(schema.size());
-      final Iterator<JsonNode> recordsIterator = value.get("records").get(0).elements();
-      for (Class<?> fieldType : schema.values()) {
-        records.add(mapper.convertValue(recordsIterator.next(), fieldType));
+      JsonNode serializedRecords = value.get("records");
+      for (JsonNode serializedRecord : serializedRecords) {
+        List<Object> record = new ArrayList<>(schema.size());
+        Iterator<JsonNode> recordsIterator = serializedRecord.elements();
+        for (Class<?> fieldType : schema.values()) {
+          record.add(mapper.convertValue(recordsIterator.next(), fieldType));
+        }
+        records.add(record);
       }
+
       int maxRecordsToRead = value.get("recordsPerBatch").asInt();
-      return new DynamicPojoRecordReader(schema, Collections.singletonList(records), maxRecordsToRead);
+      return new DynamicPojoRecordReader(schema, records, maxRecordsToRead);
     }
   }
 }

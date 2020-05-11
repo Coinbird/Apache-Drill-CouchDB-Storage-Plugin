@@ -19,7 +19,6 @@ package org.apache.drill.test;
 
 import java.io.BufferedReader;
 import java.io.File;
-import java.io.FileNotFoundException;
 import java.io.FileReader;
 import java.io.IOException;
 import java.io.Reader;
@@ -35,13 +34,16 @@ import org.apache.drill.exec.memory.BufferAllocator;
 import org.apache.drill.exec.proto.UserBitShared.QueryType;
 import org.apache.drill.exec.proto.UserProtos.QueryPlanFragments;
 import org.apache.drill.exec.record.BatchSchema;
+import org.apache.drill.exec.record.metadata.TupleMetadata;
 import org.apache.drill.exec.rpc.DrillRpcFuture;
 import org.apache.drill.exec.rpc.RpcException;
 import org.apache.drill.exec.rpc.user.QueryDataBatch;
 import org.apache.drill.exec.testing.ControlsInjectionUtil;
 import org.apache.drill.test.ClusterFixture.FixtureTestServices;
 import org.apache.drill.test.QueryBuilder.QuerySummary;
-import org.apache.drill.test.rowSet.RowSetBuilder;
+import org.apache.drill.exec.physical.rowSet.RowSetBuilder;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Represents a Drill client. Provides many useful test-specific operations such
@@ -51,7 +53,8 @@ import org.apache.drill.test.rowSet.RowSetBuilder;
  */
 
 public class ClientFixture implements AutoCloseable {
-  private static final org.slf4j.Logger logger = org.slf4j.LoggerFactory.getLogger(ClientFixture.class);
+
+  private static final Logger logger = LoggerFactory.getLogger(ClientFixture.class);
 
   public static class ClientBuilder {
 
@@ -91,7 +94,7 @@ public class ClientFixture implements AutoCloseable {
     }
   }
 
-  private ClusterFixture cluster;
+  private final ClusterFixture cluster;
   private DrillClient client;
 
   public ClientFixture(ClientBuilder builder) throws RpcException {
@@ -118,11 +121,9 @@ public class ClientFixture implements AutoCloseable {
   /**
    * Set a runtime option.
    *
-   * @param key
-   * @param value
-   * @throws RpcException
+   * @param key option name
+   * @param value option value
    */
-
   public void alterSession(String key, Object value) {
     String sql = "ALTER SESSION SET `" + key + "` = " + ClusterFixture.stringify(value);
     runSqlSilently(sql);
@@ -135,9 +136,8 @@ public class ClientFixture implements AutoCloseable {
 
   /**
    * Reset a system option
-   * @param key
+   * @param key option name
    */
-
   public void resetSession(String key) {
     runSqlSilently("ALTER SESSION RESET `" + key + "`");
   }
@@ -147,19 +147,19 @@ public class ClientFixture implements AutoCloseable {
   }
 
   /**
-   * Run SQL silently (discard results.)
+   * Run SQL silently (discard results).
    *
-   * @param sql
-   * @throws RpcException
+   * @param sql query
+   * @param args format params
+   * @throws IllegalStateException if something goes wrong
    */
-
-  public void runSqlSilently(String sql) {
+  public void runSqlSilently(String sql, Object... args) {
     try {
-      queryBuilder().sql(sql).run();
+      queryBuilder().sql(sql, args).run();
     } catch (Exception e) {
       // Should not fail during tests. Convert exception to unchecked
       // to simplify test code.
-      new IllegalStateException(e);
+      throw new IllegalStateException(e);
     }
   }
 
@@ -181,9 +181,11 @@ public class ClientFixture implements AutoCloseable {
 
   /**
    * Run zero or more queries and output the results in TSV format.
+   *
+   * @param queryString query string
+   * @param print if query result should be printed
    */
-  private void runQueriesAndOutput(final String queryString,
-                                   final boolean print) throws Exception {
+  private void runQueriesAndOutput(final String queryString, final boolean print) {
     final String query = QueryTestUtil.normalizeQuery(queryString);
     String[] queries = query.split(";");
     for (String q : queries) {
@@ -202,24 +204,30 @@ public class ClientFixture implements AutoCloseable {
 
   /**
    * Run zero or more queries and log the output in TSV format.
+   *
+   * @param queryString query string
    */
-  public void runQueriesAndLog(final String queryString) throws Exception {
+  public void runQueriesAndLog(final String queryString) {
     runQueriesAndOutput(queryString, false);
   }
 
   /**
    * Run zero or more queries and print the output in TSV format.
+   *
+   * @param queryString query string
    */
-  public void runQueriesAndPrint(final String queryString) throws Exception {
+  public void runQueriesAndPrint(final String queryString) {
     runQueriesAndOutput(queryString, true);
   }
 
   /**
    * Plan a query without execution.
-   * @throws ExecutionException
-   * @throws InterruptedException
+   *
+   * @param type query type
+   * @param query query string
+   * @param isSplitPlan option to tell whether to return single or split plans for a query
+   * @return query plan fragments
    */
-
   public QueryPlanFragments planQuery(QueryType type, String query, boolean isSplitPlan) {
     DrillRpcFuture<QueryPlanFragments> queryFragmentsFutures = client.planQuery(type, query, isSplitPlan);
     try {
@@ -250,11 +258,10 @@ public class ClientFixture implements AutoCloseable {
    * Return a parsed query profile for a query summary. Saving of profiles
    * must be turned on.
    *
-   * @param summary
-   * @return
-   * @throws IOException
+   * @param summary query summary
+   * @return profile parser
+   * @throws IOException if unable to parse query profile
    */
-
   public ProfileParser parseProfile(QuerySummary summary) throws IOException {
     return parseProfile(summary.queryIdString());
   }
@@ -263,9 +270,11 @@ public class ClientFixture implements AutoCloseable {
    * Parse a query profile from the local storage location given the
    * query ID. Saving of profiles must be turned on. This is a bit of
    * a hack: the profile should be available directly from the server.
-   * @throws IOException
+   *
+   * @param queryId query ID
+   * @return profile parser
+   * @throws IOException if unable to parse the profile
    */
-
   public ProfileParser parseProfile(String queryId) throws IOException {
     File file = new File(cluster.getProfileDir(), queryId + ".sys.drill");
     return new ProfileParser(file);
@@ -278,15 +287,18 @@ public class ClientFixture implements AutoCloseable {
    * before the SELECT statement.
    *
    * @param controls the controls string created by
-   * {@link Controls#newBuilder()} builder.
+   * {@link org.apache.drill.exec.testing.Controls#newBuilder()} builder.
    */
-
   public void setControls(String controls) {
     ControlsInjectionUtil.validateControlsString(controls);
     alterSession(ExecConstants.DRILLBIT_CONTROL_INJECTIONS, controls);
   }
 
   public RowSetBuilder rowSetBuilder(BatchSchema schema) {
+    return new RowSetBuilder(allocator(), schema);
+  }
+
+  public RowSetBuilder rowSetBuilder(TupleMetadata schema) {
     return new RowSetBuilder(allocator(), schema);
   }
 
@@ -304,10 +316,8 @@ public class ClientFixture implements AutoCloseable {
    * <li><tt>ALTER SESSION SET `foo` = ";"</tt></li>
    * <li><tt>SELECT * FROM bar WHERE x = "\";"</tt></li>
    */
-
   public static class StatementParser {
     private final Reader in;
-    private StringBuilder buf;
 
     public StatementParser(Reader in) {
       this.in = in;
@@ -315,8 +325,8 @@ public class ClientFixture implements AutoCloseable {
 
     public String parseNext() throws IOException {
       boolean eof = false;
-      buf = new StringBuilder();
-      for (;;) {
+      StringBuilder buf = new StringBuilder();
+      while (true) {
         int c = in.read();
         if (c == -1) {
           eof = true;
@@ -329,7 +339,7 @@ public class ClientFixture implements AutoCloseable {
         if (c == '"' || c == '\'' || c == '`') {
           int quote = c;
           boolean escape = false;
-          for (;;) {
+          while (true) {
             c = in.read();
             if (c == -1) {
               throw new IllegalArgumentException("Mismatched quote: " + (char) c);
@@ -353,7 +363,7 @@ public class ClientFixture implements AutoCloseable {
   public int exec(Reader in) throws IOException {
     StatementParser parser = new StatementParser(in);
     int count = 0;
-    for (;;) {
+    while (true) {
       String stmt = parser.parseNext();
       if (stmt == null) {
         logger.debug("----");
@@ -372,11 +382,12 @@ public class ClientFixture implements AutoCloseable {
 
   /**
    * Execute a set of statements from a file.
+   *
    * @param source the set of statements, separated by semicolons
    * @return the number of statements executed
+   * @throws IOException if anable to execute statements from file
    */
-
-  public int exec(File source) throws FileNotFoundException, IOException {
+  public int exec(File source) throws IOException {
     try (Reader in = new BufferedReader(new FileReader(source))) {
       return exec(in);
     }
@@ -384,10 +395,10 @@ public class ClientFixture implements AutoCloseable {
 
   /**
    * Execute a set of statements from a string.
+   *
    * @param stmts the set of statements, separated by semicolons
    * @return the number of statements executed
    */
-
   public int exec(String stmts) {
     try (Reader in = new StringReader(stmts)) {
       return exec(in);

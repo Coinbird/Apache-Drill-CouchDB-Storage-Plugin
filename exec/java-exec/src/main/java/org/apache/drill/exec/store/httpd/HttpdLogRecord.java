@@ -20,31 +20,44 @@ package org.apache.drill.exec.store.httpd;
 import org.apache.drill.shaded.guava.com.google.common.base.Charsets;
 import org.apache.drill.shaded.guava.com.google.common.collect.Maps;
 import io.netty.buffer.DrillBuf;
+
 import java.util.EnumSet;
+import java.util.HashMap;
 import java.util.Map;
+
 import nl.basjes.parse.core.Casts;
 import nl.basjes.parse.core.Parser;
 import org.apache.drill.exec.vector.complex.writer.BaseWriter.MapWriter;
 import org.apache.drill.exec.vector.complex.writer.BigIntWriter;
 import org.apache.drill.exec.vector.complex.writer.Float8Writer;
 import org.apache.drill.exec.vector.complex.writer.VarCharWriter;
+import org.apache.drill.exec.vector.complex.writer.TimeStampWriter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.text.SimpleDateFormat;
+import java.util.Date;
+
 public class HttpdLogRecord {
 
-  private static final Logger LOG = LoggerFactory.getLogger(HttpdLogRecord.class);
+  private static final Logger logger = LoggerFactory.getLogger(HttpdLogRecord.class);
+
   private final Map<String, VarCharWriter> strings = Maps.newHashMap();
   private final Map<String, BigIntWriter> longs = Maps.newHashMap();
   private final Map<String, Float8Writer> doubles = Maps.newHashMap();
+  private final Map<String, TimeStampWriter> times = new HashMap<>();
   private final Map<String, MapWriter> wildcards = Maps.newHashMap();
   private final Map<String, String> cleanExtensions = Maps.newHashMap();
   private final Map<String, MapWriter> startedWildcards = Maps.newHashMap();
   private final Map<String, MapWriter> wildcardWriters = Maps.newHashMap();
+  private final SimpleDateFormat dateFormatter;
   private DrillBuf managedBuffer;
+  private String timeFormat;
 
-  public HttpdLogRecord(final DrillBuf managedBuffer) {
+  public HttpdLogRecord(final DrillBuf managedBuffer, final String timeFormat) {
     this.managedBuffer = managedBuffer;
+    this.timeFormat = timeFormat;
+    this.dateFormatter = new SimpleDateFormat(this.timeFormat);
   }
 
   /**
@@ -66,7 +79,7 @@ public class HttpdLogRecord {
     return managedBuffer;
   }
 
-  private void writeString(final VarCharWriter writer, final String value) {
+  private void writeString(VarCharWriter writer, String value) {
     final byte[] stringBytes = value.getBytes(Charsets.UTF_8);
     final DrillBuf stringBuffer = buf(stringBytes.length);
     stringBuffer.clear();
@@ -82,15 +95,14 @@ public class HttpdLogRecord {
    * @param value value of field
    */
   @SuppressWarnings("unused")
-  public void set(final String field, final String value) {
+  public void set(String field, String value) {
     if (value != null) {
       final VarCharWriter w = strings.get(field);
       if (w != null) {
-        LOG.trace("Parsed field: {}, as string: {}", field, value);
+        logger.trace("Parsed field: {}, as string: {}", field, value);
         writeString(w, value);
-      }
-      else {
-        LOG.warn("No 'string' writer found for field: {}", field);
+      } else {
+        logger.warn("No 'string' writer found for field: {}", field);
       }
     }
   }
@@ -103,15 +115,43 @@ public class HttpdLogRecord {
    * @param value value of field
    */
   @SuppressWarnings("unused")
-  public void set(final String field, final Long value) {
+  public void set(String field, Long value) {
     if (value != null) {
       final BigIntWriter w = longs.get(field);
       if (w != null) {
-        LOG.trace("Parsed field: {}, as long: {}", field, value);
+        logger.trace("Parsed field: {}, as long: {}", field, value);
         w.writeBigInt(value);
+      } else {
+        logger.warn("No 'long' writer found for field: {}", field);
       }
-      else {
-        LOG.warn("No 'long' writer found for field: {}", field);
+    }
+  }
+
+  /**
+   * This method is referenced and called via reflection. This is added as a parsing target for the parser. It will get
+   * called when the value of a log field is a timesstamp data type.
+   *
+   * @param field name of field
+   * @param value value of field
+   */
+  @SuppressWarnings("unused")
+  public void setTimestamp(String field, String value) {
+    if (value != null) {
+      //Convert the date string into a long
+      long ts = 0;
+      try {
+        Date d = this.dateFormatter.parse(value);
+        ts = d.getTime();
+      } catch (Exception e) {
+        //If the date formatter does not successfully create a date, the timestamp will fall back to zero
+        //Do not throw exception
+      }
+      final TimeStampWriter tw = times.get(field);
+      if (tw != null) {
+        logger.trace("Parsed field: {}, as time: {}", field, value);
+        tw.writeTimeStamp(ts);
+      } else {
+        logger.warn("No 'timestamp' writer found for field: {}", field);
       }
     }
   }
@@ -124,15 +164,14 @@ public class HttpdLogRecord {
    * @param value value of field
    */
   @SuppressWarnings("unused")
-  public void set(final String field, final Double value) {
+  public void set(String field, Double value) {
     if (value != null) {
       final Float8Writer w = doubles.get(field);
       if (w != null) {
-        LOG.trace("Parsed field: {}, as double: {}", field, value);
+        logger.trace("Parsed field: {}, as double: {}", field, value);
         w.writeFloat8(value);
-      }
-      else {
-        LOG.warn("No 'double' writer found for field: {}", field);
+      } else {
+        logger.warn("No 'double' writer found for field: {}", field);
       }
     }
   }
@@ -146,10 +185,10 @@ public class HttpdLogRecord {
    * @param value value of field
    */
   @SuppressWarnings("unused")
-  public void setWildcard(final String field, final String value) {
+  public void setWildcard(String field, String value) {
     if (value != null) {
       final MapWriter mapWriter = getWildcardWriter(field);
-      LOG.trace("Parsed wildcard field: {}, as string: {}", field, value);
+      logger.trace("Parsed wildcard field: {}, as string: {}", field, value);
       final VarCharWriter w = mapWriter.varChar(cleanExtensions.get(field));
       writeString(w, value);
     }
@@ -164,10 +203,10 @@ public class HttpdLogRecord {
    * @param value value of field
    */
   @SuppressWarnings("unused")
-  public void setWildcard(final String field, final Long value) {
+  public void setWildcard(String field, Long value) {
     if (value != null) {
       final MapWriter mapWriter = getWildcardWriter(field);
-      LOG.trace("Parsed wildcard field: {}, as long: {}", field, value);
+      logger.trace("Parsed wildcard field: {}, as long: {}", field, value);
       final BigIntWriter w = mapWriter.bigInt(cleanExtensions.get(field));
       w.writeBigInt(value);
     }
@@ -182,10 +221,10 @@ public class HttpdLogRecord {
    * @param value value of field
    */
   @SuppressWarnings("unused")
-  public void setWildcard(final String field, final Double value) {
+  public void setWildcard(String field, Double value) {
     if (value != null) {
       final MapWriter mapWriter = getWildcardWriter(field);
-      LOG.trace("Parsed wildcard field: {}, as double: {}", field, value);
+      logger.trace("Parsed wildcard field: {}, as double: {}", field, value);
       final Float8Writer w = mapWriter.float8(cleanExtensions.get(field));
       w.writeFloat8(value);
     }
@@ -199,7 +238,7 @@ public class HttpdLogRecord {
    * @param field like HTTP.URI:request.firstline.uri.query.old where 'old' is one of many different parameter names.
    * @return the writer to be used for this field.
    */
-  private MapWriter getWildcardWriter(final String field) {
+  private MapWriter getWildcardWriter(String field) {
     MapWriter writer = startedWildcards.get(field);
     if (writer == null) {
       for (Map.Entry<String, MapWriter> entry : wildcards.entrySet()) {
@@ -212,10 +251,10 @@ public class HttpdLogRecord {
            * unsafe characters in it.
            */
           if (!cleanExtensions.containsKey(field)) {
-            final String extension = field.substring(root.length() + 1, field.length());
+            final String extension = field.substring(root.length() + 1);
             final String cleanExtension = HttpdParser.drillFormattedFieldName(extension);
             cleanExtensions.put(field, cleanExtension);
-            LOG.debug("Added extension: field='{}' with cleanExtension='{}'", field, cleanExtension);
+            logger.debug("Added extension: field='{}' with cleanExtension='{}'", field, cleanExtension);
           }
 
           /**
@@ -226,7 +265,7 @@ public class HttpdLogRecord {
             /**
              * Start and store this root map writer for later retrieval.
              */
-            LOG.debug("Starting new wildcard field writer: {}", field);
+            logger.debug("Starting new wildcard field writer: {}", field);
             writer.start();
             startedWildcards.put(field, writer);
             wildcardWriters.put(root, writer);
@@ -255,6 +294,10 @@ public class HttpdLogRecord {
     return doubles;
   }
 
+  public Map<String, TimeStampWriter> getTimes() {
+    return times;
+  }
+
   /**
    * This record will be used with a single parser. For each field that is to be parsed a setter will be called. It
    * registers a setter method for each field being parsed. It also builds the data writers to hold the data beings
@@ -276,26 +319,28 @@ public class HttpdLogRecord {
      */
     if (hasWildcard) {
       final String cleanName = parserFieldName.substring(0, parserFieldName.length() - HttpdParser.PARSER_WILDCARD.length());
-      LOG.debug("Adding WILDCARD parse target: {} as {}, with field name: {}", parserFieldName, cleanName, drillFieldName);
+      logger.debug("Adding WILDCARD parse target: {} as {}, with field name: {}", parserFieldName, cleanName, drillFieldName);
       parser.addParseTarget(this.getClass().getMethod("setWildcard", String.class, String.class), parserFieldName);
       parser.addParseTarget(this.getClass().getMethod("setWildcard", String.class, Double.class), parserFieldName);
       parser.addParseTarget(this.getClass().getMethod("setWildcard", String.class, Long.class), parserFieldName);
       wildcards.put(cleanName, mapWriter.map(drillFieldName));
-    }
-    else if (type.contains(Casts.DOUBLE)) {
-      LOG.debug("Adding DOUBLE parse target: {}, with field name: {}", parserFieldName, drillFieldName);
+    } else if (type.contains(Casts.DOUBLE)) {
+      logger.debug("Adding DOUBLE parse target: {}, with field name: {}", parserFieldName, drillFieldName);
       parser.addParseTarget(this.getClass().getMethod("set", String.class, Double.class), parserFieldName);
       doubles.put(parserFieldName, mapWriter.float8(drillFieldName));
-    }
-    else if (type.contains(Casts.LONG)) {
-      LOG.debug("Adding LONG parse target: {}, with field name: {}", parserFieldName, drillFieldName);
+    } else if (type.contains(Casts.LONG)) {
+      logger.debug("Adding LONG parse target: {}, with field name: {}", parserFieldName, drillFieldName);
       parser.addParseTarget(this.getClass().getMethod("set", String.class, Long.class), parserFieldName);
       longs.put(parserFieldName, mapWriter.bigInt(drillFieldName));
-    }
-    else {
-      LOG.debug("Adding STRING parse target: {}, with field name: {}", parserFieldName, drillFieldName);
-      parser.addParseTarget(this.getClass().getMethod("set", String.class, String.class), parserFieldName);
-      strings.put(parserFieldName, mapWriter.varChar(drillFieldName));
+    } else {
+      logger.debug("Adding STRING parse target: {}, with field name: {}", parserFieldName, drillFieldName);
+      if (parserFieldName.startsWith("TIME.STAMP:")) {
+        parser.addParseTarget(this.getClass().getMethod("setTimestamp", String.class, String.class), parserFieldName);
+        times.put(parserFieldName, mapWriter.timeStamp(drillFieldName));
+      } else {
+        parser.addParseTarget(this.getClass().getMethod("set", String.class, String.class), parserFieldName);
+        strings.put(parserFieldName, mapWriter.varChar(drillFieldName));
+      }
     }
   }
 }

@@ -17,19 +17,21 @@
  */
 package org.apache.drill.exec.store.ischema;
 
-import static org.apache.drill.exec.expr.fn.impl.RegexpUtil.sqlToRegexLike;
+import com.fasterxml.jackson.annotation.JsonCreator;
+import com.fasterxml.jackson.annotation.JsonIgnore;
+import com.fasterxml.jackson.annotation.JsonProperty;
+import com.fasterxml.jackson.annotation.JsonTypeInfo;
+import com.fasterxml.jackson.annotation.JsonTypeName;
+
+import org.apache.drill.common.FunctionNames;
+import org.apache.drill.exec.store.ischema.InfoSchemaFilter.ExprNode.Type;
+import org.apache.drill.shaded.guava.com.google.common.base.Joiner;
 
 import java.util.List;
 import java.util.Map;
 import java.util.regex.Pattern;
 
-import org.apache.drill.exec.store.ischema.InfoSchemaFilter.ExprNode.Type;
-
-import com.fasterxml.jackson.annotation.JsonCreator;
-import com.fasterxml.jackson.annotation.JsonIgnore;
-import com.fasterxml.jackson.annotation.JsonProperty;
-import com.fasterxml.jackson.annotation.JsonTypeName;
-import org.apache.drill.shaded.guava.com.google.common.base.Joiner;
+import static org.apache.drill.exec.expr.fn.impl.RegexpUtil.sqlToRegexLike;
 
 @JsonTypeName("info-schema-filter")
 public class InfoSchemaFilter {
@@ -46,6 +48,8 @@ public class InfoSchemaFilter {
     return exprRoot;
   }
 
+  // include type-info to be able to deserialize subclasses correctly
+  @JsonTypeInfo(use = JsonTypeInfo.Id.CLASS, property = "@class")
   public static class ExprNode {
     @JsonProperty
     public Type type;
@@ -69,7 +73,8 @@ public class InfoSchemaFilter {
     public List<ExprNode> args;
 
     @JsonCreator
-    public FunctionExprNode(String function, List<ExprNode> args) {
+    public FunctionExprNode(@JsonProperty("function") String function,
+        @JsonProperty("args") List<ExprNode> args) {
       super(Type.FUNCTION);
       this.function = function;
       this.args = args;
@@ -91,7 +96,7 @@ public class InfoSchemaFilter {
     public String field;
 
     @JsonCreator
-    public FieldExprNode(String field) {
+    public FieldExprNode(@JsonProperty("field") String field) {
       super(Type.FIELD);
       this.field = field;
     }
@@ -107,7 +112,7 @@ public class InfoSchemaFilter {
     public String value;
 
     @JsonCreator
-    public ConstantExprNode(String value) {
+    public ConstantExprNode(@JsonProperty("value") String value) {
       super(Type.CONSTANT);
       this.value = value;
     }
@@ -121,13 +126,14 @@ public class InfoSchemaFilter {
   public enum Result {
     TRUE,
     FALSE,
-    INCONCLUSIVE;
+    INCONCLUSIVE
   }
 
   /**
    * Evaluate the filter for given <COLUMN NAME, VALUE> pairs.
-   * @param recordValues
-   * @return
+   *
+   * @param recordValues map of field names and their values
+   * @return evaluation result
    */
   @JsonIgnore
   public Result evaluate(Map<String, String> recordValues) {
@@ -144,12 +150,12 @@ public class InfoSchemaFilter {
   }
 
   private Result evaluateHelperFunction(Map<String, String> recordValues, FunctionExprNode exprNode) {
-    switch(exprNode.function) {
-      case "like": {
+    switch (exprNode.function) {
+      case FunctionNames.LIKE: {
         FieldExprNode col = (FieldExprNode) exprNode.args.get(0);
         ConstantExprNode pattern = (ConstantExprNode) exprNode.args.get(1);
         ConstantExprNode escape = exprNode.args.size() > 2 ? (ConstantExprNode) exprNode.args.get(2) : null;
-        final String fieldValue = recordValues.get(col.field.toString());
+        final String fieldValue = recordValues.get(col.field);
         if (fieldValue != null) {
           if (escape == null) {
             return Pattern.matches(sqlToRegexLike(pattern.value).getJavaPatternString(), fieldValue) ?
@@ -162,16 +168,16 @@ public class InfoSchemaFilter {
 
         return Result.INCONCLUSIVE;
       }
-      case "equal":
-      case "not equal":
-      case "notequal":
-      case "not_equal": {
+      case FunctionNames.EQ:
+      case "not equal": // TODO: Is this name correct?
+      case "notequal":  // TODO: Is this name correct?
+      case FunctionNames.NE: {
         FieldExprNode arg0 = (FieldExprNode) exprNode.args.get(0);
         ConstantExprNode arg1 = (ConstantExprNode) exprNode.args.get(1);
 
-        final String value = recordValues.get(arg0.field.toString());
+        final String value = recordValues.get(arg0.field);
         if (value != null) {
-          if (exprNode.function.equals("equal")) {
+          if (exprNode.function.equals(FunctionNames.EQ)) {
             return arg1.value.equals(value) ? Result.TRUE : Result.FALSE;
           } else {
             return arg1.value.equals(value) ? Result.FALSE : Result.TRUE;
@@ -181,7 +187,8 @@ public class InfoSchemaFilter {
         return Result.INCONCLUSIVE;
       }
 
-      case "booleanor": {
+      case FunctionNames.OR:
+      case "booleanor": { // TODO: Is this name correct?
         // If at least one arg returns TRUE, then the OR function value is TRUE
         // If all args return FALSE, then OR function value is FALSE
         // For all other cases, return INCONCLUSIVE
@@ -198,7 +205,8 @@ public class InfoSchemaFilter {
         return result;
       }
 
-      case "booleanand": {
+      case FunctionNames.AND:
+      case "booleanand": { // TODO: Is this name correct?
         // If at least one arg returns FALSE, then the AND function value is FALSE
         // If at least one arg returns INCONCLUSIVE, then the AND function value is INCONCLUSIVE
         // If all args return TRUE, then the AND function value is TRUE
@@ -220,7 +228,7 @@ public class InfoSchemaFilter {
       case "in": {
         FieldExprNode col = (FieldExprNode) exprNode.args.get(0);
         List<ExprNode> args = exprNode.args.subList(1, exprNode.args.size());
-        final String fieldValue = recordValues.get(col.field.toString());
+        final String fieldValue = recordValues.get(col.field);
         if (fieldValue != null) {
           for(ExprNode arg: args) {
             if (fieldValue.equals(((ConstantExprNode) arg).value)) {

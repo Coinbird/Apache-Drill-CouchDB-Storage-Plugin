@@ -31,7 +31,6 @@ import org.apache.drill.exec.vector.accessor.ObjectType;
 import org.apache.drill.exec.vector.accessor.ScalarReader;
 import org.apache.drill.exec.vector.accessor.TupleReader;
 import org.apache.drill.exec.vector.accessor.VariantReader;
-
 import org.apache.drill.shaded.guava.com.google.common.base.Preconditions;
 
 /**
@@ -49,7 +48,7 @@ public class ArrayReaderImpl implements ArrayReader, ReaderEvents {
 
   public static class ArrayObjectReader extends AbstractObjectReader {
 
-    private ArrayReaderImpl arrayReader;
+    private final ArrayReaderImpl arrayReader;
 
     public ArrayObjectReader(ArrayReaderImpl arrayReader) {
        this.arrayReader = arrayReader;
@@ -131,7 +130,6 @@ public class ArrayReaderImpl implements ArrayReader, ReaderEvents {
      * Given a 0-based index relative to the current array, return an absolute offset
      * vector location for the array value.
      *
-     * @param index 0-based index into the current array
      * @return absolute offset vector location for the array value
      */
 
@@ -150,6 +148,11 @@ public class ArrayReaderImpl implements ArrayReader, ReaderEvents {
       return false;
     }
 
+    @Override
+    public boolean hasNext() {
+      return position + 1 < length;
+    }
+
     /**
      * Set the current iterator location to the given index offset.
      *
@@ -165,12 +168,12 @@ public class ArrayReaderImpl implements ArrayReader, ReaderEvents {
     public int logicalIndex() { return position; }
   }
 
+  protected final AbstractObjectReader elementReader;
+  protected ElementReaderIndex elementIndex;
+  protected NullStateReader nullStateReader;
   private final ColumnMetadata schema;
   private final VectorAccessor arrayAccessor;
   private final OffsetVectorReader offsetReader;
-  private final AbstractObjectReader elementReader;
-  protected ElementReaderIndex elementIndex;
-  protected NullStateReader nullStateReader;
 
   public ArrayReaderImpl(ColumnMetadata schema, VectorAccessor va,
       AbstractObjectReader elementReader) {
@@ -365,6 +368,11 @@ public class ArrayReaderImpl implements ArrayReader, ReaderEvents {
   @Override
   public void rewind() {
     elementIndex.rewind();
+  }
+
+  @Override
+  public void bindBuffer() {
+    elementReader.events().bindBuffer();
   }
 
   @Override

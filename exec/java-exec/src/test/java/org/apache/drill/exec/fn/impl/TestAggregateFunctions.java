@@ -17,7 +17,10 @@
  */
 package org.apache.drill.exec.fn.impl;
 
+import org.apache.drill.exec.record.metadata.SchemaBuilder;
+import org.apache.drill.exec.record.metadata.TupleMetadata;
 import org.apache.drill.shaded.guava.com.google.common.collect.ImmutableList;
+import org.apache.drill.shaded.guava.com.google.common.collect.ImmutableMap;
 import org.apache.drill.shaded.guava.com.google.common.collect.Lists;
 import org.apache.drill.shaded.guava.com.google.common.collect.Maps;
 import org.apache.commons.lang3.tuple.Pair;
@@ -28,9 +31,7 @@ import org.apache.drill.exec.planner.physical.PlannerSettings;
 import org.apache.drill.exec.record.RecordBatchLoader;
 import org.apache.drill.exec.record.VectorWrapper;
 import org.apache.drill.exec.util.Text;
-import org.apache.drill.test.BaseTestQuery;
 import org.apache.drill.categories.OperatorTest;
-import org.apache.drill.PlanTestBase;
 import org.apache.drill.categories.PlannerTest;
 import org.apache.drill.categories.SqlFunctionTest;
 import org.apache.drill.categories.UnlikelyTest;
@@ -38,6 +39,8 @@ import org.apache.drill.common.expression.SchemaPath;
 import org.apache.drill.common.types.TypeProtos;
 import org.apache.drill.exec.proto.UserBitShared;
 import org.apache.drill.exec.rpc.user.QueryDataBatch;
+import org.apache.drill.test.ClusterFixture;
+import org.apache.drill.test.ClusterTest;
 import org.junit.BeforeClass;
 import org.junit.Ignore;
 import org.junit.Rule;
@@ -51,23 +54,29 @@ import java.io.FileWriter;
 import java.math.BigDecimal;
 import java.nio.file.Paths;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
+import java.util.stream.StreamSupport;
 
+import static org.apache.drill.test.TestBuilder.listOf;
+import static org.apache.drill.test.TestBuilder.mapOf;
 import static org.hamcrest.CoreMatchers.containsString;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
 @Category({SqlFunctionTest.class, OperatorTest.class, PlannerTest.class})
-public class TestAggregateFunctions extends BaseTestQuery {
+public class TestAggregateFunctions extends ClusterTest {
 
   @Rule
   public ExpectedException thrown = ExpectedException.none();
 
   @BeforeClass
-  public static void setupFiles() {
+  public static void setUp() throws Exception {
+    startCluster(ClusterFixture.builder(dirTestWatcher));
     dirTestWatcher.copyResourceToRoot(Paths.get("agg"));
   }
 
@@ -99,7 +108,7 @@ public class TestAggregateFunctions extends BaseTestQuery {
   @Test
   public void testMaxWithZeroInput() throws Exception {
     try {
-      alterSession(PlannerSettings.ENABLE_DECIMAL_DATA_TYPE_KEY, false);
+      client.alterSession(PlannerSettings.ENABLE_DECIMAL_DATA_TYPE_KEY, false);
       testBuilder()
           .sqlQuery("select max(employee_id * 0.0) as max_val from cp.`employee.json`")
           .unOrdered()
@@ -107,7 +116,7 @@ public class TestAggregateFunctions extends BaseTestQuery {
           .baselineValues(0.0)
           .go();
     } finally {
-      resetSessionOption(PlannerSettings.ENABLE_DECIMAL_DATA_TYPE_KEY);
+      client.resetSession(PlannerSettings.ENABLE_DECIMAL_DATA_TYPE_KEY);
     }
   }
 
@@ -193,7 +202,8 @@ public class TestAggregateFunctions extends BaseTestQuery {
         "      group by l_partkey, l_suppkey) \n" +
         "   group by l_partkey )";
 
-    test("alter session set `planner.slice_target` = 1; alter session set `planner.enable_multiphase_agg` = false ;");
+    client.alterSession(ExecConstants.SLICE_TARGET, 1);
+    client.alterSession(PlannerSettings.MULTIPHASE.getOptionName(), false);
 
     testBuilder()
         .ordered()
@@ -202,7 +212,8 @@ public class TestAggregateFunctions extends BaseTestQuery {
         .baselineValues(2000L)
         .build().run();
 
-    test("alter session set `planner.slice_target` = 1; alter session set `planner.enable_multiphase_agg` = true ;");
+    client.alterSession(ExecConstants.SLICE_TARGET, 1);
+    client.alterSession(PlannerSettings.MULTIPHASE.getOptionName(), true);
 
     testBuilder()
         .ordered()
@@ -211,7 +222,7 @@ public class TestAggregateFunctions extends BaseTestQuery {
         .baselineValues(2000L)
         .build().run();
 
-    test("alter session set `planner.slice_target` = 100000");
+    client.alterSession(ExecConstants.SLICE_TARGET, 1000);
   }
 
   @Test
@@ -265,7 +276,7 @@ public class TestAggregateFunctions extends BaseTestQuery {
   @Test
   public void testVarSampDecimal() throws Exception {
     try {
-      alterSession(PlannerSettings.ENABLE_DECIMAL_DATA_TYPE_KEY, true);
+      client.alterSession(PlannerSettings.ENABLE_DECIMAL_DATA_TYPE_KEY, true);
       testBuilder()
           .sqlQuery("select var_samp(cast(employee_id as decimal(28, 20))) as dec20,\n" +
                 "var_samp(cast(employee_id as decimal(28, 0))) as dec6,\n" +
@@ -278,14 +289,14 @@ public class TestAggregateFunctions extends BaseTestQuery {
               111266.99999699896)
           .go();
     } finally {
-      resetSessionOption(PlannerSettings.ENABLE_DECIMAL_DATA_TYPE_KEY);
+      client.resetSession(PlannerSettings.ENABLE_DECIMAL_DATA_TYPE_KEY);
     }
   }
 
   @Test
   public void testVarPopDecimal() throws Exception {
     try {
-      alterSession(PlannerSettings.ENABLE_DECIMAL_DATA_TYPE_KEY, true);
+      client.alterSession(PlannerSettings.ENABLE_DECIMAL_DATA_TYPE_KEY, true);
       testBuilder()
           .sqlQuery("select var_pop(cast(employee_id as decimal(28, 20))) as dec20,\n" +
               "var_pop(cast(employee_id as decimal(28, 0))) as dec6,\n" +
@@ -298,14 +309,14 @@ public class TestAggregateFunctions extends BaseTestQuery {
               111170.66493206649)
           .go();
     } finally {
-      resetSessionOption(PlannerSettings.ENABLE_DECIMAL_DATA_TYPE_KEY);
+      client.resetSession(PlannerSettings.ENABLE_DECIMAL_DATA_TYPE_KEY);
     }
   }
 
   @Test
   public void testStddevSampDecimal() throws Exception {
     try {
-      alterSession(PlannerSettings.ENABLE_DECIMAL_DATA_TYPE_KEY, true);
+      client.alterSession(PlannerSettings.ENABLE_DECIMAL_DATA_TYPE_KEY, true);
       testBuilder()
           .sqlQuery("select stddev_samp(cast(employee_id as decimal(28, 20))) as dec20,\n" +
               "stddev_samp(cast(employee_id as decimal(28, 0))) as dec6,\n" +
@@ -319,14 +330,14 @@ public class TestAggregateFunctions extends BaseTestQuery {
           // Was taken sqrt of 111266.99999699895713760531784795216338 and decimal result is correct
           .go();
     } finally {
-      resetSessionOption(PlannerSettings.ENABLE_DECIMAL_DATA_TYPE_KEY);
+      client.resetSession(PlannerSettings.ENABLE_DECIMAL_DATA_TYPE_KEY);
     }
   }
 
   @Test
   public void testStddevPopDecimal() throws Exception {
     try {
-      alterSession(PlannerSettings.ENABLE_DECIMAL_DATA_TYPE_KEY, true);
+      client.alterSession(PlannerSettings.ENABLE_DECIMAL_DATA_TYPE_KEY, true);
       testBuilder()
           .sqlQuery("select stddev_pop(cast(employee_id as decimal(28, 20))) as dec20,\n" +
               "stddev_pop(cast(employee_id as decimal(28, 0))) as dec6,\n" +
@@ -339,14 +350,14 @@ public class TestAggregateFunctions extends BaseTestQuery {
               333.4226520980038)
           .go();
     } finally {
-      resetSessionOption(PlannerSettings.ENABLE_DECIMAL_DATA_TYPE_KEY);
+      client.resetSession(PlannerSettings.ENABLE_DECIMAL_DATA_TYPE_KEY);
     }
   }
 
   @Test
   public void testSumDecimal() throws Exception {
     try {
-      alterSession(PlannerSettings.ENABLE_DECIMAL_DATA_TYPE_KEY, true);
+      client.alterSession(PlannerSettings.ENABLE_DECIMAL_DATA_TYPE_KEY, true);
       testBuilder()
           .sqlQuery("select sum(cast(employee_id as decimal(9, 0))) as colDecS0,\n" +
               "sum(cast(employee_id as decimal(12, 3))) as colDecS3,\n" +
@@ -357,14 +368,14 @@ public class TestAggregateFunctions extends BaseTestQuery {
           .baselineValues(BigDecimal.valueOf(668743), new BigDecimal("668743.000"), 668743L)
           .go();
     } finally {
-      resetSessionOption(PlannerSettings.ENABLE_DECIMAL_DATA_TYPE_KEY);
+      client.resetSession(PlannerSettings.ENABLE_DECIMAL_DATA_TYPE_KEY);
     }
   }
 
   @Test
   public void testAvgDecimal() throws Exception {
     try {
-      alterSession(PlannerSettings.ENABLE_DECIMAL_DATA_TYPE_KEY, true);
+      client.alterSession(PlannerSettings.ENABLE_DECIMAL_DATA_TYPE_KEY, true);
       testBuilder()
           .sqlQuery("select avg(cast(employee_id as decimal(28, 20))) as colDec20,\n" +
               "avg(cast(employee_id as decimal(28, 0))) as colDec6,\n" +
@@ -377,7 +388,7 @@ public class TestAggregateFunctions extends BaseTestQuery {
               578.9982683982684)
           .go();
     } finally {
-      resetSessionOption(PlannerSettings.ENABLE_DECIMAL_DATA_TYPE_KEY);
+      client.resetSession(PlannerSettings.ENABLE_DECIMAL_DATA_TYPE_KEY);
     }
   }
 
@@ -386,21 +397,21 @@ public class TestAggregateFunctions extends BaseTestQuery {
     final List<Pair<SchemaPath, TypeProtos.MajorType>> expectedSchema =
         ImmutableList.of(
             Pair.of(SchemaPath.getSimplePath("sum_col"),
-                Types.withScaleAndPrecision(TypeProtos.MinorType.VARDECIMAL, TypeProtos.DataMode.OPTIONAL, 3, 38)),
+                Types.withPrecisionAndScale(TypeProtos.MinorType.VARDECIMAL, TypeProtos.DataMode.OPTIONAL, 38, 3)),
             Pair.of(SchemaPath.getSimplePath("avg_col"),
-                Types.withScaleAndPrecision(TypeProtos.MinorType.VARDECIMAL, TypeProtos.DataMode.OPTIONAL, 6, 38)),
+                Types.withPrecisionAndScale(TypeProtos.MinorType.VARDECIMAL, TypeProtos.DataMode.OPTIONAL, 38, 6)),
             Pair.of(SchemaPath.getSimplePath("stddev_pop_col"),
-                Types.withScaleAndPrecision(TypeProtos.MinorType.VARDECIMAL, TypeProtos.DataMode.OPTIONAL, 6, 38)),
+                Types.withPrecisionAndScale(TypeProtos.MinorType.VARDECIMAL, TypeProtos.DataMode.OPTIONAL, 38, 6)),
             Pair.of(SchemaPath.getSimplePath("stddev_samp_col"),
-                Types.withScaleAndPrecision(TypeProtos.MinorType.VARDECIMAL, TypeProtos.DataMode.OPTIONAL, 6, 38)),
+                Types.withPrecisionAndScale(TypeProtos.MinorType.VARDECIMAL, TypeProtos.DataMode.OPTIONAL, 38, 6)),
             Pair.of(SchemaPath.getSimplePath("var_pop_col"),
-                Types.withScaleAndPrecision(TypeProtos.MinorType.VARDECIMAL, TypeProtos.DataMode.OPTIONAL, 6, 38)),
+                Types.withPrecisionAndScale(TypeProtos.MinorType.VARDECIMAL, TypeProtos.DataMode.OPTIONAL, 38, 6)),
             Pair.of(SchemaPath.getSimplePath("var_samp_col"),
-                Types.withScaleAndPrecision(TypeProtos.MinorType.VARDECIMAL, TypeProtos.DataMode.OPTIONAL, 6, 38)),
+                Types.withPrecisionAndScale(TypeProtos.MinorType.VARDECIMAL, TypeProtos.DataMode.OPTIONAL, 38, 6)),
             Pair.of(SchemaPath.getSimplePath("max_col"),
-                Types.withScaleAndPrecision(TypeProtos.MinorType.VARDECIMAL, TypeProtos.DataMode.OPTIONAL, 3, 9)),
+                Types.withPrecisionAndScale(TypeProtos.MinorType.VARDECIMAL, TypeProtos.DataMode.OPTIONAL, 9, 3)),
             Pair.of(SchemaPath.getSimplePath("min_col"),
-                Types.withScaleAndPrecision(TypeProtos.MinorType.VARDECIMAL, TypeProtos.DataMode.OPTIONAL, 3, 9)));
+                Types.withPrecisionAndScale(TypeProtos.MinorType.VARDECIMAL, TypeProtos.DataMode.OPTIONAL, 9, 3)));
 
     String query =
         "select\n" +
@@ -414,15 +425,15 @@ public class TestAggregateFunctions extends BaseTestQuery {
             "min(cast(employee_id as decimal(9, 3))) min_col\n" +
             "from cp.`employee.json` limit 0";
     try {
-      alterSession(PlannerSettings.ENABLE_DECIMAL_DATA_TYPE_KEY, true);
-      alterSession(ExecConstants.EARLY_LIMIT0_OPT_KEY, true);
+      client.alterSession(PlannerSettings.ENABLE_DECIMAL_DATA_TYPE_KEY, true);
+      client.alterSession(ExecConstants.EARLY_LIMIT0_OPT_KEY, true);
 
       testBuilder()
           .sqlQuery(query)
           .schemaBaseLine(expectedSchema)
           .go();
 
-      alterSession(ExecConstants.EARLY_LIMIT0_OPT_KEY, false);
+      client.alterSession(ExecConstants.EARLY_LIMIT0_OPT_KEY, false);
 
       testBuilder()
         .sqlQuery(query)
@@ -430,8 +441,8 @@ public class TestAggregateFunctions extends BaseTestQuery {
         .go();
 
     } finally {
-      resetSessionOption(PlannerSettings.ENABLE_DECIMAL_DATA_TYPE_KEY);
-      resetSessionOption(ExecConstants.EARLY_LIMIT0_OPT_KEY);
+      client.resetSession(PlannerSettings.ENABLE_DECIMAL_DATA_TYPE_KEY);
+      client.resetSession(ExecConstants.EARLY_LIMIT0_OPT_KEY);
     }
   }
 
@@ -444,7 +455,7 @@ public class TestAggregateFunctions extends BaseTestQuery {
     }
 
     try {
-      alterSession(PlannerSettings.ENABLE_DECIMAL_DATA_TYPE_KEY, true);
+      client.alterSession(PlannerSettings.ENABLE_DECIMAL_DATA_TYPE_KEY, true);
       testBuilder()
           .sqlQuery("select sum(cast(a as decimal(9,0))) as s,\n" +
               "avg(cast(a as decimal(9,0))) as av,\n" +
@@ -463,7 +474,7 @@ public class TestAggregateFunctions extends BaseTestQuery {
           .go();
 
     } finally {
-      resetSessionOption(PlannerSettings.ENABLE_DECIMAL_DATA_TYPE_KEY);
+      client.resetSession(PlannerSettings.ENABLE_DECIMAL_DATA_TYPE_KEY);
     }
   }
 
@@ -538,7 +549,7 @@ public class TestAggregateFunctions extends BaseTestQuery {
   public void minMaxEmptyNonNullableInput() throws Exception {
     // test min and max functions on required type
 
-    final QueryDataBatch result = testSqlWithResults("select * from cp.`parquet/alltypes_required.parquet` limit 0")
+    final QueryDataBatch result = queryBuilder().sql("select * from cp.`parquet/alltypes_required.parquet` limit 0").results()
         .get(0);
 
     final Map<String, StringBuilder> functions = Maps.newHashMap();
@@ -582,12 +593,12 @@ public class TestAggregateFunctions extends BaseTestQuery {
 
   @Test
   public void testSingleValueFunction() throws Exception {
-    List<String> tableNames = ImmutableList.of(
+    List<String> tableNames = Arrays.asList(
         "cp.`parquet/alltypes_required.parquet`",
         "cp.`parquet/alltypes_optional.parquet`");
     for (String tableName : tableNames) {
       final QueryDataBatch result =
-          testSqlWithResults(String.format("select * from %s limit 1", tableName)).get(0);
+          queryBuilder().sql("select * from %s limit 1", tableName).results().get(0);
 
       final Map<String, StringBuilder> functions = new HashMap<>();
       functions.put("single_value", new StringBuilder());
@@ -595,7 +606,7 @@ public class TestAggregateFunctions extends BaseTestQuery {
       final Map<String, Object> resultingValues = new HashMap<>();
       final List<String> columns = new ArrayList<>();
 
-      final RecordBatchLoader loader = new RecordBatchLoader(getAllocator());
+      final RecordBatchLoader loader = new RecordBatchLoader(cluster.allocator());
       loader.load(result.getHeader().getDef(), result.getData());
 
       for (VectorWrapper<?> vectorWrapper : loader.getContainer()) {
@@ -620,8 +631,7 @@ public class TestAggregateFunctions extends BaseTestQuery {
       loader.clear();
       result.release();
 
-      String columnsList = columns.stream()
-          .collect(Collectors.joining(", "));
+      String columnsList = String.join(", ", columns);
 
       final List<Map<String, Object>> baselineRecords = new ArrayList<>();
       baselineRecords.add(resultingValues);
@@ -640,11 +650,112 @@ public class TestAggregateFunctions extends BaseTestQuery {
   }
 
   @Test
-  public void testSingleValueWithMultipleValuesInput() throws Exception {
+  public void testHashAggSingleValueFunction() throws Exception {
+    List<String> tableNames = Arrays.asList(
+        "cp.`parquet/alltypes_required.parquet`",
+        "cp.`parquet/alltypes_optional.parquet`");
+    for (String tableName : tableNames) {
+      Map<String, Object> resultingValues = getBaselineRecords(tableName);
+
+      List<Boolean> optionValues = Arrays.asList(true, false);
+
+      try {
+        for (Boolean optionValue : optionValues) {
+          for (Map.Entry<String, Object> entry : resultingValues.entrySet()) {
+            String columnName = String.format("`%s`", entry.getKey());
+
+            // disable interval types when stream agg is disabled due to DRILL-7241
+            if (optionValue || !columnName.startsWith("`col_intrvl")) {
+              client.alterSession(PlannerSettings.STREAMAGG.getOptionName(), optionValue);
+              testBuilder()
+                  .sqlQuery("select single_value(t.%1$s) as %1$s\n" +
+                      "from (select %1$s from %2$s limit 1) t group by t.%1$s", columnName, tableName)
+                  .ordered()
+                  .baselineRecords(Collections.singletonList(ImmutableMap.of(columnName, entry.getValue())))
+                  .go();
+            }
+          }
+        }
+      } finally {
+        client.resetSession(PlannerSettings.STREAMAGG.getOptionName());
+      }
+    }
+  }
+
+  private Map<String, Object> getBaselineRecords(String tableName) throws Exception {
+    QueryDataBatch result =
+        queryBuilder().sql("select * from %s limit 1", tableName).results().get(0);
+
+    Map<String, Object> resultingValues = new HashMap<>();
+
+    RecordBatchLoader loader = new RecordBatchLoader(cluster.allocator());
+    loader.load(result.getHeader().getDef(), result.getData());
+
+    for (VectorWrapper<?> vectorWrapper : loader.getContainer()) {
+      String fieldName = vectorWrapper.getField().getName();
+      Object object = vectorWrapper.getValueVector().getAccessor().getObject(0);
+      // VarCharVector returns Text instance, but baseline values should contain String value
+      if (object instanceof Text) {
+        object = object.toString();
+      }
+      resultingValues.put(fieldName, object);
+    }
+    loader.clear();
+    result.release();
+    return resultingValues;
+  }
+
+  @Test
+  public void testSingleValueWithComplexInput() throws Exception {
+    String query = "select single_value(a) as any_a, single_value(f) as any_f, single_value(m) as any_m," +
+        "single_value(p) as any_p from (select * from cp.`store/json/test_anyvalue.json` limit 1)";
+    testBuilder()
+        .sqlQuery(query)
+        .unOrdered()
+        .baselineColumns("any_a", "any_f", "any_m", "any_p")
+        .baselineValues(listOf(mapOf("b", 10L, "c", 15L),
+            mapOf("b", 20L, "c", 45L)),
+            listOf(mapOf("g", mapOf("h",
+                listOf(mapOf("k", 10L), mapOf("k", 20L))))),
+            listOf(mapOf("n", listOf(1L, 2L, 3L))),
+            mapOf("q", listOf(27L, 28L, 29L)))
+        .go();
+  }
+
+  @Test
+  public void testSingleValueWithMultipleValuesInputsAllTypes() throws Exception {
+    List<String> tableNames = Arrays.asList(
+        "cp.`parquet/alltypes_required.parquet`",
+        "cp.`parquet/alltypes_optional.parquet`");
+    for (String tableName : tableNames) {
+      QueryDataBatch result =
+          queryBuilder().sql("select * from %s limit 1", tableName).results().get(0);
+
+      RecordBatchLoader loader = new RecordBatchLoader(cluster.allocator());
+      loader.load(result.getHeader().getDef(), result.getData());
+
+      List<String> columns = StreamSupport.stream(loader.getContainer().spliterator(), false)
+          .map(vectorWrapper -> vectorWrapper.getField().getName())
+          .collect(Collectors.toList());
+      loader.clear();
+      result.release();
+      for (String columnName : columns) {
+        try {
+          run("select single_value(t.%1$s) as %1$s from %2$s t", columnName, tableName);
+        } catch (UserRemoteException e) {
+          assertTrue("No expected current \"FUNCTION ERROR\" and/or \"Input for single_value function has more than one row\"",
+              e.getMessage().matches("^FUNCTION ERROR(.|\\n)*Input for single_value function has more than one row(.|\\n)*"));
+        }
+      }
+    }
+  }
+
+  @Test
+  public void testSingleValueWithMultipleComplexInputs() throws Exception {
     thrown.expect(UserRemoteException.class);
     thrown.expectMessage(containsString("FUNCTION ERROR"));
     thrown.expectMessage(containsString("Input for single_value function has more than one row"));
-    test("select single_value(n_name) from cp.`tpch/nation.parquet`");
+    run("select single_value(t1.a) from cp.`store/json/test_anyvalue.json` t1");
   }
 
   /*
@@ -660,21 +771,21 @@ public class TestAggregateFunctions extends BaseTestQuery {
         .sqlQuery(query, 2)
         .unOrdered()
         .baselineColumns("col1")
-        .baselineValues(2l)
+        .baselineValues(2L)
         .go();
 
     testBuilder()
         .sqlQuery(query, 4)
         .unOrdered()
         .baselineColumns("col1")
-        .baselineValues(4l)
+        .baselineValues(4L)
         .go();
 
     testBuilder()
         .sqlQuery(query, 6)
         .unOrdered()
         .baselineColumns("col1")
-        .baselineValues(6l)
+        .baselineValues(6L)
         .go();
   }
 
@@ -687,28 +798,36 @@ public class TestAggregateFunctions extends BaseTestQuery {
         " where n_regionkey = 2 ";
 
     // Validate the plan
-    final String[] expectedPlan = {"(?s)(StreamAgg|HashAgg).*Filter"};
-    final String[] excludedPatterns = {"(?s)Filter.*(StreamAgg|HashAgg)"};
-    PlanTestBase.testPlanMatchingPatterns(query, expectedPlan, excludedPatterns);
+    String expectedPlan = "(?s)(StreamAgg|HashAgg).*Filter";
+    String excludedPatterns = "(?s)Filter.*(StreamAgg|HashAgg)";
+    queryBuilder().sql(query)
+        .planMatcher()
+        .include(expectedPlan)
+        .exclude(excludedPatterns)
+        .match();
 
     testBuilder()
         .sqlQuery(query)
         .unOrdered()
         .baselineColumns("cnt")
-        .baselineValues(5l)
+        .baselineValues(5L)
         .build().run();
 
     // having clause
-    final String query2 =
+    String query2 =
         " select count(*) cnt from cp.`tpch/nation.parquet` group by n_regionkey " +
         " having n_regionkey = 2 ";
-    PlanTestBase.testPlanMatchingPatterns(query2, expectedPlan, excludedPatterns);
+    queryBuilder().sql(query2)
+        .planMatcher()
+        .include(expectedPlan)
+        .exclude(excludedPatterns)
+        .match();
 
     testBuilder()
         .sqlQuery(query)
         .unOrdered()
         .baselineColumns("cnt")
-        .baselineValues(5l)
+        .baselineValues(5L)
         .build().run();
   }
 
@@ -720,49 +839,62 @@ public class TestAggregateFunctions extends BaseTestQuery {
             " where n_regionkey + 100 - 100 = 2 ";
 
     // Validate the plan
-    final String[] expectedPlan = {"(?s)(StreamAgg|HashAgg).*Filter"};
-    final String[] excludedPatterns = {"(?s)Filter.*(StreamAgg|HashAgg)"};
-    PlanTestBase.testPlanMatchingPatterns(query, expectedPlan, excludedPatterns);
+    String expectedPlan = "(?s)(StreamAgg|HashAgg).*Filter";
+    String excludedPatterns = "(?s)Filter.*(StreamAgg|HashAgg)";
+    queryBuilder().sql(query)
+        .planMatcher()
+        .include(expectedPlan)
+        .exclude(excludedPatterns)
+        .match();
 
     testBuilder()
         .sqlQuery(query)
         .unOrdered()
         .baselineColumns("cnt")
-        .baselineValues(5l)
+        .baselineValues(5L)
         .build().run();
   }
 
   @Test
   public void testNegPushFilterInExprPastAgg() throws Exception {
     // negative case: should not push filter, since it involves the aggregate result
-    final String query =
+    String query =
         " select cnt " +
             " from (select n_regionkey, count(*) cnt from cp.`tpch/nation.parquet` group by n_regionkey) " +
             " where cnt + 100 - 100 = 5 ";
 
     // Validate the plan
-    final String[] expectedPlan = {"(?s)Filter(?!StreamAgg|!HashAgg)"};
-    final String[] excludedPatterns = {"(?s)(StreamAgg|HashAgg).*Filter"};
-    PlanTestBase.testPlanMatchingPatterns(query, expectedPlan, excludedPatterns);
+    String expectedPlan = "(?s)Filter(?!StreamAgg|!HashAgg)";
+    String excludedPatterns = "(?s)(StreamAgg|HashAgg).*Filter";
+    queryBuilder().sql(query)
+        .planMatcher()
+        .include(expectedPlan)
+        .exclude(excludedPatterns)
+        .match();
 
     // negative case: should not push filter, since it is expression of group key + agg result.
-    final String query2 =
+    String query2 =
         " select cnt " +
             " from (select n_regionkey, count(*) cnt from cp.`tpch/nation.parquet` group by n_regionkey) " +
             " where cnt + n_regionkey = 5 ";
-    PlanTestBase.testPlanMatchingPatterns(query2, expectedPlan, excludedPatterns);
-
+    queryBuilder().sql(query2)
+        .planMatcher()
+        .include(expectedPlan)
+        .exclude(excludedPatterns)
+        .match();
   }
 
   @Test // DRILL-3781
   @Category(UnlikelyTest.class)
   // GROUP BY System functions in schema table.
   public void testGroupBySystemFuncSchemaTable() throws Exception {
-    final String query = "select count(*) as cnt from sys.version group by CURRENT_DATE";
-    final String[] expectedPlan = {"(?s)(StreamAgg|HashAgg)"};
-    final String[] excludedPatterns = {};
+    String query = "select count(*) as cnt from sys.version group by CURRENT_DATE";
+    String expectedPlan = "(?s)(StreamAgg|HashAgg)";
 
-    PlanTestBase.testPlanMatchingPatterns(query, expectedPlan, excludedPatterns);
+    queryBuilder().sql(query)
+        .planMatcher()
+        .include(expectedPlan)
+        .match();
   }
 
   @Test //DRILL-3781
@@ -773,27 +905,27 @@ public class TestAggregateFunctions extends BaseTestQuery {
         .sqlQuery("select count(*) as cnt from cp.`nation/nation.tbl` group by CURRENT_DATE")
         .unOrdered()
         .baselineColumns("cnt")
-        .baselineValues(25l)
+        .baselineValues(25L)
         .build().run();
 
     testBuilder()
         .sqlQuery("select count(*) as cnt from cp.`tpch/nation.parquet` group by CURRENT_DATE")
         .unOrdered()
         .baselineColumns("cnt")
-        .baselineValues(25l)
+        .baselineValues(25L)
         .build().run();
 
     testBuilder()
         .sqlQuery("select count(*) as cnt from cp.`employee.json` group by CURRENT_DATE")
         .unOrdered()
         .baselineColumns("cnt")
-        .baselineValues(1155l)
+        .baselineValues(1155L)
         .build().run();
   }
 
   @Test
   public void test4443() throws Exception {
-    test("SELECT MIN(columns[1]) FROM cp.`agg/4443.csv` GROUP BY columns[0]");
+    run("SELECT MIN(columns[1]) FROM cp.`agg/4443.csv` GROUP BY columns[0]");
   }
 
   @Test
@@ -816,7 +948,7 @@ public class TestAggregateFunctions extends BaseTestQuery {
         .sqlQuery(query)
         .unOrdered()
         .baselineColumns("col")
-        .baselineValues(5l)
+        .baselineValues(5L)
         .build()
         .run();
   }
@@ -850,9 +982,13 @@ public class TestAggregateFunctions extends BaseTestQuery {
             + "          lineitem.provider";
 
     // Validate the plan
-    final String[] expectedPlan = {"(?s)(Join).*inner"}; // With filter pushdown, left join will be converted into inner join
-    final String[] excludedPatterns = {"(?s)(Join).*(left)"};
-    PlanTestBase.testPlanMatchingPatterns(sql, expectedPlan, excludedPatterns);
+    String expectedPlan = "(?s)(Join).*inner"; // With filter pushdown, left join will be converted into inner join
+    String excludedPatterns = "(?s)(Join).*(left)";
+    queryBuilder().sql(sql)
+        .planMatcher()
+        .include(expectedPlan)
+        .exclude(excludedPatterns)
+        .match();
   }
 
   @Test // DRILL-2385: count on complex objects failed with missing function implementation
@@ -882,7 +1018,7 @@ public class TestAggregateFunctions extends BaseTestQuery {
             .baselineValues(3L)
             .go();
       } finally {
-        test("ALTER SESSION RESET `exec.enable_union_type`");
+        client.resetSession(ExecConstants.ENABLE_UNION_TYPE_KEY);
       }
     }
   }
@@ -911,11 +1047,196 @@ public class TestAggregateFunctions extends BaseTestQuery {
   @Test // DRILL-5768
   public void testGroupByWithoutAggregate() throws Exception {
     try {
-      test("select * from cp.`tpch/nation.parquet` group by n_regionkey");
+      run("select * from cp.`tpch/nation.parquet` group by n_regionkey");
       fail("Exception was not thrown");
     } catch (UserRemoteException e) {
       assertTrue("No expected current \"Expression 'tpch/nation.parquet.**' is not being grouped\"",
-          e.getMessage().matches(".*Expression 'tpch/nation\\.parquet\\.\\*\\*' is not being grouped(.*\\n)*"));
+          e.getMessage().matches(".*Expression 'tpch/nation\\.parquet\\.\\*\\*' is not being grouped(.*\\n*.*)"));
+    }
+  }
+
+  @Test
+  public void testCollectListStreamAgg() throws Exception {
+    try {
+      client.alterSession(PlannerSettings.HASHAGG.getOptionName(), false);
+      testBuilder()
+          .sqlQuery("select collect_list('n_nationkey', n_nationkey, " +
+              "'n_name', n_name, 'n_regionkey', n_regionkey, 'n_comment', n_comment) as l " +
+              "from (select * from cp.`tpch/nation.parquet` limit 2)")
+          .unOrdered()
+          .baselineColumns("l")
+          .baselineValues(listOf(
+              mapOf("n_nationkey", 0, "n_name", "ALGERIA",
+                  "n_regionkey", 0, "n_comment", " haggle. carefully final deposits detect slyly agai"),
+              mapOf("n_nationkey", 1, "n_name", "ARGENTINA", "n_regionkey", 1,
+                  "n_comment", "al foxes promise slyly according to the regular accounts. bold requests alon")))
+          .go();
+    } finally {
+      client.resetSession(PlannerSettings.HASHAGG.getOptionName());
+    }
+  }
+
+  @Test
+  public void testCollectListHashAgg() throws Exception {
+    try {
+      client.alterSession(PlannerSettings.STREAMAGG.getOptionName(), false);
+      testBuilder()
+          .sqlQuery("select collect_list('n_nationkey', n_nationkey, " +
+              "'n_name', n_name, 'n_regionkey', n_regionkey, 'n_comment', n_comment) as l " +
+              "from (select * from cp.`tpch/nation.parquet` limit 2) group by 'a'")
+          .unOrdered()
+          .baselineColumns("l")
+          .baselineValues(listOf(
+              mapOf("n_nationkey", 0, "n_name", "ALGERIA",
+                  "n_regionkey", 0, "n_comment", " haggle. carefully final deposits detect slyly agai"),
+              mapOf("n_nationkey", 1, "n_name", "ARGENTINA", "n_regionkey", 1,
+                  "n_comment", "al foxes promise slyly according to the regular accounts. bold requests alon")))
+          .go();
+    } finally {
+      client.resetSession(PlannerSettings.STREAMAGG.getOptionName());
+    }
+  }
+
+  @Test
+  public void testCollectToListVarcharStreamAgg() throws Exception {
+    try {
+      client.alterSession(PlannerSettings.HASHAGG.getOptionName(), false);
+      testBuilder()
+          .sqlQuery("select collect_to_list_varchar(`date`) as l from " +
+              "(select * from cp.`store/json/clicks.json` limit 2)")
+          .unOrdered()
+          .baselineColumns("l")
+          .baselineValues(listOf("2014-04-26", "2014-04-20"))
+          .go();
+    } finally {
+      client.resetSession(PlannerSettings.HASHAGG.getOptionName());
+    }
+  }
+
+  @Test
+  public void testCollectToListVarcharHashAgg() throws Exception {
+    try {
+      client.alterSession(PlannerSettings.STREAMAGG.getOptionName(), false);
+      testBuilder()
+          .sqlQuery("select collect_to_list_varchar(`date`) as l from " +
+              "(select * from cp.`store/json/clicks.json` limit 2) group by 'a'")
+          .unOrdered()
+          .baselineColumns("l")
+          .baselineValues(listOf("2014-04-26", "2014-04-20"))
+          .go();
+    } finally {
+      client.resetSession(PlannerSettings.STREAMAGG.getOptionName());
+    }
+  }
+
+  @Test
+  public void testSchemaFunctionStreamAgg() throws Exception {
+    try {
+      client.alterSession(PlannerSettings.HASHAGG.getOptionName(), false);
+      TupleMetadata schema = new SchemaBuilder()
+          .add("n_nationkey", TypeProtos.MinorType.INT)
+          .add("n_name", TypeProtos.MinorType.VARCHAR)
+          .add("n_regionkey", TypeProtos.MinorType.INT)
+          .add("n_comment", TypeProtos.MinorType.VARCHAR)
+          .build();
+
+      testBuilder()
+          .sqlQuery("select schema('n_nationkey', n_nationkey, " +
+              "'n_name', n_name, 'n_regionkey', n_regionkey, 'n_comment', n_comment) as l from " +
+              "(select * from cp.`tpch/nation.parquet` limit 2)")
+          .unOrdered()
+          .baselineColumns("l")
+          .baselineValues(schema.jsonString())
+          .go();
+    } finally {
+      client.resetSession(PlannerSettings.HASHAGG.getOptionName());
+    }
+  }
+
+  @Test
+  public void testSchemaFunctionHashAgg() throws Exception {
+    try {
+      client.alterSession(PlannerSettings.STREAMAGG.getOptionName(), false);
+      TupleMetadata schema = new SchemaBuilder()
+          .add("n_nationkey", TypeProtos.MinorType.INT)
+          .add("n_name", TypeProtos.MinorType.VARCHAR)
+          .add("n_regionkey", TypeProtos.MinorType.INT)
+          .add("n_comment", TypeProtos.MinorType.VARCHAR)
+          .build();
+
+      testBuilder()
+          .sqlQuery("select schema('n_nationkey', n_nationkey, " +
+              "'n_name', n_name, 'n_regionkey', n_regionkey, 'n_comment', n_comment) as l from " +
+              "(select * from cp.`tpch/nation.parquet` limit 2) group by 'a'")
+          .unOrdered()
+          .baselineColumns("l")
+          .baselineValues(schema.jsonString())
+          .go();
+    } finally {
+      client.resetSession(PlannerSettings.STREAMAGG.getOptionName());
+    }
+  }
+
+  @Test
+  public void testMergeSchemaFunctionStreamAgg() throws Exception {
+    try {
+      client.alterSession(PlannerSettings.HASHAGG.getOptionName(), false);
+      String schema = new SchemaBuilder()
+          .add("n_nationkey", TypeProtos.MinorType.INT)
+          .add("n_name", TypeProtos.MinorType.VARCHAR)
+          .add("n_regionkey", TypeProtos.MinorType.INT)
+          .add("n_comment", TypeProtos.MinorType.VARCHAR)
+          .build()
+          .jsonString();
+
+      testBuilder()
+          .sqlQuery("select merge_schema('%s') as l from " +
+              "(select * from cp.`tpch/nation.parquet` limit 2)", schema)
+          .unOrdered()
+          .baselineColumns("l")
+          .baselineValues(schema)
+          .go();
+    } finally {
+      client.resetSession(PlannerSettings.HASHAGG.getOptionName());
+    }
+  }
+
+  @Test
+  public void testMergeSchemaFunctionHashAgg() throws Exception {
+    try {
+      client.alterSession(PlannerSettings.STREAMAGG.getOptionName(), false);
+      String schema = new SchemaBuilder()
+          .add("n_nationkey", TypeProtos.MinorType.INT)
+          .add("n_name", TypeProtos.MinorType.VARCHAR)
+          .add("n_regionkey", TypeProtos.MinorType.INT)
+          .add("n_comment", TypeProtos.MinorType.VARCHAR)
+          .build()
+          .jsonString();
+
+      testBuilder()
+          .sqlQuery("select merge_schema('%s') as l from " +
+              "(select * from cp.`tpch/nation.parquet` limit 2) group by 'a'", schema)
+          .unOrdered()
+          .baselineColumns("l")
+          .baselineValues(schema)
+          .go();
+    } finally {
+      client.resetSession(PlannerSettings.STREAMAGG.getOptionName());
+    }
+  }
+
+  @Test
+  public void testInjectVariablesHashAgg() throws Exception {
+    try {
+      client.alterSession(PlannerSettings.STREAMAGG.getOptionName(), false);
+      testBuilder()
+          .sqlQuery("select tdigest(p.col_int) from " +
+              "cp.`parquet/alltypes_required.parquet` p group by p.col_flt")
+          .unOrdered()
+          .expectsNumRecords(4)
+          .go();
+    } finally {
+      client.resetSession(PlannerSettings.STREAMAGG.getOptionName());
     }
   }
 }

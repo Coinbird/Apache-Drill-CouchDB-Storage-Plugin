@@ -680,6 +680,7 @@ public class TypeCastRules {
     rules.put(MinorType.MAP, Sets.newHashSet(MinorType.MAP));
     rules.put(MinorType.LIST, Sets.newHashSet(MinorType.LIST));
     rules.put(MinorType.UNION, Sets.newHashSet(MinorType.UNION));
+    rules.put(MinorType.DICT, Sets.newHashSet(MinorType.DICT));
   }
 
   public static boolean isCastableWithNullHandling(MajorType from, MajorType to, NullHandling nullHandling) {
@@ -754,28 +755,31 @@ public class TypeCastRules {
   }
 
   private static final int DATAMODE_CAST_COST = 1;
+  private static final int VARARG_COST = Integer.MAX_VALUE / 2;
 
-  /*
-   * code decide whether it's legal to do implicit cast. -1 : not allowed for
-   * implicit cast > 0: cost associated with implicit cast. ==0: parms are
+  /**
+   * Decide whether it's legal to do implicit cast. -1 : not allowed for
+   * implicit cast > 0: cost associated with implicit cast. ==0: params are
    * exactly same type of arg. No need of implicit.
    */
   public static int getCost(List<MajorType> argumentTypes, DrillFuncHolder holder) {
     int cost = 0;
 
-    if (argumentTypes.size() != holder.getParamCount()) {
+    if (argumentTypes.size() != holder.getParamCount() && !holder.isVarArg()) {
       return -1;
     }
 
     // Indicates whether we used secondary cast rules
     boolean secondaryCast = false;
 
-    // number of arguments that could implicitly casts using precedence map or didn't require casting at all
+    // number of arguments that could implicitly casts using precedence map or
+    // didn't require casting at all
     int nCasts = 0;
 
     /*
-     * If we are determining function holder for decimal data type, we need to make sure the output type of
-     * the function can fit the precision that we need based on the input types.
+     * If we are determining function holder for decimal data type, we need to
+     * make sure the output type of the function can fit the precision that we
+     * need based on the input types.
      */
     if (holder.checkPrecisionRange()) {
       List<LogicalExpression> logicalExpressions = Lists.newArrayList();
@@ -790,50 +794,46 @@ public class TypeCastRules {
       }
     }
 
-    final int numOfArgs = holder.getParamCount();
+    final int numOfArgs = argumentTypes.size();
     for (int i = 0; i < numOfArgs; i++) {
       final MajorType argType = argumentTypes.get(i);
-      final MajorType parmType = holder.getParmMajorType(i);
+      final MajorType paramType = holder.getParamMajorType(i);
 
       //@Param FieldReader will match any type
       if (holder.isFieldReader(i)) {
 //        if (Types.isComplex(call.args.get(i).getMajorType()) ||Types.isRepeated(call.args.get(i).getMajorType()) )
-        // add the max cost when encountered with a field reader considering that it is the most expensive factor
-        // contributing to the cost.
+        // add the max cost when encountered with a field reader considering
+        // that it is the most expensive factor contributing to the cost.
         cost += ResolverTypePrecedence.MAX_IMPLICIT_CAST_COST;
         continue;
-//        else
-//          return -1;
       }
 
-      if (!TypeCastRules.isCastableWithNullHandling(argType, parmType, holder.getNullHandling())) {
+      if (!TypeCastRules.isCastableWithNullHandling(argType, paramType, holder.getNullHandling())) {
         return -1;
       }
 
-      Integer parmVal = ResolverTypePrecedence.precedenceMap.get(parmType
+      Integer paramVal = ResolverTypePrecedence.precedenceMap.get(paramType
           .getMinorType());
       Integer argVal = ResolverTypePrecedence.precedenceMap.get(argType
           .getMinorType());
 
-      if (parmVal == null) {
+      if (paramVal == null) {
         throw new RuntimeException(String.format(
-            "Precedence for type %s is not defined", parmType.getMinorType()
-                .name()));
+            "Precedence for type %s is not defined", paramType.getMinorType().name()));
       }
 
       if (argVal == null) {
         throw new RuntimeException(String.format(
-            "Precedence for type %s is not defined", argType.getMinorType()
-                .name()));
+            "Precedence for type %s is not defined", argType.getMinorType().name()));
       }
 
-      if (parmVal - argVal < 0) {
+      if (paramVal - argVal < 0) {
 
-        /* Precedence rules does not allow to implicitly cast, however check
-         * if the seconday rules allow us to cast
+        /* Precedence rules do not allow to implicit cast, however check
+         * if the secondary rules allow us to cast
          */
         Set<MinorType> rules;
-        if ((rules = (ResolverTypePrecedence.secondaryImplicitCastRules.get(parmType.getMinorType()))) != null
+        if ((rules = (ResolverTypePrecedence.secondaryImplicitCastRules.get(paramType.getMinorType()))) != null
             && rules.contains(argType.getMinorType())) {
           secondaryCast = true;
         } else {
@@ -841,25 +841,24 @@ public class TypeCastRules {
         }
       }
       // Check null vs non-null, using same logic as that in Types.softEqual()
-      // Only when the function uses NULL_IF_NULL, nullable and non-nullable are inter-changable.
+      // Only when the function uses NULL_IF_NULL, nullable and non-nullable are interchangeable.
       // Otherwise, the function implementation is not a match.
-      if (argType.getMode() != parmType.getMode()) {
+      if (argType.getMode() != paramType.getMode()) {
         // TODO - this does not seem to do what it is intended to
 //        if (!((holder.getNullHandling() == NullHandling.NULL_IF_NULL) &&
 //            (argType.getMode() == DataMode.OPTIONAL ||
 //             argType.getMode() == DataMode.REQUIRED ||
-//             parmType.getMode() == DataMode.OPTIONAL ||
-//             parmType.getMode() == DataMode.REQUIRED )))
+//             paramType.getMode() == DataMode.OPTIONAL ||
+//             paramType.getMode() == DataMode.REQUIRED )))
 //          return -1;
         // if the function is designed to take optional with custom null handling, and a required
         // is being passed, increase the cost to account for a null check
         // this allows for a non-nullable implementation to be preferred
         if (holder.getNullHandling() == NullHandling.INTERNAL) {
           // a function that expects required output, but nullable was provided
-          if (parmType.getMode() == DataMode.REQUIRED && argType.getMode() == DataMode.OPTIONAL) {
+          if (paramType.getMode() == DataMode.REQUIRED && argType.getMode() == DataMode.OPTIONAL) {
             return -1;
-          }
-          else if (parmType.getMode() == DataMode.OPTIONAL && argType.getMode() == DataMode.REQUIRED) {
+          } else if (paramType.getMode() == DataMode.OPTIONAL && argType.getMode() == DataMode.REQUIRED) {
             cost+= DATAMODE_CAST_COST;
           }
         }
@@ -867,10 +866,27 @@ public class TypeCastRules {
 
       int castCost;
 
-      if ((castCost = (parmVal - argVal)) >= 0) {
+      if ((castCost = (paramVal - argVal)) >= 0) {
         nCasts++;
         cost += castCost;
       }
+    }
+
+    if (holder.isVarArg()) {
+      int varArgIndex = holder.getParamCount() - 1;
+      for (int i = varArgIndex; i < numOfArgs; i++) {
+        if (holder.isFieldReader(varArgIndex)) {
+          break;
+        } else if (holder.getParamMajorType(varArgIndex).getMode() != argumentTypes.get(i).getMode()) {
+          // prohibit using vararg functions for types with different nullability
+          return -1;
+        }
+      }
+
+      // increase cost for var arg functions to prioritize regular ones
+      Integer additionalCost = ResolverTypePrecedence.precedenceMap.get(holder.getParamMajorType(varArgIndex).getMinorType());
+      cost += additionalCost != null ? additionalCost : VARARG_COST;
+      cost += holder.getParamMajorType(varArgIndex).getMode() == DataMode.REQUIRED ? 0 : 1;
     }
 
     if (secondaryCast) {

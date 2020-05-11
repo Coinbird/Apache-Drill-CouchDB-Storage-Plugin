@@ -29,12 +29,15 @@ import io.netty.buffer.DrillBuf;
  * throw an exception; subclasses simply override the supported
  * method(s).
  */
-
 public abstract class BaseScalarReader extends AbstractScalarReader {
 
   public abstract static class BaseFixedWidthReader extends BaseScalarReader {
 
     public abstract int width();
+
+    public final int offsetIndex() {
+      return vectorIndex.offset();
+    }
   }
 
   public abstract static class BaseVarWidthReader extends BaseScalarReader {
@@ -53,20 +56,37 @@ public abstract class BaseScalarReader extends AbstractScalarReader {
       super.bindIndex(index);
       offsetsReader.bindIndex(index);
     }
+
+    @Override
+    public void bindBuffer() {
+      super.bindBuffer();
+      offsetsReader.bindBuffer();
+    }
+
+    public final long getEntry( ) {
+      return offsetsReader.getEntry();
+    }
   }
 
   /**
    * Provide access to the DrillBuf for the data vector.
    */
-
   public interface BufferAccessor {
     DrillBuf buffer();
+    void rebind();
   }
 
   private static class SingleVectorBufferAccessor implements BufferAccessor {
-    private final DrillBuf buffer;
+    private final VectorAccessor va;
+    private DrillBuf buffer;
 
     public SingleVectorBufferAccessor(VectorAccessor va) {
+      this.va = va;
+      rebind();
+    }
+
+    @Override
+    public void rebind() {
       BaseDataValueVector vector = va.vector();
       buffer = vector.getBuffer();
     }
@@ -87,6 +107,9 @@ public abstract class BaseScalarReader extends AbstractScalarReader {
       BaseDataValueVector vector = vectorAccessor.vector();
       return vector.getBuffer();
     }
+
+    @Override
+    public void rebind() { }
   }
 
   protected ColumnMetadata schema;
@@ -97,16 +120,13 @@ public abstract class BaseScalarReader extends AbstractScalarReader {
       VectorAccessor va, BaseScalarReader reader) {
 
     // Reader is bound to the values vector inside the nullable vector.
-
     reader.bindVector(schema, VectorAccessors.nullableValuesAccessor(va));
 
     // The nullability of each value depends on the "bits" vector
     // in the nullable vector.
-
     reader.bindNullState(new NullStateReaders.NullableIsSetVectorStateReader(va));
 
     // Wrap the reader in an object reader.
-
     return new ScalarObjectReader(reader);
   }
 
@@ -114,15 +134,12 @@ public abstract class BaseScalarReader extends AbstractScalarReader {
       VectorAccessor va, BaseScalarReader reader) {
 
     // Reader is bound directly to the required vector.
-
     reader.bindVector(schema, va);
 
     // The reader is required, values can't be null.
-
     reader.bindNullState(NullStateReaders.REQUIRED_STATE_READER);
 
     // Wrap the reader in an object reader.
-
     return new ScalarObjectReader(reader);
   }
 
@@ -148,4 +165,13 @@ public abstract class BaseScalarReader extends AbstractScalarReader {
 
   @Override
   public ColumnMetadata schema() { return schema; }
+
+  @Override
+  public void bindBuffer() {
+    bufferAccessor.rebind();
+  }
+
+  public final DrillBuf buffer() {
+    return bufferAccessor.buffer();
+  }
 }

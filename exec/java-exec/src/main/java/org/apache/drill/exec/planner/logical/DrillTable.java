@@ -18,7 +18,9 @@
 package org.apache.drill.exec.planner.logical;
 
 import java.io.IOException;
+import java.util.Objects;
 
+import org.apache.calcite.adapter.enumerable.EnumerableTableScan;
 import org.apache.calcite.config.CalciteConnectionConfig;
 import org.apache.calcite.plan.RelOptTable;
 import org.apache.calcite.rel.RelNode;
@@ -30,7 +32,9 @@ import org.apache.calcite.sql.SqlCall;
 import org.apache.calcite.sql.SqlNode;
 import org.apache.drill.common.JSONOptions;
 import org.apache.drill.common.logical.StoragePluginConfig;
-import org.apache.drill.exec.planner.common.DrillStatsTable;
+import org.apache.drill.exec.metastore.store.FileSystemMetadataProviderManager;
+import org.apache.drill.exec.metastore.MetadataProviderManager;
+import org.apache.drill.metastore.metadata.TableMetadataProvider;
 import org.apache.drill.exec.physical.base.SchemalessScan;
 import org.apache.drill.exec.physical.base.GroupScan;
 import org.apache.drill.exec.server.options.SessionOptionManager;
@@ -48,8 +52,7 @@ public abstract class DrillTable implements Table {
   private final String userName;
   private GroupScan scan;
   private SessionOptionManager options;
-  // Stores the statistics(rowcount, NDV etc.) associated with the table
-  private DrillStatsTable statsTable;
+  private MetadataProviderManager metadataProviderManager;
 
   /**
    * Creates a DrillTable instance for a @{code TableType#Table} table.
@@ -71,6 +74,11 @@ public abstract class DrillTable implements Table {
    * @param selection Table contents (type and contents depend on type of StoragePlugin).
    */
   public DrillTable(String storageEngineName, StoragePlugin plugin, TableType tableType, String userName, Object selection) {
+    this(storageEngineName, plugin, tableType, userName, selection, null);
+  }
+
+  public DrillTable(String storageEngineName, StoragePlugin plugin, TableType tableType,
+                    String userName, Object selection, MetadataProviderManager metadataProviderManager) {
     this.selection = selection;
     this.plugin = plugin;
 
@@ -79,6 +87,7 @@ public abstract class DrillTable implements Table {
     this.storageEngineConfig = plugin.getConfig();
     this.storageEngineName = storageEngineName;
     this.userName = userName;
+    this.metadataProviderManager = metadataProviderManager;
   }
 
   /**
@@ -98,15 +107,41 @@ public abstract class DrillTable implements Table {
     this.scan = scan;
   }
 
-  public GroupScan getGroupScan() throws IOException{
+  public void setTableMetadataProviderManager(MetadataProviderManager metadataProviderManager) {
+    this.metadataProviderManager = metadataProviderManager;
+  }
+
+  public GroupScan getGroupScan() throws IOException {
     if (scan == null) {
       if (selection instanceof FileSelection && ((FileSelection) selection).isEmptyDirectory()) {
         this.scan = new SchemalessScan(userName, ((FileSelection) selection).getSelectionRoot());
       } else {
-        this.scan = plugin.getPhysicalScan(userName, new JSONOptions(selection), options);
+        this.scan = plugin.getPhysicalScan(userName, new JSONOptions(selection), options, metadataProviderManager);
       }
     }
     return scan;
+  }
+
+  /**
+   * Returns manager for {@link TableMetadataProvider} which may provide null for the case when scan wasn't created.
+   * This method should be used only for the case when it is possible to obtain {@link TableMetadataProvider} when supplier returns null
+   * or {@link TableMetadataProvider} usage may be omitted.
+   *
+   * @return supplier for {@link TableMetadataProvider}
+   */
+  public MetadataProviderManager getMetadataProviderManager() {
+    if (metadataProviderManager == null) {
+      // for the case when scan wasn't initialized, return null to avoid reading data which may be pruned in future
+      metadataProviderManager = FileSystemMetadataProviderManager.init();
+      if (scan != null) {
+        metadataProviderManager.setTableMetadataProvider(scan.getMetadataProvider());
+      }
+    }
+    return metadataProviderManager;
+  }
+
+  public TableMetadataProvider getMetadataProvider() throws IOException {
+    return getGroupScan().getMetadataProvider();
   }
 
   public StoragePluginConfig getStorageEngineConfig() {
@@ -134,18 +169,10 @@ public abstract class DrillTable implements Table {
     return Statistics.UNKNOWN;
   }
 
-  public DrillStatsTable getStatsTable() {
-    return statsTable;
-  }
-
-  public void setStatsTable(DrillStatsTable statsTable) {
-    this.statsTable = statsTable;
-  }
-
   public RelNode toRel(RelOptTable.ToRelContext context, RelOptTable table) {
-    return new DrillScanRel(context.getCluster(),
-        context.getCluster().traitSetOf(DrillRel.DRILL_LOGICAL),
-        table);
+    // returns non-drill table scan to allow directory-based partition pruning
+    // before table group scan is created
+    return EnumerableTableScan.create(context.getCluster(), table);
   }
 
   @Override
@@ -166,13 +193,7 @@ public abstract class DrillTable implements Table {
 
   @Override
   public int hashCode() {
-    final int prime = 31;
-    int result = 1;
-    result = prime * result + ((selection == null) ? 0 : selection.hashCode());
-    result = prime * result + ((storageEngineConfig == null) ? 0 : storageEngineConfig.hashCode());
-    result = prime * result + ((storageEngineName == null) ? 0 : storageEngineName.hashCode());
-    result = prime * result + ((userName == null) ? 0 : userName.hashCode());
-    return result;
+    return Objects.hash(selection, storageEngineConfig, storageEngineName, userName);
   }
 
   @Override
@@ -180,42 +201,13 @@ public abstract class DrillTable implements Table {
     if (this == obj) {
       return true;
     }
-    if (obj == null) {
-      return false;
-    }
-    if (getClass() != obj.getClass()) {
+    if (obj == null || getClass() != obj.getClass()) {
       return false;
     }
     DrillTable other = (DrillTable) obj;
-    if (selection == null) {
-      if (other.selection != null) {
-        return false;
-      }
-    } else if (!selection.equals(other.selection)) {
-      return false;
-    }
-    if (storageEngineConfig == null) {
-      if (other.storageEngineConfig != null) {
-        return false;
-      }
-    } else if (!storageEngineConfig.equals(other.storageEngineConfig)) {
-      return false;
-    }
-    if (storageEngineName == null) {
-      if (other.storageEngineName != null) {
-        return false;
-      }
-    } else if (!storageEngineName.equals(other.storageEngineName)) {
-      return false;
-    }
-    if (userName == null) {
-      if (other.userName != null) {
-        return false;
-      }
-    } else if (!userName.equals(other.userName)) {
-      return false;
-    }
-    return true;
+    return Objects.equals(selection, other.selection) &&
+           Objects.equals(storageEngineConfig, other.storageEngineConfig) &&
+           Objects.equals(storageEngineName, other.storageEngineName) &&
+           Objects.equals(userName, other.userName);
   }
-
 }

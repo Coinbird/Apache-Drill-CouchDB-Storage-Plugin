@@ -20,17 +20,19 @@ package org.apache.drill.exec.planner.fragment.contrib;
 import java.util.Collection;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Set;
 
 import org.apache.drill.common.exceptions.ExecutionSetupException;
 import org.apache.drill.common.util.DrillStringUtils;
+import org.apache.drill.exec.ExecConstants;
 import org.apache.drill.exec.ops.QueryContext;
 import org.apache.drill.exec.physical.base.Exchange;
 import org.apache.drill.exec.physical.base.FragmentRoot;
 import org.apache.drill.exec.physical.base.PhysicalOperator;
 import org.apache.drill.exec.planner.PhysicalPlanReader;
+import org.apache.drill.exec.planner.fragment.DefaultQueryParallelizer;
 import org.apache.drill.exec.planner.fragment.Fragment;
 import org.apache.drill.exec.planner.fragment.PlanningSet;
-import org.apache.drill.exec.planner.fragment.SimpleParallelizer;
 import org.apache.drill.exec.planner.fragment.Wrapper;
 import org.apache.drill.exec.planner.fragment.Materializer.IndexedFragmentNode;
 import org.apache.drill.exec.proto.BitControl.PlanFragment;
@@ -46,22 +48,25 @@ import org.apache.drill.exec.work.foreman.ForemanSetupException;
 
 import org.apache.drill.shaded.guava.com.google.common.base.Preconditions;
 import org.apache.drill.shaded.guava.com.google.common.collect.Lists;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
- * SimpleParallelizerMultiPlans class is an extension to SimpleParallelizer
- * to help with getting PlanFragments for split plan.
- * Split plan is essentially ability to create multiple Physical Operator plans from original Physical Operator plan
- * to be able to run plans separately.
- * Moving functionality specific to splitting the plan to this class
- * allows not to pollute parent class with non-authentic functionality
- *
+ * SimpleParallelizerMultiPlans class is an extension to SimpleParallelizer to
+ * help with getting PlanFragments for split plan. Split plan is essentially
+ * ability to create multiple Physical Operator plans from original Physical
+ * Operator plan to be able to run plans separately. Moving functionality
+ * specific to splitting the plan to this class allows not to pollute parent
+ * class with non-authentic functionality.
  */
-public class SplittingParallelizer extends SimpleParallelizer {
+public class SplittingParallelizer extends DefaultQueryParallelizer {
 
-  static final org.slf4j.Logger logger = org.slf4j.LoggerFactory.getLogger(SplittingParallelizer.class);
+  private boolean enableDynamicFC;
+  private static final Logger logger = LoggerFactory.getLogger(SplittingParallelizer.class);
 
-  public SplittingParallelizer(QueryContext context) {
-    super(context);
+  public SplittingParallelizer(boolean doMemoryPlanning, QueryContext context) {
+    super(doMemoryPlanning, context);
+    this.enableDynamicFC = context.getOptions().getBoolean(ExecConstants.ENABLE_DYNAMIC_CREDIT_BASED_FC);
   }
 
   /**
@@ -77,11 +82,18 @@ public class SplittingParallelizer extends SimpleParallelizer {
    * @return
    * @throws ExecutionSetupException
    */
+  @Override
   public List<QueryWorkUnit> getSplitFragments(OptionList options, DrillbitEndpoint foremanNode, QueryId queryId,
       Collection<DrillbitEndpoint> activeEndpoints, PhysicalPlanReader reader, Fragment rootFragment,
       UserSession session, QueryContextInformation queryContextInfo) throws ExecutionSetupException {
 
-    final PlanningSet planningSet = getFragmentsHelper(activeEndpoints, rootFragment);
+    final PlanningSet planningSet = this.prepareFragmentTree(rootFragment);
+
+    Set<Wrapper> rootFragments = getRootFragments(planningSet);
+
+    collectStatsAndParallelizeFragments(planningSet, rootFragments, activeEndpoints);
+
+    adjustMemory(planningSet, rootFragments, activeEndpoints);
 
     return generateWorkUnits(
         options, foremanNode, queryId, reader, rootFragment, planningSet, session, queryContextInfo);
@@ -108,12 +120,12 @@ public class SplittingParallelizer extends SimpleParallelizer {
       PhysicalPlanReader reader, Fragment rootNode, PlanningSet planningSet,
       UserSession session, QueryContextInformation queryContextInfo) throws ExecutionSetupException {
 
-    // now we generate all the individual plan fragments and associated assignments. Note, we need all endpoints
-    // assigned before we can materialize, so we start a new loop here rather than utilizing the previous one.
+    // Generate all the individual plan fragments and associated assignments. Note, we need all endpoints
+    // assigned before we can materialize.
 
     List<QueryWorkUnit> workUnits = Lists.newArrayList();
     int plansCount = 0;
-    DrillbitEndpoint[] endPoints = null;
+    DrillbitEndpoint[] leafFragEndpoints = null;
     long initialAllocation = 0;
 
     final Iterator<Wrapper> iter = planningSet.iterator();
@@ -123,20 +135,22 @@ public class SplittingParallelizer extends SimpleParallelizer {
       boolean isLeafFragment = node.getReceivingExchangePairs().size() == 0;
       final PhysicalOperator physicalOperatorRoot = node.getRoot();
       // get all the needed info from leaf fragment
-      if ( (physicalOperatorRoot instanceof Exchange) &&  isLeafFragment) {
+      if ((physicalOperatorRoot instanceof Exchange) &&  isLeafFragment) {
         // need to get info about
         // number of minor fragments
         // assignedEndPoints
         // allocation
         plansCount = wrapper.getWidth();
-        initialAllocation = (wrapper.getInitialAllocation() != 0 ) ? wrapper.getInitialAllocation()/plansCount : 0;
-        endPoints = new DrillbitEndpoint[plansCount];
+        initialAllocation = (wrapper.getInitialAllocation() != 0) ? wrapper.getInitialAllocation()/plansCount : 0;
+        leafFragEndpoints = new DrillbitEndpoint[plansCount];
         for (int mfId = 0; mfId < plansCount; mfId++) {
-          endPoints[mfId] = wrapper.getAssignedEndpoint(mfId);
+          leafFragEndpoints[mfId] = wrapper.getAssignedEndpoint(mfId);
         }
       }
     }
-    if ( plansCount == 0 ) {
+
+    DrillbitEndpoint[] endPoints = leafFragEndpoints;
+    if (plansCount == 0) {
       // no exchange, return list of single QueryWorkUnit
       workUnits.add(generateWorkUnit(options, foremanNode, queryId, rootNode, planningSet, session, queryContextInfo));
       return workUnits;
@@ -145,7 +159,7 @@ public class SplittingParallelizer extends SimpleParallelizer {
     for (Wrapper wrapper : planningSet) {
       Fragment node = wrapper.getNode();
       final PhysicalOperator physicalOperatorRoot = node.getRoot();
-      if ( physicalOperatorRoot instanceof Exchange ) {
+      if (physicalOperatorRoot instanceof Exchange) {
         // get to 0 MajorFragment
         continue;
       }
@@ -159,11 +173,11 @@ public class SplittingParallelizer extends SimpleParallelizer {
       // this fragment is always leaf, as we are removing all the exchanges
       boolean isLeafFragment = true;
 
-      FragmentHandle handle = FragmentHandle //
-          .newBuilder() //
-          .setMajorFragmentId(wrapper.getMajorFragmentId()) //
+      FragmentHandle handle = FragmentHandle
+          .newBuilder()
+          .setMajorFragmentId(wrapper.getMajorFragmentId())
           .setMinorFragmentId(0) // minor fragment ID is going to be always 0, as plan will be split
-          .setQueryId(queryId) //
+          .setQueryId(queryId)
           .build();
 
       // Create a minorFragment for each major fragment.
@@ -174,7 +188,8 @@ public class SplittingParallelizer extends SimpleParallelizer {
         MinorFragmentDefn rootFragment = null;
         FragmentRoot rootOperator = null;
 
-        IndexedFragmentNode iNode = new IndexedFragmentNode(minorFragmentId, wrapper);
+        IndexedFragmentNode iNode = new IndexedFragmentNode(minorFragmentId, wrapper,
+          (fragmentWrapper, minorFragment) -> endPoints[minorFragment],getMemory());
         wrapper.resetAllocation();
         // two visitors here
         // 1. To remove exchange
@@ -184,17 +199,16 @@ public class SplittingParallelizer extends SimpleParallelizer {
         Preconditions.checkArgument(op instanceof FragmentRoot);
         FragmentRoot root = (FragmentRoot) op;
 
-
-        PlanFragment fragment = PlanFragment.newBuilder() //
-            .setForeman(endPoints[minorFragmentId]) //
-            .setHandle(handle) //
-            .setAssignment(endPoints[minorFragmentId]) //
-            .setLeafFragment(isLeafFragment) //
+        PlanFragment fragment = PlanFragment.newBuilder()
+            .setForeman(endPoints[minorFragmentId])
+            .setHandle(handle)
+            .setAssignment(endPoints[minorFragmentId])
+            .setLeafFragment(isLeafFragment)
             .setContext(queryContextInfo)
-            .setMemInitial(initialAllocation)//
+            .setMemInitial(initialAllocation)
             .setMemMax(wrapper.getMaxAllocation()) // TODO - for some reason OOM is using leaf fragment max allocation divided by width
             .setCredentials(session.getCredentials())
-            .addAllCollector(CountRequiredFragments.getCollectors(root))
+            .addAllCollector(CountRequiredFragments.getCollectors(root, enableDynamicFC))
             .build();
 
         MinorFragmentDefn fragmentDefn = new MinorFragmentDefn(fragment, root, options);

@@ -30,15 +30,14 @@ import java.util.Set;
 import org.apache.drill.categories.SqlFunctionTest;
 import org.apache.drill.categories.UnlikelyTest;
 import org.apache.drill.common.exceptions.UserRemoteException;
-import org.apache.drill.common.expression.SchemaPath;
 import org.apache.drill.common.types.TypeProtos;
 import org.apache.drill.common.types.Types;
 import org.apache.drill.exec.planner.physical.PlannerSettings;
 import org.apache.drill.exec.record.BatchSchema;
 import org.apache.drill.exec.record.MaterializedField;
-import org.apache.drill.exec.record.RecordBatchLoader;
+import org.apache.drill.exec.record.BatchSchemaBuilder;
 import org.apache.drill.exec.record.metadata.SchemaBuilder;
-import org.apache.drill.exec.rpc.user.QueryDataBatch;
+import org.apache.drill.exec.vector.IntervalDayVector;
 import org.apache.drill.exec.vector.IntervalYearVector;
 import org.apache.drill.test.ClusterFixture;
 import org.apache.drill.test.ClusterTest;
@@ -641,7 +640,7 @@ public class TestCastFunctions extends ClusterTest {
     String query = "select cast('123.0' as decimal(3, 5))";
 
     thrown.expect(UserRemoteException.class);
-    thrown.expectMessage(containsString("VALIDATION ERROR: Expected scale less than or equal to precision, but was scale 5 and precision 3"));
+    thrown.expectMessage(containsString("VALIDATION ERROR: Expected scale less than or equal to precision, but was precision 3 and scale 5"));
 
     run(query);
   }
@@ -698,30 +697,53 @@ public class TestCastFunctions extends ClusterTest {
 
   @Test // DRILL-6783
   public void testCastVarCharIntervalYear() throws Exception {
-    String query = "select cast('P31M' as interval month) as i from cp.`employee.json` limit 10";
-    List<QueryDataBatch> result = queryBuilder().sql(query).results();
-    RecordBatchLoader loader = new RecordBatchLoader(cluster.drillbit().getContext().getAllocator());
-
-    QueryDataBatch b = result.get(0);
-    loader.load(b.getHeader().getDef(), b.getData());
-
-    IntervalYearVector vector = (IntervalYearVector) loader.getValueAccessorById(
-          IntervalYearVector.class,
-          loader.getValueVectorId(SchemaPath.getCompoundPath("i")).getFieldIds())
-        .getValueVector();
-
-    Set<String> resultSet = new HashSet<>();
-    for (int i = 0; i < loader.getRecordCount(); i++) {
-      String displayValue = vector.getAccessor().getAsStringBuilder(i).toString();
-      resultSet.add(displayValue);
-    }
+    Set<String> results = queryBuilder()
+        .sql("select cast('P31M' as interval month) as i from cp.`employee.json` limit 10")
+        .vectorValue(
+            "i",
+            IntervalYearVector.class,
+            (recordCount, vector) -> {
+              Set<String> r = new HashSet<>();
+              for (int i = 0; i < recordCount; i++) {
+                r.add(vector.getAccessor().getAsStringBuilder(i).toString());
+              }
+              return r;
+            }
+        );
 
     Assert.assertEquals(
-        "Casting literal string as INTERVAL should yield the same result for each row", 1, resultSet.size());
-    Assert.assertThat(resultSet, hasItem("2 years 7 months"));
+        "Casting literal string as INTERVAL should yield the same result for each row", 1, results.size());
+    Assert.assertThat(results, hasItem("2 years 7 months"));
+  }
 
-    b.release();
-    loader.clear();
+  @Test
+  public void testCastVarCharIntervalDay() throws Exception {
+    String result = queryBuilder()
+        .sql("select cast('PT1H' as interval minute) as i from (values(1))")
+        .vectorValue(
+            "i",
+            IntervalDayVector.class,
+            (recordsCount, vector) -> vector.getAccessor().getAsStringBuilder(0).toString()
+        );
+    Assert.assertEquals(result, "0 days 1:00:00");
+
+    result = queryBuilder()
+        .sql("select cast(concat('PT',107374,'M') as interval minute) as i from (values(1))")
+        .vectorValue(
+            "i",
+            IntervalDayVector.class,
+            (recordsCount, vector) -> vector.getAccessor().getAsStringBuilder(0).toString()
+        );
+    Assert.assertEquals(result, "74 days 13:34:00");
+
+    result = queryBuilder()
+        .sql("select cast(concat('PT',107375,'M') as interval minute) as i from (values(1))")
+        .vectorValue(
+            "i",
+            IntervalDayVector.class,
+            (recordsCount, vector) -> vector.getAccessor().getAsStringBuilder(0).toString()
+        );
+    Assert.assertEquals(result, "74 days 13:35:00");
   }
 
   @Test // DRILL-6959
@@ -776,8 +798,10 @@ public class TestCastFunctions extends ClusterTest {
       String q = String.format(query, entry.getKey());
 
       MaterializedField field = MaterializedField.create("coal", entry.getValue());
-      BatchSchema expectedSchema = new SchemaBuilder()
-          .add(field)
+      SchemaBuilder schemaBuilder = new SchemaBuilder()
+          .add(field);
+      BatchSchema expectedSchema = new BatchSchemaBuilder()
+          .withSchemaBuilder(schemaBuilder)
           .build();
 
       // Validate schema
@@ -812,10 +836,10 @@ public class TestCastFunctions extends ClusterTest {
     // todo: uncomment after DRILL-6993 is resolved
     // typesMap.put("VARBINARY(31)", Types.withPrecision(VARBINARY, mode, 31));
     typesMap.put("VARCHAR(26)", Types.withPrecision(VARCHAR, mode, 26));
-    typesMap.put("DECIMAL(9, 2)", Types.withScaleAndPrecision(VARDECIMAL, mode, 2, 9));
-    typesMap.put("DECIMAL(18, 5)", Types.withScaleAndPrecision(VARDECIMAL, mode, 5, 18));
-    typesMap.put("DECIMAL(28, 3)", Types.withScaleAndPrecision(VARDECIMAL, mode, 3, 28));
-    typesMap.put("DECIMAL(38, 2)", Types.withScaleAndPrecision(VARDECIMAL, mode, 2, 38));
+    typesMap.put("DECIMAL(9, 2)", Types.withPrecisionAndScale(VARDECIMAL, mode, 9, 2));
+    typesMap.put("DECIMAL(18, 5)", Types.withPrecisionAndScale(VARDECIMAL, mode, 18, 5));
+    typesMap.put("DECIMAL(28, 3)", Types.withPrecisionAndScale(VARDECIMAL, mode, 28, 3));
+    typesMap.put("DECIMAL(38, 2)", Types.withPrecisionAndScale(VARDECIMAL, mode, 38, 2));
 
     return typesMap;
   }

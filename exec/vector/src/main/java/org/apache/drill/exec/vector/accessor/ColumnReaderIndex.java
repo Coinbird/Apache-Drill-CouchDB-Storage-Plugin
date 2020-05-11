@@ -59,8 +59,8 @@ package org.apache.drill.exec.vector.accessor;
  * and is ignored by nested vectors. (Nested vectors work by navigating
  * down from a top-level vector.) But, as noted above, any given
  * reader does not know if it is at the top or nested level, instead
- * it is the {@link VectorAccessor} abstraction that works out the
- * nesting levels.
+ * it is the {@link org.apache.drill.exec.vector.accessor.reader.VectorAccessor}
+ * abstraction that works out the nesting levels.
  */
 
 public interface ColumnReaderIndex {
@@ -110,6 +110,13 @@ public interface ColumnReaderIndex {
    */
 
   boolean next();
+
+  /**
+   * Reports if the index has another item.
+   * @return <true> if more rows remain. That is, if a
+   * call to {@link #next()} would return <tt>true</tt>.
+   */
+  boolean hasNext();
 
   /**
    * Return the number of items that this index indexes: top-level record

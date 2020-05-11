@@ -34,10 +34,11 @@ import org.apache.drill.exec.ExecConstants;
 import org.apache.drill.exec.store.AbstractSchema;
 import org.apache.drill.exec.store.AbstractSchemaFactory;
 import org.apache.drill.exec.store.SchemaConfig;
-import org.apache.drill.exec.store.hive.DrillHiveMetaStoreClient;
 import org.apache.drill.exec.store.hive.HiveReadEntry;
 import org.apache.drill.exec.store.hive.HiveStoragePlugin;
 import org.apache.drill.exec.store.hive.HiveStoragePluginConfig;
+import org.apache.drill.exec.store.hive.client.DrillHiveMetaStoreClient;
+import org.apache.drill.exec.store.hive.client.DrillHiveMetaStoreClientFactory;
 import org.apache.drill.shaded.guava.com.google.common.cache.CacheBuilder;
 import org.apache.drill.shaded.guava.com.google.common.cache.CacheLoader;
 import org.apache.drill.shaded.guava.com.google.common.cache.LoadingCache;
@@ -46,11 +47,13 @@ import org.apache.hadoop.hive.conf.HiveConf;
 import org.apache.hadoop.hive.conf.HiveConf.ConfVars;
 import org.apache.hadoop.hive.metastore.api.MetaException;
 import org.apache.thrift.TException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import static org.apache.drill.exec.util.ImpersonationUtil.getProcessUserName;
 
 public class HiveSchemaFactory extends AbstractSchemaFactory {
-  private static final org.slf4j.Logger logger = org.slf4j.LoggerFactory.getLogger(HiveSchemaFactory.class);
+  private static final Logger logger = LoggerFactory.getLogger(HiveSchemaFactory.class);
 
   // MetaStoreClient created using process user credentials
   private final DrillHiveMetaStoreClient processUserMetastoreClient;
@@ -58,7 +61,6 @@ public class HiveSchemaFactory extends AbstractSchemaFactory {
   private final LoadingCache<String, DrillHiveMetaStoreClient> metaStoreClientLoadingCache;
 
   private final HiveStoragePlugin plugin;
-  private final HiveConf hiveConf;
   private final boolean isDrillImpersonationEnabled;
   private final boolean isHS2DoAsSet;
 
@@ -66,14 +68,12 @@ public class HiveSchemaFactory extends AbstractSchemaFactory {
     super(name);
     this.plugin = plugin;
 
-    this.hiveConf = hiveConf;
     isHS2DoAsSet = hiveConf.getBoolVar(ConfVars.HIVE_SERVER2_ENABLE_DOAS);
     isDrillImpersonationEnabled = plugin.getContext().getConfig().getBoolean(ExecConstants.IMPERSONATION_ENABLED);
 
     try {
-      // TODO: DRILL-6412. Clients for plugin should be instantiated only for the case, when plugin is enabled
       processUserMetastoreClient =
-          DrillHiveMetaStoreClient.createCloseableClientWithCaching(hiveConf);
+          DrillHiveMetaStoreClientFactory.createCloseableClientWithCaching(hiveConf);
     } catch (MetaException e) {
       throw new ExecutionSetupException("Failure setting up Hive metastore client.", e);
     }
@@ -88,8 +88,8 @@ public class HiveSchemaFactory extends AbstractSchemaFactory {
         })
         .build(new CacheLoader<String, DrillHiveMetaStoreClient>() {
           @Override
-          public DrillHiveMetaStoreClient load(String userName) throws Exception {
-            return DrillHiveMetaStoreClient.createClientWithAuthz(processUserMetastoreClient, hiveConf, userName);
+          public DrillHiveMetaStoreClient load(String userName) {
+            return DrillHiveMetaStoreClientFactory.createClientWithAuthz(processUserMetastoreClient, hiveConf, userName);
           }
         });
   }

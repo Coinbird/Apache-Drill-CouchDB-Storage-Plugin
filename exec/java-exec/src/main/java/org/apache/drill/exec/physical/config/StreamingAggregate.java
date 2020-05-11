@@ -32,19 +32,16 @@ import java.util.List;
 @JsonTypeName("streaming-aggregate")
 public class StreamingAggregate extends AbstractSingle {
 
-  static final org.slf4j.Logger logger = org.slf4j.LoggerFactory.getLogger(StreamingAggregate.class);
-
   private final List<NamedExpression> keys;
   private final List<NamedExpression> exprs;
 
-  private final float cardinality;
-
   @JsonCreator
-  public StreamingAggregate(@JsonProperty("child") PhysicalOperator child, @JsonProperty("keys") List<NamedExpression> keys, @JsonProperty("exprs") List<NamedExpression> exprs, @JsonProperty("cardinality") float cardinality) {
+  public StreamingAggregate(@JsonProperty("child") PhysicalOperator child,
+      @JsonProperty("keys") List<NamedExpression> keys,
+      @JsonProperty("exprs") List<NamedExpression> exprs) {
     super(child);
     this.keys = keys;
     this.exprs = exprs;
-    this.cardinality = cardinality;
   }
 
   public List<NamedExpression> getKeys() {
@@ -62,12 +59,11 @@ public class StreamingAggregate extends AbstractSingle {
 
   @Override
   protected PhysicalOperator getNewWithChild(PhysicalOperator child) {
-    return new StreamingAggregate(child, keys, exprs, cardinality);
+    return new StreamingAggregate(child, keys, exprs);
   }
 
   @Override
   public int getOperatorType() {
     return CoreOperatorType.STREAMING_AGGREGATE_VALUE;
   }
-
 }

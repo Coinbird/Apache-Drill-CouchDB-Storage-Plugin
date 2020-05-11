@@ -30,7 +30,7 @@
 
   <groupId>org.apache.drill</groupId>
   <artifactId>drill-root</artifactId>
-  <version>1.16.0-SNAPSHOT</version>
+  <version>1.18.0-SNAPSHOT</version>
   <packaging>pom</packaging>
 
   <name>Apache Drill Root POM</name>
@@ -44,64 +44,94 @@
 
     <target.gen.source.path>${project.basedir}/target/generated-sources</target.gen.source.path>
     <proto.cas.path>${project.basedir}/src/main/protobuf/</proto.cas.path>
-    <dep.junit.version>4.12</dep.junit.version>
-    <dep.slf4j.version>1.7.25</dep.slf4j.version>
-    <shaded.guava.version>23.0</shaded.guava.version>
+    <junit.version>4.12</junit.version>
+    <slf4j.version>1.7.26</slf4j.version>
+    <shaded.guava.version>28.2-jre</shaded.guava.version>
     <guava.version>19.0</guava.version>
     <forkCount>2</forkCount>
-    <parquet.version>1.10.0</parquet.version>
-    <calcite.version>1.18.0-drill-r0</calcite.version>
-    <avatica.version>1.13.0</avatica.version>
+    <parquet.version>1.11.0</parquet.version>
+    <parquet.format.version>2.8.0</parquet.format.version>
+    <!--
+      For development purposes to be able to use custom Calcite versions (e.g. not present in jitpack
+      repository or from local repository) update this property to desired value (e.g. org.apache.calcite).
+      In case if new value is org.apache.calcite, one needs to remove `org.apache.calcite:*` from
+      avoid_bad_dependencies plugin found in the file.
+    -->
+    <calcite.groupId>com.github.vvysotskyi.drill-calcite</calcite.groupId>
+    <calcite.version>1.21.0-drill-r0</calcite.version>
+    <avatica.version>1.15.0</avatica.version>
     <janino.version>3.0.11</janino.version>
-    <sqlline.version>1.6.0</sqlline.version>
-    <jackson.version>2.9.5</jackson.version>
-    <jackson.databind.version>2.9.5</jackson.databind.version>
-    <zookeeper.version>3.4.12</zookeeper.version>
+    <sqlline.version>1.9.0</sqlline.version>
+    <jackson.version>2.10.3</jackson.version>
+    <zookeeper.version>3.5.7</zookeeper.version>
     <mapr.release.version>6.1.0-mapr</mapr.release.version>
     <ojai.version>3.0-mapr-1808</ojai.version>
-    <kerby.version>1.0.0-RC2</kerby.version>
+    <kerby.version>1.0.0</kerby.version>
     <findbugs.version>3.0.0</findbugs.version>
     <netty.tcnative.classifier />
     <commons.io.version>2.4</commons.io.version>
-    <junit.version>4.11</junit.version>
     <hamcrest.core.version>1.3</hamcrest.core.version>
-    <maven.embedder.version>3.5.3</maven.embedder.version>
-    <curator.version>2.7.1</curator.version>
-    <wiremock.standalone.version>2.5.1</wiremock.standalone.version>
-    <jmockit.version>1.43</jmockit.version>
-    <logback.version>1.0.13</logback.version>
-    <mockito.version>2.18.3</mockito.version>
+    <curator.version>4.3.0</curator.version>
+    <wiremock.standalone.version>2.23.2</wiremock.standalone.version>
+    <jmockit.version>1.47</jmockit.version>
+    <logback.version>1.2.3</logback.version>
+    <mockito.version>2.28.2</mockito.version>
     <!--
-      Currently Hive storage plugin only supports Apache Hive 2.3.2 or vendor specific variants of the
-      Apache Hive 2.3.2. If the version is changed, make sure the jars and their dependencies are updated.
+      Currently Hive storage plugin only supports Apache Hive 3.1.2 or vendor specific variants of the
+      Apache Hive 2.3.2. If the version is changed, make sure the jars and their dependencies are updated,
+      for example parquet-hadoop-bundle and derby dependencies.
     -->
-    <hive.version>2.3.2</hive.version>
-    <hadoop.version>2.7.4</hadoop.version>
-    <hbase.version>2.1.1</hbase.version>
+    <hive.version>3.1.2</hive.version>
+    <hadoop.version>3.2.1</hadoop.version>
+    <hbase.version>2.2.2</hbase.version>
     <fmpp.version>1.0</fmpp.version>
-    <freemarker.version>2.3.26-incubating</freemarker.version>
-    <javassist.version>3.24.0-GA</javassist.version>
+    <freemarker.version>2.3.28</freemarker.version>
+    <javassist.version>3.27.0-GA</javassist.version>
     <msgpack.version>0.6.6</msgpack.version>
     <reflections.version>0.9.10</reflections.version>
-    <avro.version>1.8.2</avro.version>
+    <avro.version>1.9.1</avro.version>
     <metrics.version>4.0.2</metrics.version>
-    <asm.version>7.0</asm.version>
+    <jetty.version>9.3.28.v20191105</jetty.version>
+    <jersey.version>2.25.1</jersey.version>
+    <asm.version>7.3.1</asm.version>
     <excludedGroups />
     <memoryMb>4096</memoryMb>
     <directMemoryMb>4096</directMemoryMb>
     <rat.skip>true</rat.skip>
     <license.skip>true</license.skip>
-    <docker.repository>drill/apache-drill</docker.repository>
-    <antlr.version>4.7.1</antlr.version>
-    <lowestMavenVersion>3.3.3</lowestMavenVersion>
+    <docker.repository>apache/drill</docker.repository>
+    <antlr.version>4.8-1</antlr.version>
+    <maven.version>3.6.3</maven.version>
     <commons.net.version>3.6</commons.net.version>
     <commons.validator.version>1.6</commons.validator.version>
     <commons.text.version>1.6</commons.text.version>
+    <protobuf.version>3.11.1</protobuf.version>
+    <protostuff.version>1.7.1</protostuff.version>
+    <codemodel.version>2.6</codemodel.version>
+    <joda.version>2.10.5</joda.version>
+    <javax.el.version>3.0.0</javax.el.version>
+    <surefire.version>3.0.0-M4</surefire.version>
+    <commons.compress.version>1.20</commons.compress.version>
+    <hikari.version>3.4.2</hikari.version>
+    <netty.version>4.0.48.Final</netty.version>
+    <httpclient.version>4.5.12</httpclient.version>
+    <libthrift.version>0.13.0</libthrift.version>
+    <derby.version>10.14.2.0</derby.version>
+    <commons.cli.version>1.4</commons.cli.version>
+    <snakeyaml.version>1.26</snakeyaml.version>
+    <commons.lang3.version>3.10</commons.lang3.version>
+    <typesafe.config.version>1.0.0</typesafe.config.version>
+    <commons.codec.version>1.14</commons.codec.version>
+    <metadata.extractor.version>2.13.0</metadata.extractor.version>
+    <xalan.version>2.7.2</xalan.version>
+    <xerces.version>2.12.0</xerces.version>
+    <commons.configuration.version>1.10</commons.configuration.version>
+    <commons.beanutils.version>1.9.4</commons.beanutils.version>
   </properties>
 
   <scm>
-    <connection>scm:git:https://git-wip-us.apache.org/repos/asf/drill.git</connection>
-    <developerConnection>scm:git:https://git-wip-us.apache.org/repos/asf/drill.git</developerConnection>
+    <connection>scm:git:https://gitbox.apache.org/repos/asf/drill.git</connection>
+    <developerConnection>scm:git:https://gitbox.apache.org/repos/asf/drill.git</developerConnection>
     <url>https://github.com/apache/drill</url>
     <tag>HEAD</tag>
   </scm>
@@ -140,7 +170,7 @@
     <repository>
       <id>conjars</id>
       <name>Conjars</name>
-      <url>http://conjars.org/repo</url>
+      <url>https://conjars.org/repo</url>
       <layout>default</layout>
       <releases>
         <enabled>true</enabled>
@@ -164,31 +194,6 @@
     </repository>
 
     <repository>
-      <!-- Keep until we move back to released calcite versions. -->
-      <id>mapr-drill-optiq-snapshots</id>
-      <name>MapR Drill Optiq Snapshots</name>
-      <url>http://repository.mapr.com/nexus/content/repositories/drill-optiq/</url>
-      <releases>
-        <enabled>false</enabled>
-      </releases>
-      <snapshots>
-        <enabled>true</enabled>
-      </snapshots>
-    </repository>
-
-    <repository>
-      <id>mapr-drill-thirdparty</id>
-      <name>MapR Drill Third Party Artifacts</name>
-      <url>http://repository.mapr.com/nexus/content/repositories/drill/</url>
-      <releases>
-        <enabled>true</enabled>
-      </releases>
-      <snapshots>
-        <enabled>false</enabled>
-      </snapshots>
-    </repository>
-
-    <repository>
       <id>sonatype-nexus-snapshots</id>
       <url>https://oss.sonatype.org/content/repositories/snapshots</url>
       <releases>
@@ -197,6 +202,17 @@
       <snapshots>
         <enabled>true</enabled>
       </snapshots>
+    </repository>
+
+    <repository>
+      <id>jhdf5-repo</id>
+      <name>ImageJ Repository</name>
+      <url>https://maven.scijava.org/content/repositories/public/</url>
+    </repository>
+
+    <repository>
+      <id>jitpack.io</id>
+      <url>https://jitpack.io</url>
     </repository>
   </repositories>
 
@@ -250,7 +266,7 @@
             <dependency>
               <groupId>org.apache.maven</groupId>
               <artifactId>maven-embedder</artifactId>
-              <version>${maven.embedder.version}</version>
+              <version>${maven.version}</version>
             </dependency>
             <dependency>
               <groupId>org.apache.curator</groupId>
@@ -333,23 +349,36 @@
           </execution>
         </executions>
         <configuration>
-          <excludeSubprojects>false</excludeSubprojects>
           <excludes>
-            <!-- Types log1, log2, sqllog and sqllog2 are used to test he logRegex format plugin. -->
+            <!-- Types log1, log2, sqllog and sqllog2, ssdlog are used to test he logRegex format plugin. -->
+            <exclude>**/clientlib/y2038/*.c</exclude> <!-- All the files here should have MIT License -->
+            <exclude>**/clientlib/y2038/*.h</exclude> <!-- All the files here should have MIT License -->
+            <exclude>**/resources/parquet/**/*</exclude>
+            <exclude>**/*.woff2</exclude>
+            <exclude>**/*.ks</exclude>
+            <exclude>**/*.pcap</exclude>
             <exclude>**/*.log1</exclude>
             <exclude>**/*.log2</exclude>
+            <exclude>**/*.sav</exclude>
+            <exclude>**/*.h5</exclude>
             <exclude>**/*.sqllog</exclude>
             <exclude>**/*.sqllog2</exclude>
             <exclude>**/*.syslog</exclude>
+            <exclude>**/*.xls</exclude>
+            <exclude>**/*.xlsx</exclude>
             <exclude>**/*.syslog1</exclude>
+            <exclude>**/*.ssdlog</exclude>
+            <exclude>**/*.ltsv</exclude>
             <exclude>**/*.log</exclude>
             <exclude>**/*.css</exclude>
             <exclude>**/*.js</exclude>
+            <exclude>**/*.map</exclude>
             <exclude>**/*.md</exclude>
             <exclude>**/*.eps</exclude>
             <exclude>**/*.json</exclude>
             <exclude>**/*.seq</exclude>
             <exclude>**/*.parquet</exclude>
+            <exclude>**/*.avro</exclude>
             <exclude>**/*.sql</exclude>
             <exclude>**/git.properties</exclude>
             <exclude>**/*.csv</exclude>
@@ -358,24 +387,18 @@
             <exclude>**/*.tsv</exclude>
             <exclude>**/*.txt</exclude>
             <exclude>**/*.ssv</exclude>
-            <exclude>**/drill-*.conf</exclude>
             <exclude>**/.buildpath</exclude>
-            <exclude>**/*.proto</exclude>
-            <exclude>**/*.fmpp</exclude>
             <exclude>**/target/**</exclude>
             <exclude>**/*.iml</exclude>
             <exclude>**/.idea/**</exclude>
-            <exclude>**/*.tdd</exclude>
             <exclude>**/*.project</exclude>
             <exclude>**/TAGS</exclude>
             <exclude>**/*.checkstyle</exclude>
             <exclude>**/.classpath</exclude>
             <exclude>**/.settings/**</exclude>
-            <exclude>.*/**</exclude>
             <exclude>**/*.patch</exclude>
             <exclude>**/*.pb.cc</exclude>
             <exclude>**/*.pb.h</exclude>
-            <exclude>**/*.linux</exclude>
             <exclude>**/client/*build*/**</exclude>
             <exclude>**/client/tags</exclude>
             <exclude>**/cmake_install.cmake</exclude>
@@ -387,9 +410,31 @@
             <exclude>**/*.autotools</exclude>
             <exclude>**/*.cproject</exclude>
             <exclude>**/*.drill</exclude>
+            <exclude>**/LICENSE</exclude>
+            <exclude>**/NOTICE</exclude>
+            <exclude>KEYS</exclude>
+            <exclude>header</exclude>
             <exclude>**/.drill.parquet_metadata</exclude>
+            <exclude>**/*.mov</exclude>
+            <exclude>**/*.mp4</exclude>
+            <exclude>**/*.avi</exclude>
+            <exclude>**/*.pcx</exclude>
+            <exclude>**/*.webp</exclude>
+            <exclude>**/*.pcapng</exclude>
+            <exclude>**/*.psd</exclude>
+            <exclude>**/*.pcx</exclude>
+            <exclude>**/*.log1</exclude>
+            <exclude>**/*.log2</exclude>
+            <exclude>**/*.sqllog</exclude>
+            <exclude>**/*.sqllog2</exclude>
+            <exclude>**/*.ltsv</exclude>
+            <exclude>**/*.wav</exclude>
+            <exclude>**/control</exclude>
             <!-- TODO DRILL-4336: try to avoid the need to add this -->
             <exclude>dependency-reduced-pom.xml</exclude>
+            <exclude>**/*.prj</exclude>
+            <exclude>**/*.shp</exclude>
+            <exclude>**/*.dbf</exclude>
           </excludes>
         </configuration>
       </plugin>
@@ -443,6 +488,9 @@
             <exclude>**/logging.properties</exclude>
             <exclude>**/logback.out.xml</exclude>
             <exclude>**/logback.xml</exclude>
+            <!-- Excludes files generated by maven debug option -->
+            <exclude>**/javac.sh</exclude>
+            <exclude>**/org.codehaus.plexus.compiler.javac.JavacCompiler*</exclude>
           </excludes>
           <archive>
             <index>true</index>
@@ -468,84 +516,11 @@
           </execution>
         </executions>
       </plugin>
-
-      <plugin>
-        <groupId>org.apache.maven.plugins</groupId>
-        <artifactId>maven-resources-plugin</artifactId>
-        <configuration>
-          <encoding>UTF-8</encoding>
-        </configuration>
-      </plugin>
-      <plugin>
-        <groupId>org.apache.maven.plugins</groupId>
-        <artifactId>maven-compiler-plugin</artifactId>
-        <configuration>
-          <maxmem>2048m</maxmem>
-          <useIncrementalCompilation>false</useIncrementalCompilation>
-          <fork>true</fork>
-        </configuration>
-      </plugin>
-      <plugin>
-        <artifactId>maven-enforcer-plugin</artifactId>
-        <executions>
-          <execution>
-            <id>validate_java_and_maven_version</id>
-            <phase>verify</phase>
-            <goals>
-              <goal>enforce</goal>
-            </goals>
-            <inherited>false</inherited>
-            <configuration>
-              <rules>
-                <requireMavenVersion>
-                  <version>[{$lowestMavenVersion},4)</version>
-                </requireMavenVersion>
-                <requireJavaVersion>
-                  <version>[1.8,12)</version>
-                </requireJavaVersion>
-              </rules>
-            </configuration>
-          </execution>
-          <execution>
-            <id>avoid_bad_dependencies</id>
-            <phase>verify</phase>
-            <goals>
-              <goal>enforce</goal>
-            </goals>
-            <configuration>
-              <rules>
-                <bannedDependencies>
-                  <excludes>
-                    <exclude>commons-logging</exclude>
-                    <exclude>javax.servlet:servlet-api</exclude>
-                    <exclude>org.mortbay.jetty:servlet-api</exclude>
-                    <exclude>org.mortbay.jetty:servlet-api-2.5</exclude>
-                    <exclude>log4j:log4j</exclude>
-                    <exclude>jdk.tools:jdk.tools</exclude>
-                    <exclude>org.json:json</exclude>
-                    <exclude>org.beanshell:bsh</exclude>
-                  </excludes>
-                </bannedDependencies>
-              </rules>
-            </configuration>
-          </execution>
-        </executions>
-      </plugin>
       <plugin>
         <groupId>pl.project13.maven</groupId>
         <artifactId>git-commit-id-plugin</artifactId>
-        <version>2.2.5</version>
+        <version>4.0.0</version>
         <executions>
-          <execution>
-            <id>for-jars</id>
-            <inherited>true</inherited>
-            <goals>
-              <goal>revision</goal>
-            </goals>
-            <configuration>
-              <generateGitPropertiesFilename>target/classes/git.properties</generateGitPropertiesFilename>
-            </configuration>
-          </execution>
           <execution>
             <id>for-source-tarball</id>
             <goals>
@@ -573,6 +548,95 @@
           </gitDescribe>
         </configuration>
       </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-resources-plugin</artifactId>
+        <configuration>
+          <encoding>UTF-8</encoding>
+        </configuration>
+        <executions>
+          <execution>
+            <!-- copy root git.properties file to target/classes folder for every module
+                to ensure that it will be placed into jar -->
+            <phase>initialize</phase>
+            <goals>
+              <goal>copy-resources</goal>
+            </goals>
+            <configuration>
+              <outputDirectory>${project.build.outputDirectory}</outputDirectory>
+              <resources>
+                <resource>
+                  <!--suppress UnresolvedMavenProperty -->
+                  <directory>${maven.multiModuleProjectDirectory}</directory>
+                  <includes>
+                    <include>git.properties</include>
+                  </includes>
+                </resource>
+              </resources>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-compiler-plugin</artifactId>
+        <configuration>
+          <maxmem>2048m</maxmem>
+          <useIncrementalCompilation>false</useIncrementalCompilation>
+          <fork>true</fork>
+        </configuration>
+      </plugin>
+      <plugin>
+        <artifactId>maven-enforcer-plugin</artifactId>
+        <executions>
+          <execution>
+            <id>validate_java_and_maven_version</id>
+            <phase>verify</phase>
+            <goals>
+              <goal>enforce</goal>
+            </goals>
+            <inherited>false</inherited>
+            <configuration>
+              <rules>
+                <requireMavenVersion>
+                  <version>[${maven.version},4)</version>
+                </requireMavenVersion>
+                <requireJavaVersion>
+                  <version>[1.8,15)</version>
+                </requireJavaVersion>
+              </rules>
+            </configuration>
+          </execution>
+          <execution>
+            <id>avoid_bad_dependencies</id>
+            <phase>verify</phase>
+            <goals>
+              <goal>enforce</goal>
+            </goals>
+            <configuration>
+              <rules>
+                <bannedDependencies>
+                  <excludes>
+                    <exclude>commons-logging</exclude>
+                    <exclude>javax.servlet:servlet-api</exclude>
+                    <exclude>org.mortbay.jetty:servlet-api</exclude>
+                    <exclude>org.mortbay.jetty:servlet-api-2.5</exclude>
+                    <exclude>log4j:log4j</exclude>
+                    <exclude>org.apache.logging.log4j:log4j-core</exclude>
+                    <exclude>jdk.tools:jdk.tools</exclude>
+                    <exclude>org.json:json</exclude>
+                    <exclude>org.beanshell:bsh</exclude>
+                    <exclude>org.apache.calcite:*</exclude>
+                    <exclude>commons-httpclient:*</exclude>
+                    <exclude>tomcat:*</exclude>
+                    <exclude>commons-beanutils:commons-beanutils-core</exclude>
+                  </excludes>
+                </bannedDependencies>
+              </rules>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
     </plugins>
     <pluginManagement>
       <plugins>
@@ -599,22 +663,31 @@
               <exclude>**/clientlib/y2038/*.c</exclude> <!-- All the files here should have MIT License -->
               <exclude>**/clientlib/y2038/*.h</exclude> <!-- All the files here should have MIT License -->
               <exclude>**/resources/parquet/**/*</exclude>
-              <exclude>**/*.g</exclude>
               <exclude>**/*.woff2</exclude>
               <exclude>**/*.ks</exclude>
               <exclude>**/*.pcap</exclude>
+              <exclude>**/*.sav</exclude>
+              <exclude>**/*.log1</exclude>
+              <exclude>**/*.log2</exclude>
+              <exclude>**/*.h5</exclude>
+              <exclude>**/*.sqllog</exclude>
+              <exclude>**/*.sqllog2</exclude>
               <exclude>**/*.syslog</exclude>
+              <exclude>**/*.xls</exclude>
+              <exclude>**/*.xlsx</exclude>
               <exclude>**/*.syslog1</exclude>
-              <exclude>**/*.props</exclude>
-              <exclude>**/*.conf</exclude>
+              <exclude>**/*.ssdlog</exclude>
+              <exclude>**/*.ltsv</exclude>
               <exclude>**/*.log</exclude>
               <exclude>**/*.css</exclude>
               <exclude>**/*.js</exclude>
+              <exclude>**/*.map</exclude>
               <exclude>**/*.md</exclude>
               <exclude>**/*.eps</exclude>
               <exclude>**/*.json</exclude>
               <exclude>**/*.seq</exclude>
               <exclude>**/*.parquet</exclude>
+              <exclude>**/*.avro</exclude>
               <exclude>**/*.sql</exclude>
               <exclude>**/git.properties</exclude>
               <exclude>**/*.csv</exclude>
@@ -623,24 +696,18 @@
               <exclude>**/*.tsv</exclude>
               <exclude>**/*.txt</exclude>
               <exclude>**/*.ssv</exclude>
-              <exclude>**/drill-*.conf</exclude>
               <exclude>**/.buildpath</exclude>
-              <exclude>**/*.proto</exclude>
-              <exclude>**/*.fmpp</exclude>
               <exclude>**/target/**</exclude>
               <exclude>**/*.iml</exclude>
               <exclude>**/.idea/**</exclude>
-              <exclude>**/*.tdd</exclude>
               <exclude>**/*.project</exclude>
               <exclude>**/TAGS</exclude>
               <exclude>**/*.checkstyle</exclude>
               <exclude>**/.classpath</exclude>
               <exclude>**/.settings/**</exclude>
-              <exclude>.*/**</exclude>
               <exclude>**/*.patch</exclude>
               <exclude>**/*.pb.cc</exclude>
               <exclude>**/*.pb.h</exclude>
-              <exclude>**/*.linux</exclude>
               <exclude>**/client/*build*/**</exclude>
               <exclude>**/client/tags</exclude>
               <exclude>**/cmake_install.cmake</exclude>
@@ -652,7 +719,6 @@
               <exclude>**/*.autotools</exclude>
               <exclude>**/*.cproject</exclude>
               <exclude>**/*.drill</exclude>
-              <exclude>**/*.plist</exclude>
               <exclude>**/LICENSE</exclude>
               <exclude>**/NOTICE</exclude>
               <exclude>KEYS</exclude>
@@ -670,10 +736,14 @@
               <exclude>**/*.log2</exclude>
               <exclude>**/*.sqllog</exclude>
               <exclude>**/*.sqllog2</exclude>
+              <exclude>**/*.ltsv</exclude>
               <exclude>**/*.wav</exclude>
               <exclude>**/control</exclude>
               <!-- TODO DRILL-4336: try to avoid the need to add this -->
               <exclude>dependency-reduced-pom.xml</exclude>
+              <exclude>**/*.prj</exclude>
+              <exclude>**/*.shp</exclude>
+              <exclude>**/*.dbf</exclude>
             </excludes>
             <mapping>
               <java>SLASHSTAR_STYLE</java>
@@ -699,6 +769,15 @@
               <submit_plan>SCRIPT_STYLE</submit_plan>
               <drill-embedded>SCRIPT_STYLE</drill-embedded>
               <conffiles>SCRIPT_STYLE</conffiles>
+              <!-- license format for login.conf files should precede the license format for *.conf files-->
+              <login.conf>SLASHSTAR_STYLE</login.conf>
+              <conf>SCRIPT_STYLE</conf>
+              <props>SCRIPT_STYLE</props>
+              <proto>DOUBLESLASH_STYLE</proto>
+              <fmpp>SCRIPT_STYLE</fmpp>
+              <tdd>SCRIPT_STYLE</tdd>
+              <linux>SLASHSTAR_STYLE</linux>
+              <plist>XML_STYLE</plist>
             </mapping>
           </configuration>
           <executions>
@@ -712,7 +791,7 @@
         <plugin>
           <groupId>org.apache.maven.plugins</groupId>
           <artifactId>maven-compiler-plugin</artifactId>
-          <version>3.8.0</version>
+          <version>3.8.1</version>
         </plugin>
         <plugin>
           <artifactId>maven-enforcer-plugin</artifactId>
@@ -746,19 +825,21 @@
         <plugin>
           <groupId>org.apache.maven.plugins</groupId>
           <artifactId>maven-surefire-plugin</artifactId>
-          <version>3.0.0-M2</version>
+          <version>${surefire.version}</version>
           <executions>
             <execution>
               <id>default-test</id>
               <phase>test</phase>
-              <goals><goal>test</goal></goals>
-            </execution>
+              <goals>
+                <goal>test</goal>
+              </goals>
+          </execution>
           </executions>
           <dependencies>
             <dependency>
               <groupId>org.apache.maven.surefire</groupId>
               <artifactId>surefire-junit47</artifactId>
-              <version>3.0.0-M2</version>
+              <version>${surefire.version}</version>
             </dependency>
           </dependencies>
           <configuration>
@@ -899,11 +980,19 @@
               </goals>
             </execution>
           </executions>
+          <dependencies>
+            <!-- Specifies asm version which supports JDK 12+ -->
+            <dependency>
+              <groupId>org.ow2.asm</groupId>
+              <artifactId>asm</artifactId>
+              <version>${asm.version}</version>
+            </dependency>
+          </dependencies>
         </plugin>
         <plugin>
           <groupId>org.apache.maven.plugins</groupId>
           <artifactId>maven-assembly-plugin</artifactId>
-          <version>3.1.0</version>
+          <version>3.2.0</version>
         </plugin>
         <plugin>
           <groupId>org.apache.maven.plugins</groupId>
@@ -913,9 +1002,9 @@
         <plugin>
           <groupId>org.apache.maven.plugins</groupId>
           <artifactId>maven-javadoc-plugin</artifactId>
-          <version>2.10.4</version> <!--the 3.0.1 version causes failures on the release:prepare stage-->
+          <version>3.1.1</version>
           <configuration>
-            <additionalparam>-Xdoclint:none</additionalparam>
+            <doclint>none</doclint>
           </configuration>
         </plugin>
 
@@ -930,19 +1019,17 @@
     <dependency>
       <groupId>commons-codec</groupId>
       <artifactId>commons-codec</artifactId>
-      <version>1.10</version>
+      <version>${commons.codec.version}</version>
     </dependency>
 
     <dependency>
       <groupId>io.netty</groupId>
       <artifactId>netty-handler</artifactId>
-      <version>4.0.48.Final</version>
     </dependency>
 
     <dependency>
       <groupId>io.netty</groupId>
       <artifactId>netty-common</artifactId>
-      <version>4.0.48.Final</version>
     </dependency>
 
     <dependency>
@@ -953,25 +1040,25 @@
     <dependency>
       <groupId>org.slf4j</groupId>
       <artifactId>slf4j-api</artifactId>
-      <version>${dep.slf4j.version}</version>
+      <version>${slf4j.version}</version>
     </dependency>
 
     <dependency>
       <groupId>org.slf4j</groupId>
       <artifactId>jul-to-slf4j</artifactId>
-      <version>${dep.slf4j.version}</version>
+      <version>${slf4j.version}</version>
     </dependency>
 
     <dependency>
       <groupId>org.slf4j</groupId>
       <artifactId>jcl-over-slf4j</artifactId>
-      <version>${dep.slf4j.version}</version>
+      <version>${slf4j.version}</version>
     </dependency>
 
     <dependency>
       <groupId>org.slf4j</groupId>
       <artifactId>log4j-over-slf4j</artifactId>
-      <version>${dep.slf4j.version}</version>
+      <version>${slf4j.version}</version>
     </dependency>
 
     <dependency>
@@ -991,7 +1078,7 @@
     <dependency>
       <groupId>junit</groupId>
       <artifactId>junit</artifactId>
-      <version>${dep.junit.version}</version>
+      <version>${junit.version}</version>
       <scope>test</scope>
     </dependency>
     <dependency>
@@ -1005,9 +1092,16 @@
     <dependency>
       <groupId>ch.qos.logback</groupId>
       <artifactId>logback-classic</artifactId>
-      <version>1.0.13</version>
+      <version>${logback.version}</version>
       <scope>test</scope>
     </dependency>
+    <dependency>
+      <groupId>ch.qos.logback</groupId>
+      <artifactId>logback-core</artifactId>
+      <version>${logback.version}</version>
+      <scope>test</scope>
+    </dependency>
+
     <dependency>
       <groupId>de.huxhorn.lilith</groupId>
       <artifactId>de.huxhorn.lilith.logback.appender.multiplex-classic</artifactId>
@@ -1054,7 +1148,27 @@
   <dependencyManagement>
     <dependencies>
       <dependency>
-        <groupId>org.apache.calcite</groupId>
+          <groupId>org.slf4j</groupId>
+          <artifactId>slf4j-api</artifactId>
+          <version>${slf4j.version}</version>
+      </dependency>
+      <dependency>
+          <groupId>org.slf4j</groupId>
+          <artifactId>jul-to-slf4j</artifactId>
+          <version>${slf4j.version}</version>
+      </dependency>
+      <dependency>
+          <groupId>org.slf4j</groupId>
+          <artifactId>jcl-over-slf4j</artifactId>
+          <version>${slf4j.version}</version>
+      </dependency>
+      <dependency>
+          <groupId>org.slf4j</groupId>
+          <artifactId>log4j-over-slf4j</artifactId>
+          <version>${slf4j.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>${calcite.groupId}</groupId>
         <artifactId>calcite-core</artifactId>
         <version>${calcite.version}</version>
         <exclusions>
@@ -1147,18 +1261,6 @@
           <exclusion>
             <groupId>jdk.tools</groupId>
             <artifactId>jdk.tools</artifactId>
-          </exclusion>
-        </exclusions>
-      </dependency>
-      <dependency>
-        <groupId>org.apache.hadoop</groupId>
-        <artifactId>hadoop-aws</artifactId>
-        <version>${hadoop.version}</version>
-        <scope>test</scope>
-        <exclusions>
-          <exclusion>
-            <groupId>commons-logging</groupId>
-            <artifactId>commons-logging</artifactId>
           </exclusion>
         </exclusions>
       </dependency>
@@ -1471,7 +1573,7 @@
       <dependency>
         <groupId>com.fasterxml.jackson.core</groupId>
         <artifactId>jackson-databind</artifactId>
-        <version>${jackson.databind.version}</version>
+        <version>${jackson.version}</version>
       </dependency>
       <dependency>
         <groupId>com.fasterxml.jackson.core</groupId>
@@ -1579,6 +1681,11 @@
         </exclusions>
       </dependency>
       <dependency>
+        <groupId>com.mapr.security</groupId>
+        <artifactId>mapr-security-web</artifactId>
+        <version>${mapr.release.version}</version>
+      </dependency>
+      <dependency>
         <groupId>org.ojai</groupId>
         <artifactId>ojai</artifactId>
         <version>${ojai.version}</version>
@@ -1604,6 +1711,16 @@
         <classifier>${netty.tcnative.classifier}</classifier>
         <scope>runtime</scope>
         <optional>true</optional>
+      </dependency>
+      <dependency>
+        <groupId>io.netty</groupId>
+        <artifactId>netty-handler</artifactId>
+        <version>${netty.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>io.netty</groupId>
+        <artifactId>netty-common</artifactId>
+        <version>${netty.version}</version>
       </dependency>
       <dependency>
         <groupId>com.tdunning</groupId>
@@ -1633,7 +1750,7 @@
       <dependency>
         <groupId>org.apache.parquet</groupId>
         <artifactId>parquet-format</artifactId>
-        <version>2.5.0</version>
+        <version>${parquet.format.version}</version>
         <exclusions>
           <exclusion>
             <groupId>org.apache.hadoop</groupId>
@@ -1663,12 +1780,12 @@
       <dependency>
         <groupId>org.apache.commons</groupId>
         <artifactId>commons-lang3</artifactId>
-        <version>3.2</version>
+        <version>${commons.lang3.version}</version>
       </dependency>
       <dependency>
         <groupId>com.typesafe</groupId>
         <artifactId>config</artifactId>
-        <version>1.0.0</version>
+        <version>${typesafe.config.version}</version>
       </dependency>
       <dependency>
         <groupId>org.apache.zookeeper</groupId>
@@ -1766,6 +1883,108 @@
         <artifactId>commons-text</artifactId>
         <version>${commons.text.version}</version>
       </dependency>
+      <dependency>
+        <groupId>com.google.protobuf</groupId>
+        <artifactId>protobuf-java</artifactId>
+        <version>${protobuf.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>io.protostuff</groupId>
+        <artifactId>protostuff-core</artifactId>
+        <version>${protostuff.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>io.protostuff</groupId>
+        <artifactId>protostuff-json</artifactId>
+        <version>${protostuff.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>joda-time</groupId>
+        <artifactId>joda-time</artifactId>
+        <version>${joda.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>javax.el</groupId>
+        <artifactId>javax.el-api</artifactId>
+        <version>${javax.el.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>org.glassfish</groupId>
+        <artifactId>javax.el</artifactId>
+        <version>${javax.el.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>org.apache.commons</groupId>
+        <artifactId>commons-compress</artifactId>
+        <version>${commons.compress.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>com.zaxxer</groupId>
+        <artifactId>HikariCP</artifactId>
+        <version>${hikari.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>org.apache.httpcomponents</groupId>
+        <artifactId>httpclient</artifactId>
+        <version>${httpclient.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>org.apache.thrift</groupId>
+        <artifactId>libthrift</artifactId>
+        <version>${libthrift.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>org.apache.derby</groupId>
+        <artifactId>derby-project</artifactId>
+        <version>${derby.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>commons-cli</groupId>
+        <artifactId>commons-cli</artifactId>
+        <version>${commons.cli.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>org.yaml</groupId>
+        <artifactId>snakeyaml</artifactId>
+        <version>${snakeyaml.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>com.drewnoakes</groupId>
+        <artifactId>metadata-extractor</artifactId>
+        <version>${metadata.extractor.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>xerces</groupId>
+        <artifactId>xercesImpl</artifactId>
+        <version>${xerces.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>xalan</groupId>
+        <artifactId>xalan</artifactId>
+        <version>${xalan.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>commons-configuration</groupId>
+        <artifactId>commons-configuration</artifactId>
+        <version>${commons.configuration.version}</version>
+        <exclusions>
+          <exclusion>
+            <groupId>commons-logging</groupId>
+            <artifactId>commons-logging</artifactId>
+          </exclusion>
+        </exclusions>
+      </dependency>
+      <dependency>
+        <groupId>commons-beanutils</groupId>
+        <artifactId>commons-beanutils</artifactId>
+        <version>${commons.beanutils.version}</version>
+        <exclusions>
+          <exclusion>
+            <groupId>commons-logging</groupId>
+            <artifactId>commons-logging</artifactId>
+          </exclusion>
+        </exclusions>
+      </dependency>
     </dependencies>
   </dependencyManagement>
 
@@ -1783,7 +2002,7 @@
               <execution>
                 <id>source-release-checksum</id>
                 <goals>
-                  <goal>artifacts</goal>
+                  <goal>files</goal>
                 </goals>
               </execution>
             </executions>
@@ -1791,6 +2010,17 @@
               <algorithms>
                 <algorithm>SHA-512</algorithm>
               </algorithms>
+              <fileSets>
+                <!--Override fileSet from the Apache Parent POM-->
+                <fileSet>
+                  <directory>${project.build.directory}</directory>
+                  <includes>
+                    <include>apache-drill-${project.version}.tar.gz</include>
+                    <include>apache-drill-${project.version}-src.tar.gz</include>
+                    <include>apache-drill-${project.version}-src.zip</include>
+                  </includes>
+                </fileSet>
+              </fileSets>
             </configuration>
           </plugin>
 
@@ -1909,10 +2139,60 @@
                 <artifactId>jackson-jaxrs</artifactId>
               </exclusion>
               <exclusion>
-                  <groupId>io.netty</groupId>
-                  <artifactId>netty</artifactId>
+                <groupId>io.netty</groupId>
+                <artifactId>netty</artifactId>
               </exclusion>
             </exclusions>
+          </dependency>
+          <dependency>
+            <groupId>org.apache.hadoop</groupId>
+            <artifactId>hadoop-auth</artifactId>
+            <version>${hadoop.version}</version>
+            <exclusions>
+              <exclusion>
+                <groupId>net.minidev</groupId>
+                <artifactId>json-smart</artifactId>
+              </exclusion>
+              <exclusion>
+                <groupId>com.nimbusds</groupId>
+                <artifactId>nimbus-jose-jwt</artifactId>
+              </exclusion>
+            </exclusions>
+          </dependency>
+          <dependency>
+            <groupId>org.apache.hadoop</groupId>
+            <artifactId>hadoop-mapreduce-client-jobclient</artifactId>
+            <version>${hadoop.version}</version>
+          </dependency>
+          <dependency>
+            <groupId>org.apache.hadoop</groupId>
+            <artifactId>hadoop-mapreduce-client-core</artifactId>
+            <version>${hadoop.version}</version>
+          </dependency>
+          <dependency>
+            <groupId>org.apache.hadoop</groupId>
+            <artifactId>hadoop-archives</artifactId>
+            <version>${hadoop.version}</version>
+          </dependency>
+          <dependency>
+            <groupId>org.apache.hadoop</groupId>
+            <artifactId>hadoop-yarn-server-resourcemanager</artifactId>
+            <version>${hadoop.version}</version>
+          </dependency>
+          <dependency>
+            <groupId>org.apache.hadoop</groupId>
+            <artifactId>hadoop-yarn-registry</artifactId>
+            <version>${hadoop.version}</version>
+          </dependency>
+          <dependency>
+            <groupId>org.apache.hadoop</groupId>
+            <artifactId>hadoop-distcp</artifactId>
+            <version>${hadoop.version}</version>
+          </dependency>
+          <dependency>
+            <groupId>org.apache.hadoop</groupId>
+            <artifactId>hadoop-minicluster</artifactId>
+            <version>${hadoop.version}</version>
           </dependency>
           <dependency>
             <groupId>org.apache.hadoop</groupId>
@@ -2006,11 +2286,96 @@
                 <artifactId>jackson-jaxrs</artifactId>
               </exclusion>
               <exclusion>
-                  <groupId>io.netty</groupId>
-                  <artifactId>netty</artifactId>
+                <groupId>io.netty</groupId>
+                <artifactId>netty</artifactId>
+              </exclusion>
+              <exclusion>
+                <groupId>commons-httpclient</groupId>
+                <artifactId>commons-httpclient</artifactId>
               </exclusion>
             </exclusions>
           </dependency>
+          <dependency>
+            <groupId>org.apache.hadoop</groupId>
+            <artifactId>hadoop-hdfs</artifactId>
+            <version>${hadoop.version}</version>
+            <scope>test</scope>
+            <exclusions>
+              <exclusion>
+                <groupId>commons-logging</groupId>
+                <artifactId>commons-logging</artifactId>
+              </exclusion>
+              <exclusion>
+                <groupId>org.mortbay.jetty</groupId>
+                <artifactId>servlet-api</artifactId>
+              </exclusion>
+              <exclusion>
+                <groupId>javax.servlet</groupId>
+                <artifactId>servlet-api</artifactId>
+              </exclusion>
+              <exclusion>
+                <groupId>io.netty</groupId>
+                <artifactId>netty-all</artifactId>
+              </exclusion>
+              <exclusion>
+                <groupId>io.netty</groupId>
+                <artifactId>netty</artifactId>
+              </exclusion>
+              <exclusion>
+                <groupId>log4j</groupId>
+                <artifactId>log4j</artifactId>
+              </exclusion>
+            </exclusions>
+          </dependency>
+
+          <!-- Hadoop Test Dependencies -->
+
+          <dependency>
+            <groupId>org.apache.hadoop</groupId>
+            <artifactId>hadoop-hdfs</artifactId>
+            <version>${hadoop.version}</version>
+            <scope>test</scope>
+            <classifier>tests</classifier>
+            <exclusions>
+              <exclusion>
+                <groupId>commons-logging</groupId>
+                <artifactId>commons-logging</artifactId>
+              </exclusion>
+              <exclusion>
+                <groupId>org.mortbay.jetty</groupId>
+                <artifactId>servlet-api</artifactId>
+              </exclusion>
+              <exclusion>
+                <groupId>javax.servlet</groupId>
+                <artifactId>servlet-api</artifactId>
+              </exclusion>
+              <exclusion>
+                <groupId>log4j</groupId>
+                <artifactId>log4j</artifactId>
+              </exclusion>
+              <exclusion>
+                <groupId>com.sun.jersey</groupId>
+                <artifactId>jersey-core</artifactId>
+              </exclusion>
+              <exclusion>
+                <groupId>io.netty</groupId>
+                <artifactId>netty-all</artifactId>
+              </exclusion>
+              <exclusion>
+                <groupId>io.netty</groupId>
+                <artifactId>netty</artifactId>
+              </exclusion>
+              <exclusion>
+                <groupId>org.codehaus.jackson</groupId>
+                <artifactId>jackson-core-asl</artifactId>
+              </exclusion>
+              <exclusion>
+                <groupId>org.codehaus.jackson</groupId>
+                <artifactId>jackson-mapper-asl</artifactId>
+              </exclusion>
+            </exclusions>
+          </dependency>
+
           <dependency>
             <groupId>org.apache.hadoop</groupId>
             <artifactId>hadoop-client</artifactId>
@@ -2371,8 +2736,8 @@
             <scope>test</scope>
             <exclusions>
               <exclusion>
-                  <groupId>io.netty</groupId>
-                  <artifactId>netty</artifactId>
+                <groupId>io.netty</groupId>
+                <artifactId>netty</artifactId>
               </exclusion>
               <exclusion>
                 <groupId>io.netty</groupId>
@@ -2407,12 +2772,12 @@
           <dependency>
             <groupId>xerces</groupId>
             <artifactId>xercesImpl</artifactId>
-            <version>2.11.0</version>
+            <version>${xerces.version}</version>
           </dependency>
           <dependency>
             <groupId>xalan</groupId>
             <artifactId>xalan</artifactId>
-            <version>2.7.1</version>
+            <version>${xalan.version}</version>
           </dependency>
           <dependency>
             <groupId>net.sf.jpam</groupId>
@@ -2444,73 +2809,81 @@
             <version>1.60</version>
           </dependency>
 
-          <!-- Test Dependencies -->
+          <!--Eclipse Jetty dependecies-->
           <dependency>
-            <groupId>org.apache.hadoop</groupId>
-            <artifactId>hadoop-hdfs</artifactId>
-            <version>${hadoop.version}</version>
-            <scope>test</scope>
-            <exclusions>
-              <exclusion>
-                <groupId>commons-logging</groupId>
-                <artifactId>commons-logging</artifactId>
-              </exclusion>
-              <exclusion>
-                <groupId>org.mortbay.jetty</groupId>
-                <artifactId>servlet-api</artifactId>
-              </exclusion>
-              <exclusion>
-                <groupId>javax.servlet</groupId>
-                <artifactId>servlet-api</artifactId>
-              </exclusion>
-              <exclusion>
-                <groupId>io.netty</groupId>
-                <artifactId>netty-all</artifactId>
-              </exclusion>
-              <exclusion>
-                  <groupId>io.netty</groupId>
-                  <artifactId>netty</artifactId>
-              </exclusion>
-            </exclusions>
+            <groupId>org.eclipse.jetty</groupId>
+            <artifactId>jetty-server</artifactId>
+            <version>${jetty.version}</version>
           </dependency>
-          <!-- Test Dependencies -->
           <dependency>
-            <groupId>org.apache.hadoop</groupId>
-            <artifactId>hadoop-hdfs</artifactId>
-            <version>${hadoop.version}</version>
-            <scope>test</scope>
-            <classifier>tests</classifier>
-            <exclusions>
-              <exclusion>
-                <groupId>commons-logging</groupId>
-                <artifactId>commons-logging</artifactId>
-              </exclusion>
-              <exclusion>
-                <groupId>org.mortbay.jetty</groupId>
-                <artifactId>servlet-api</artifactId>
-              </exclusion>
-              <exclusion>
-                <groupId>javax.servlet</groupId>
-                <artifactId>servlet-api</artifactId>
-              </exclusion>
-              <exclusion>
-                <groupId>log4j</groupId>
-                <artifactId>log4j</artifactId>
-              </exclusion>
-              <exclusion>
-                <groupId>com.sun.jersey</groupId>
-                <artifactId>jersey-core</artifactId>
-              </exclusion>
-              <exclusion>
-                <groupId>io.netty</groupId>
-                <artifactId>netty-all</artifactId>
-              </exclusion>
-              <exclusion>
-                  <groupId>io.netty</groupId>
-                  <artifactId>netty</artifactId>
-              </exclusion>
-            </exclusions>
+            <groupId>org.eclipse.jetty</groupId>
+            <artifactId>jetty-servlet</artifactId>
+            <version>${jetty.version}</version>
           </dependency>
+          <dependency>
+            <groupId>org.eclipse.jetty</groupId>
+            <artifactId>jetty-servlets</artifactId>
+            <version>${jetty.version}</version>
+          </dependency>
+          <dependency>
+            <groupId>org.eclipse.jetty</groupId>
+            <artifactId>jetty-security</artifactId>
+            <version>${jetty.version}</version>
+          </dependency>
+          <dependency>
+            <groupId>org.eclipse.jetty</groupId>
+            <artifactId>jetty-util</artifactId>
+            <version>${jetty.version}</version>
+          </dependency>
+          <dependency>
+            <groupId>org.eclipse.jetty</groupId>
+            <artifactId>jetty-io</artifactId>
+            <version>${jetty.version}</version>
+          </dependency>
+          <dependency>
+            <groupId>org.eclipse.jetty</groupId>
+            <artifactId>jetty-webapp</artifactId>
+            <version>${jetty.version}</version>
+          </dependency>
+          <dependency>
+            <groupId>org.eclipse.jetty</groupId>
+            <artifactId>jetty-xml</artifactId>
+            <version>${jetty.version}</version>
+          </dependency>
+          <!--Eclipse Jetty dependecies-->
+
+          <!--GlassFish Jersey dependecies-->
+          <dependency>
+            <groupId>org.glassfish.jersey.ext</groupId>
+            <artifactId>jersey-mvc-freemarker</artifactId>
+            <version>${jersey.version}</version>
+          </dependency>
+          <dependency>
+            <groupId>org.glassfish.jersey.media</groupId>
+            <artifactId>jersey-media-multipart</artifactId>
+            <version>${jersey.version}</version>
+          </dependency>
+          <dependency>
+            <groupId>org.glassfish.jersey.media</groupId>
+            <artifactId>jersey-media-json-jackson</artifactId>
+            <version>${jersey.version}</version>
+          </dependency>
+          <dependency>
+            <groupId>org.glassfish.jersey.containers</groupId>
+            <artifactId>jersey-container-jetty-servlet</artifactId>
+            <version>${jersey.version}</version>
+          </dependency>
+          <dependency>
+            <groupId>org.glassfish.jersey.containers</groupId>
+            <artifactId>jersey-container-servlet-core</artifactId>
+            <version>${jersey.version}</version>
+          </dependency>
+          <dependency>
+            <groupId>org.glassfish.jersey.containers</groupId>
+            <artifactId>jersey-container-servlet</artifactId>
+            <version>${jersey.version}</version>
+          </dependency>
+          <!--/GlassFish Jersey dependecies-->
         </dependencies>
       </dependencyManagement>
     </profile>
@@ -2518,11 +2891,13 @@
       <id>mapr</id>
       <properties>
         <alt-hadoop>mapr</alt-hadoop>
-        <rat.excludeSubprojects>true</rat.excludeSubprojects>
         <hive.version>2.3.3-mapr-1808</hive.version>
         <hbase.version>1.1.1-mapr-1602-m7-5.2.0</hbase.version>
         <hadoop.version>2.7.0-mapr-1808</hadoop.version>
         <zookeeper.version>3.4.11-mapr-1808</zookeeper.version>
+        <!-- TODO: Remove this property and use a common dependency of curator-test after ZooKeeper 3.5+
+        for MapR profile is released. See problem description in https://issues.apache.org/jira/browse/CURATOR-428 -->
+        <curator.test.version>2.13.0</curator.test.version>
       </properties>
       <dependencyManagement>
         <dependencies>
@@ -2619,6 +2994,10 @@
               <exclusion>
                 <groupId>io.netty</groupId>
                 <artifactId>netty-all</artifactId>
+              </exclusion>
+              <exclusion>
+                <groupId>commons-httpclient</groupId>
+                <artifactId>commons-httpclient</artifactId>
               </exclusion>
             </exclusions>
           </dependency>
@@ -2814,12 +3193,12 @@
           <dependency>
             <groupId>xerces</groupId>
             <artifactId>xercesImpl</artifactId>
-            <version>2.11.0</version>
+            <version>${xerces.version}</version>
           </dependency>
           <dependency>
             <groupId>xalan</groupId>
             <artifactId>xalan</artifactId>
-            <version>2.7.1</version>
+            <version>${xalan.version}</version>
           </dependency>
           <dependency>
           	<groupId>org.apache.parquet</groupId>
@@ -2852,8 +3231,16 @@
                 <artifactId>netty-all</artifactId>
               </exclusion>
               <exclusion>
-                  <groupId>io.netty</groupId>
-                  <artifactId>netty</artifactId>
+                <groupId>io.netty</groupId>
+                <artifactId>netty</artifactId>
+              </exclusion>
+              <exclusion>
+                <groupId>org.codehaus.jackson</groupId>
+                <artifactId>jackson-core-asl</artifactId>
+              </exclusion>
+              <exclusion>
+                <groupId>org.codehaus.jackson</groupId>
+                <artifactId>jackson-mapper-asl</artifactId>
               </exclusion>
             </exclusions>
           </dependency>
@@ -2887,8 +3274,8 @@
             <version>${hbase.version}</version>
             <exclusions>
               <exclusion>
-                  <groupId>io.netty</groupId>
-                  <artifactId>netty</artifactId>
+                <groupId>io.netty</groupId>
+                <artifactId>netty</artifactId>
               </exclusion>
               <exclusion>
                 <groupId>io.netty</groupId>
@@ -2929,6 +3316,14 @@
               <exclusion>
                 <groupId>com.sun.jersey</groupId>
                 <artifactId>jersey-client</artifactId>
+              </exclusion>
+              <exclusion>
+                <groupId>org.codehaus.jackson</groupId>
+                <artifactId>jackson-core-asl</artifactId>
+              </exclusion>
+              <exclusion>
+                <groupId>org.codehaus.jackson</groupId>
+                <artifactId>jackson-mapper-asl</artifactId>
               </exclusion>
             </exclusions>
           </dependency>
@@ -3045,6 +3440,26 @@
               <exclusion>
                 <groupId>org.apache.hbase</groupId>
                 <artifactId>hbase-annotations</artifactId>
+              </exclusion>
+              <exclusion>
+                <groupId>tomcat</groupId>
+                <artifactId>jasper-compiler</artifactId>
+              </exclusion>
+              <exclusion>
+                <groupId>tomcat</groupId>
+                <artifactId>jasper-runtime</artifactId>
+              </exclusion>
+            </exclusions>
+          </dependency>
+          <dependency>
+            <groupId>org.apache.curator</groupId>
+            <artifactId>curator-test</artifactId>
+            <version>${curator.test.version}</version>
+            <scope>test</scope>
+            <exclusions>
+              <exclusion>
+                <groupId>log4j</groupId>
+                <artifactId>log4j</artifactId>
               </exclusion>
             </exclusions>
           </dependency>
@@ -3491,5 +3906,6 @@
     <module>exec</module>
     <module>drill-yarn</module>
     <module>distribution</module>
+    <module>metastore</module>
   </modules>
 </project>

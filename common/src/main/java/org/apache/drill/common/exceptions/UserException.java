@@ -17,17 +17,18 @@
  */
 package org.apache.drill.common.exceptions;
 
+import static java.lang.Thread.sleep;
+
+import java.io.BufferedWriter;
+import java.io.File;
+import java.io.FileWriter;
+import java.lang.management.ManagementFactory;
+
 import org.apache.drill.exec.proto.CoordinationProtos;
 import org.apache.drill.exec.proto.CoordinationProtos.DrillbitEndpoint;
 import org.apache.drill.exec.proto.UserBitShared.DrillPBError;
 import org.slf4j.Logger;
-
-import java.io.File;
-import java.io.BufferedWriter;
-import java.io.FileWriter;
-import java.lang.management.ManagementFactory;
-
-import static java.lang.Thread.sleep;
+import org.slf4j.LoggerFactory;
 /**
  * Base class for all user exception. The goal is to separate out common error conditions where we can give users
  * useful feedback.
@@ -45,7 +46,7 @@ import static java.lang.Thread.sleep;
  */
 public class UserException extends DrillRuntimeException {
   private static final long serialVersionUID = -6720929331624621840L;
-  private static final org.slf4j.Logger logger = org.slf4j.LoggerFactory.getLogger(UserException.class);
+  private static final Logger logger = LoggerFactory.getLogger(UserException.class);
 
   public static final String MEMORY_ERROR_MSG = "One or more nodes ran out of memory while executing the query.";
 
@@ -61,7 +62,7 @@ public class UserException extends DrillRuntimeException {
   }
 
   public static Builder memoryError(final String format, final Object... args) {
-    Builder builder =  UserException.resourceError();
+    final Builder builder =  UserException.resourceError();
     builder.message(MEMORY_ERROR_MSG);
     if (!format.isEmpty()) {
       builder.addContext(String.format(format, args));
@@ -89,9 +90,6 @@ public class UserException extends DrillRuntimeException {
    * @param cause exception we want the user exception to wrap. If cause is, or wrap, a user exception it will be
    *              returned by the builder instead of creating a new user exception
    * @return user exception builder
-   *
-   * @deprecated This method should never need to be used explicitly, unless you are passing the exception to the
-   *             Rpc layer or UserResultListener.submitFailed()
    */
 
   public static Builder systemError(final Throwable cause) {
@@ -359,6 +357,22 @@ public class UserException extends DrillRuntimeException {
   }
 
   /**
+   * Report an unsupported schema change.
+   *
+   * @param cause the <tt>SchemaChangeException</tt>. (Not typed because that
+   * class is not visible to this package.)
+   * @return user exception builder.
+   */
+  public static Builder schemaChangeError(final Throwable cause) {
+    return new Builder(DrillPBError.ErrorType.UNSUPPORTED_OPERATION, cause)
+        .addContext("Unsupported schema change");
+  }
+
+  public static Builder schemaChangeError() {
+    return schemaChangeError(null);
+  }
+
+  /**
    * Wraps an error that arises from execution due to issues in the query, in
    * the environment and so on -- anything other than "this should never occur"
    * type checks.
@@ -384,6 +398,10 @@ public class UserException extends DrillRuntimeException {
     return new Builder(DrillPBError.ErrorType.INTERNAL_ERROR, cause);
   }
 
+  public static Builder internalError() {
+    return new Builder(DrillPBError.ErrorType.INTERNAL_ERROR, null);
+  }
+
   /**
    * Indicates an unspecified error: code caught the exception, but does not have
    * visibility into the cause well enough to pick one of the more specific
@@ -397,7 +415,6 @@ public class UserException extends DrillRuntimeException {
   public static Builder unspecifiedError(final Throwable cause) {
     return new Builder(DrillPBError.ErrorType.UNSPECIFIED_ERROR, cause);
   }
-
 
   /**
    * Builder class for DrillUserException. You can wrap an existing exception, in this case it will first check if
@@ -534,6 +551,13 @@ public class UserException extends DrillRuntimeException {
       return this;
     }
 
+    public Builder addContext(CustomErrorContext context) {
+      if (context != null) {
+        context.addContext(this);
+      }
+      return this;
+    }
+
     /**
      * pushes a string value to the top of the context
      *
@@ -581,6 +605,7 @@ public class UserException extends DrillRuntimeException {
       return this;
     }
 
+    private static final File SPIN_FILE =  new File("/tmp/drill/spin");
     /**
      * builds a user exception or returns the wrapped one. If the error is a system error, the error message is logged
      * to the given {@link Logger}.
@@ -592,38 +617,37 @@ public class UserException extends DrillRuntimeException {
 
       // To allow for debugging:
       //
-      //   A spinner code to make the execution stop here while the file '/tmp/drill/spin' exists
+      // A spinner code to make the execution stop here while the file '/tmp/drill/spin' exists
       // Can be used to attach a debugger, use jstack, etc
       // (do "clush -a touch /tmp/drill/spin" to turn this on across all the cluster nodes, and to
-      //  release the spinning threads do "clush -a rm /tmp/drill/spin")
+      // release the spinning threads do "clush -a rm /tmp/drill/spin")
       // The processID of the spinning thread (along with the error message) should then be found
       // in a file like  /tmp/drill/spin4148663301172491613.tmp
-      File spinFile = new File("/tmp/drill/spin");
-      if ( spinFile.exists() ) {
-        File tmpDir = new File("/tmp/drill");
+      if (SPIN_FILE.exists()) {
+        final File tmpDir = new File("/tmp/drill");
         File outErr = null;
         try {
           outErr = File.createTempFile("spin", ".tmp", tmpDir);
-          BufferedWriter bw = new BufferedWriter(new FileWriter(outErr));
+          final BufferedWriter bw = new BufferedWriter(new FileWriter(outErr));
           bw.write("Spinning process: " + ManagementFactory.getRuntimeMXBean().getName()
           /* After upgrading to JDK 9 - replace with: ProcessHandle.current().getPid() */);
           bw.write("\nError cause: " +
             (errorType == DrillPBError.ErrorType.SYSTEM ? ("SYSTEM ERROR: " + ErrorHelper.getRootMessage(cause)) : message));
           bw.close();
-        } catch (Exception ex) {
+        } catch (final Exception ex) {
           logger.warn("Failed creating a spinner tmp message file: {}", ex);
         }
-        while (spinFile.exists()) {
-          try { sleep(1_000); } catch (Exception ex) { /* ignore interruptions */ }
+        while (SPIN_FILE.exists()) {
+          try { sleep(1_000); } catch (final Exception ex) { /* ignore interruptions */ }
         }
-        try { outErr.delete(); } catch (Exception ex) { } // cleanup - remove err msg file
+        try { outErr.delete(); } catch (final Exception ex) { } // cleanup - remove err msg file
       }
 
       if (uex != null) {
         return uex;
       }
 
-      boolean isSystemError = errorType == DrillPBError.ErrorType.SYSTEM;
+      final boolean isSystemError = errorType == DrillPBError.ErrorType.SYSTEM;
 
       // make sure system errors use the root error message and display the root cause class name
       if (isSystemError) {
@@ -639,7 +663,7 @@ public class UserException extends DrillRuntimeException {
       if (isSystemError) {
         logger.error(newException.getMessage(), newException);
       } else {
-        StringBuilder buf = new StringBuilder();
+        final StringBuilder buf = new StringBuilder();
         buf.append("User Error Occurred");
         if (message != null) {
           buf.append(": ").append(message);
@@ -758,7 +782,7 @@ public class UserException extends DrillRuntimeException {
   }
 
   public String getErrorLocation() {
-    DrillbitEndpoint ep = context.getEndpoint();
+    final DrillbitEndpoint ep = context.getEndpoint();
     if (ep != null) {
       return ep.getAddress() + ":" + ep.getUserPort();
     } else {
@@ -774,7 +798,7 @@ public class UserException extends DrillRuntimeException {
    * @return generated user error message
    */
   private String generateMessage(boolean includeErrorIdAndIdentity) {
-    boolean seeLogsMessage = errorType == DrillPBError.ErrorType.INTERNAL_ERROR
+    final boolean seeLogsMessage = errorType == DrillPBError.ErrorType.INTERNAL_ERROR
         || errorType == DrillPBError.ErrorType.SYSTEM;
     return errorType + " ERROR: " + super.getMessage() + "\n\n" +
         context.generateContextMessage(includeErrorIdAndIdentity, seeLogsMessage);

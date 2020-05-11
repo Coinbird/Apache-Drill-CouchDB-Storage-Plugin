@@ -17,6 +17,7 @@
  */
 package org.apache.drill.exec.server.rest;
 
+import java.net.URL;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
@@ -26,11 +27,13 @@ import java.util.List;
 import javax.annotation.security.PermitAll;
 import javax.annotation.security.RolesAllowed;
 import javax.inject.Inject;
+import javax.servlet.http.HttpServletRequest;
 import javax.ws.rs.Consumes;
 import javax.ws.rs.FormParam;
 import javax.ws.rs.GET;
 import javax.ws.rs.POST;
 import javax.ws.rs.Path;
+import javax.ws.rs.PathParam;
 import javax.ws.rs.Produces;
 import javax.ws.rs.core.Context;
 import javax.ws.rs.core.MediaType;
@@ -50,6 +53,7 @@ import org.apache.drill.exec.server.options.SystemOptionManager;
 import org.apache.drill.exec.server.rest.DrillRestServer.UserAuthEnabled;
 import org.apache.drill.exec.server.rest.auth.DrillUserPrincipal;
 import org.apache.drill.exec.work.WorkManager;
+import org.apache.http.client.methods.HttpGet;
 import org.glassfish.jersey.server.mvc.Viewable;
 
 import com.fasterxml.jackson.annotation.JsonCreator;
@@ -63,6 +67,7 @@ public class StatusResources {
   public static final String REST_API_SUFFIX = ".json";
   public static final String PATH_STATUS_JSON = "/status" + REST_API_SUFFIX;
   public static final String PATH_STATUS = "/status";
+  public static final String PATH_METRICS = PATH_STATUS + "/metrics";
   public static final String PATH_OPTIONS_JSON = "/options" + REST_API_SUFFIX;
   public static final String PATH_INTERNAL_OPTIONS_JSON = "/internal_options" + REST_API_SUFFIX;
   public static final String PATH_OPTIONS = "/options";
@@ -70,9 +75,17 @@ public class StatusResources {
   //Used to access current filter state in WebUI
   private static final String CURRENT_FILTER_PARAM = "filter";
 
-  @Inject UserAuthEnabled authEnabled;
-  @Inject WorkManager work;
-  @Inject SecurityContext sc;
+  @Inject
+  UserAuthEnabled authEnabled;
+
+  @Inject
+  WorkManager work;
+
+  @Inject
+  SecurityContext sc;
+
+  @Inject
+  HttpServletRequest request;
 
   @GET
   @Path(StatusResources.PATH_STATUS_JSON)
@@ -88,7 +101,14 @@ public class StatusResources {
     return ViewableWithPermissions.create(authEnabled.get(), "/rest/status.ftl", sc, getStatusJSON());
   }
 
-  @SuppressWarnings("resource")
+  @GET
+  @Path(StatusResources.PATH_METRICS + "/{hostname}")
+  @Produces(MediaType.APPLICATION_JSON)
+  public String getMetrics(@PathParam("hostname") String hostname) throws Exception {
+    URL metricsURL = WebUtils.getDrillbitURL(work, request, hostname, StatusResources.PATH_METRICS);
+    return WebUtils.doHTTPRequest(new HttpGet(metricsURL.toURI()), work.getContext().getConfig());
+  }
+
   private List<OptionWrapper> getSystemOptionsJSONHelper(boolean internal)
   {
     List<OptionWrapper> options = new LinkedList<>();
@@ -136,7 +156,7 @@ public class StatusResources {
     return ViewableWithPermissions.create(authEnabled.get(),
       "/rest/options.ftl",
       sc,
-      new OptionsListing(options, fltrList, currFilter));
+      new OptionsListing(options, fltrList, currFilter, request));
   }
 
   @GET
@@ -155,7 +175,6 @@ public class StatusResources {
     return getSystemOptionsHelper(true, uriInfo);
   }
 
-  @SuppressWarnings("resource")
   @POST
   @Path("option/{optionName}")
   @RolesAllowed(DrillUserPrincipal.ADMIN_ROLE)
@@ -187,21 +206,29 @@ public class StatusResources {
     private final List<OptionWrapper> options;
     private final List<String> filters;
     private final String dynamicFilter;
+    private final String csrfToken;
 
-    public OptionsListing(List<OptionWrapper> optList, List<String> fltrList, String currFilter) {
+    public OptionsListing(List<OptionWrapper> optList, List<String> fltrList, String currFilter, HttpServletRequest request) {
       this.options = optList;
       this.filters = fltrList;
       this.dynamicFilter = currFilter;
+      csrfToken = WebUtils.getCsrfTokenFromHttpRequest(request);
     }
 
     public List<OptionWrapper> getOptions() {
       return options;
     }
+
     public List<String> getFilters() {
       return filters;
     }
+
     public String getDynamicFilter() {
       return dynamicFilter;
+    }
+
+    public String getCsrfToken() {
+      return csrfToken;
     }
   }
 

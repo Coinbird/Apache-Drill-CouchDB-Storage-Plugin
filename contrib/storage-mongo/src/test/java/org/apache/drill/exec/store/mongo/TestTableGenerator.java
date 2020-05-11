@@ -17,21 +17,24 @@
  */
 package org.apache.drill.exec.store.mongo;
 
+import java.io.File;
 import java.io.IOException;
+import java.net.URISyntaxException;
 
-import de.flapdoodle.embed.mongo.MongoImportProcess;
-import org.apache.commons.lang3.StringUtils;
+import org.apache.drill.shaded.guava.com.google.common.io.Resources;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import org.apache.drill.shaded.guava.com.google.common.io.Resources;
-
+import de.flapdoodle.embed.mongo.Command;
 import de.flapdoodle.embed.mongo.MongoImportExecutable;
+import de.flapdoodle.embed.mongo.MongoImportProcess;
 import de.flapdoodle.embed.mongo.MongoImportStarter;
 import de.flapdoodle.embed.mongo.config.IMongoImportConfig;
 import de.flapdoodle.embed.mongo.config.MongoImportConfigBuilder;
 import de.flapdoodle.embed.mongo.config.Net;
+import de.flapdoodle.embed.mongo.config.RuntimeConfigBuilder;
 import de.flapdoodle.embed.mongo.distribution.Version;
+import de.flapdoodle.embed.process.config.IRuntimeConfig;
 import de.flapdoodle.embed.process.runtime.Network;
 
 public class TestTableGenerator implements MongoTestConstants {
@@ -40,10 +43,9 @@ public class TestTableGenerator implements MongoTestConstants {
       .getLogger(TestTableGenerator.class);
 
   public static void importData(String dbName, String collectionName,
-      String fileName) throws InterruptedException,IOException {
-    String jsonFile = Resources.getResource(fileName).toString();
-    jsonFile = jsonFile.replaceFirst("file:", StringUtils.EMPTY);
-    generateTable(dbName, collectionName, jsonFile, true, true, false);
+                                String fileName) throws InterruptedException, IOException, URISyntaxException {
+    File jsonFile = new File(Resources.getResource(fileName).toURI());
+    generateTable(dbName, collectionName, jsonFile.getAbsolutePath(), true, true, false);
   }
 
   public static void generateTable(String dbName, String collection,
@@ -56,8 +58,15 @@ public class TestTableGenerator implements MongoTestConstants {
         .net(new Net(MONGOS_PORT, Network.localhostIsIPv6())).db(dbName)
         .collection(collection).upsert(upsert).dropCollection(drop)
         .jsonArray(jsonArray).importFile(jsonFile).build();
+    // Configure to write Mongo message to the log. Change this to
+    // .getDefaultInstance() if needed for debugging; will write to
+    // the console instead.
+    IRuntimeConfig rtConfig = new RuntimeConfigBuilder()
+        .defaultsWithLogger(Command.MongoImport, logger)
+        .daemonProcess(false)
+        .build();
     MongoImportExecutable importExecutable = MongoImportStarter
-        .getDefaultInstance().prepare(mongoImportConfig);
+        .getInstance(rtConfig).prepare(mongoImportConfig);
     MongoImportProcess importProcess = importExecutable.start();
 
     // import is in a separate process, we should wait until the process exit

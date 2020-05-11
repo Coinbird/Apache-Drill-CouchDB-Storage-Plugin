@@ -29,14 +29,14 @@ import org.apache.drill.common.types.TypeProtos;
 import org.apache.drill.common.types.Types;
 import org.apache.drill.exec.ExecConstants;
 import org.apache.drill.exec.memory.RootAllocator;
-import org.apache.drill.exec.physical.impl.xsort.managed.ExternalSortBatch;
 import org.apache.drill.exec.planner.physical.PlannerSettings;
-import org.apache.drill.exec.record.BatchSchema;
 import org.apache.drill.exec.record.metadata.SchemaBuilder;
+import org.apache.drill.exec.record.metadata.TupleMetadata;
 import org.apache.drill.test.LogFixture.LogFixtureBuilder;
 import org.apache.drill.test.QueryBuilder.QuerySummary;
-import org.apache.drill.test.rowSet.RowSet;
-import org.apache.drill.test.rowSet.RowSetBuilder;
+import org.apache.drill.exec.physical.impl.xsort.ExternalSortBatch;
+import org.apache.drill.exec.physical.rowSet.RowSet;
+import org.apache.drill.exec.physical.rowSet.RowSetBuilder;
 import org.apache.drill.test.rowSet.file.JsonFileBuilder;
 import org.junit.Ignore;
 import org.junit.Rule;
@@ -66,7 +66,7 @@ import ch.qos.logback.classic.Level;
 // real test.
 
 @Ignore
-public class ExampleTest {
+public class ExampleTest extends BaseTest {
   static final org.slf4j.Logger logger = org.slf4j.LoggerFactory.getLogger(ExampleTest.class);
 
   /**
@@ -119,10 +119,10 @@ public class ExampleTest {
         .resolve("employee.json")
         .toFile();
 
-      final BatchSchema schema = new SchemaBuilder()
+      final TupleMetadata schema = new SchemaBuilder()
         .add("id", Types.required(TypeProtos.MinorType.VARCHAR))
         .add("name", Types.required(TypeProtos.MinorType.VARCHAR))
-        .build();
+        .buildSchema();
 
       final RowSet rowSet = new RowSetBuilder(allocator, schema)
         .addRow("1", "kiwi")

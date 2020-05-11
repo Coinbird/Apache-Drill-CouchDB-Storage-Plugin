@@ -23,7 +23,7 @@
   <parent>
     <artifactId>exec-parent</artifactId>
     <groupId>org.apache.drill.exec</groupId>
-    <version>1.16.0-SNAPSHOT</version>
+    <version>1.18.0-SNAPSHOT</version>
   </parent>
   <artifactId>drill-rpc</artifactId>
   <name>exec/rpc</name>
@@ -45,17 +45,16 @@
       <artifactId>drill-memory-base</artifactId>
       <version>${project.version}</version>
     </dependency>
-    
+
     <dependency>
       <groupId>com.google.protobuf</groupId>
       <artifactId>protobuf-java</artifactId>
-      <version>2.5.0</version>
     </dependency>
     <dependency>
       <groupId>io.netty</groupId>
       <artifactId>netty-transport-native-epoll</artifactId>
       <classifier>linux-x86_64</classifier>
-      <version>4.0.48.Final</version>
+      <version>${netty.version}</version>
       <exclusions>
         <exclusion>
           <groupId>io.netty</groupId>
@@ -84,11 +83,5 @@
       <artifactId>hadoop-common</artifactId>
     </dependency>
   </dependencies>
-
-
-  <build>
-  </build>
-
-
 
 </project>

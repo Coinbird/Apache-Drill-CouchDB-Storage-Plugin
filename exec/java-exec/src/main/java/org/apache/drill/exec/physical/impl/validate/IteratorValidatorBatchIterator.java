@@ -20,7 +20,6 @@ package org.apache.drill.exec.physical.impl.validate;
 import static org.apache.drill.exec.record.RecordBatch.IterOutcome.NONE;
 import static org.apache.drill.exec.record.RecordBatch.IterOutcome.OK;
 import static org.apache.drill.exec.record.RecordBatch.IterOutcome.OK_NEW_SCHEMA;
-import static org.apache.drill.exec.record.RecordBatch.IterOutcome.STOP;
 
 import java.util.Iterator;
 
@@ -36,21 +35,23 @@ import org.apache.drill.exec.record.WritableBatch;
 import org.apache.drill.exec.record.selection.SelectionVector2;
 import org.apache.drill.exec.record.selection.SelectionVector4;
 import org.apache.drill.exec.vector.VectorValidator;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 
 public class IteratorValidatorBatchIterator implements CloseableRecordBatch {
-  private static final org.slf4j.Logger logger =
-      org.slf4j.LoggerFactory.getLogger(IteratorValidatorBatchIterator.class);
+  private static final Logger logger =
+      LoggerFactory.getLogger(IteratorValidatorBatchIterator.class);
 
-  static final boolean VALIDATE_VECTORS = false;
+  static final boolean VALIDATE_VECTORS = true;
 
-  /** For logging/debuggability only. */
+  /** For logging/debugability only. */
   private static volatile int instanceCount;
 
   /** @see org.apache.drill.exec.physical.config.IteratorValidator */
   private final boolean isRepeatable;
 
-  /** For logging/debuggability only. */
+  /** For logging/debugability only. */
   private final int instNum;
   {
     instNum = ++instanceCount;
@@ -62,24 +63,24 @@ public class IteratorValidatorBatchIterator implements CloseableRecordBatch {
    */
   private final RecordBatch incoming;
 
-  /** Incoming batch's type (simple class name); for logging/debuggability
+  /** Incoming batch's type (simple class name); for logging/debugability
    *  only. */
   private final String batchTypeName;
 
   /** Exception state of incoming batch; last value thrown by its next()
    *  method. */
-  private Throwable exceptionState = null;
+  private Throwable exceptionState;
 
   /** Main state of incoming batch; last value returned by its next() method. */
-  private IterOutcome batchState = null;
+  private IterOutcome batchState;
 
   /** Last schema retrieved after OK_NEW_SCHEMA or OK from next().  Null if none
-   *  yet. Currently for logging/debuggability only. */
-  private BatchSchema lastSchema = null;
+   *  yet. Currently for logging/debugability only. */
+  private BatchSchema lastSchema;
 
   /** Last schema retrieved after OK_NEW_SCHEMA from next().  Null if none yet.
-   *  Currently for logging/debuggability only. */
-  private BatchSchema lastNewSchema = null;
+   *  Currently for logging/debugability only. */
+  private BatchSchema lastNewSchema;
 
   /**
    * {@link IterOutcome} return value sequence validation state.
@@ -117,7 +118,6 @@ public class IteratorValidatorBatchIterator implements CloseableRecordBatch {
   public IteratorValidatorBatchIterator(RecordBatch incoming) {
     this(incoming, false);
   }
-
 
   public void enableBatchValidation(boolean option) {
     validateBatches = option;
@@ -182,8 +182,8 @@ public class IteratorValidatorBatchIterator implements CloseableRecordBatch {
   }
 
   @Override
-  public void kill(boolean sendUpstream) {
-    incoming.kill(sendUpstream);
+  public void cancel() {
+    incoming.cancel();
   }
 
   @Override
@@ -225,7 +225,7 @@ public class IteratorValidatorBatchIterator implements CloseableRecordBatch {
                 instNum, batchTypeName, exceptionState, batchState));
       }
       // (Note:  This could use validationState.)
-      if ((!isRepeatable && batchState == NONE) || batchState == STOP) {
+      if (!isRepeatable && batchState == NONE) {
         throw new IllegalStateException(
             String.format(
                 "next() [on #%d, %s] called again after it returned %s."
@@ -269,23 +269,15 @@ public class IteratorValidatorBatchIterator implements CloseableRecordBatch {
             validationState = ValidationState.TERMINAL;
           }
           break;
-        case STOP:
-          // STOP is allowed at any time, except if already terminated (checked
-          // above).
-          // STOP moves to terminal high-level state.
-          validationState = ValidationState.TERMINAL;
-          break;
         case NOT_YET:
-        case OUT_OF_MEMORY:
-          // NOT_YET and OUT_OF_MEMORY are allowed at any time, except if
+          // NOT_YET is allowed at any time, except if
           // terminated (checked above).
-          // NOT_YET and OUT_OF_MEMORY OK don't change high-level state.
+          // NOT_YET doesn't change high-level state.
           break;
         default:
           throw new AssertionError(
               "Unhandled new " + IterOutcome.class.getSimpleName() + " value "
               + batchState);
-          //break;
       }
 
       // Validate schema when available.
@@ -342,8 +334,16 @@ public class IteratorValidatorBatchIterator implements CloseableRecordBatch {
   }
 
   private void validateBatch() {
-    if (validateBatches) {
-      new BatchValidator(incoming).validate();
+    if (validateBatches || VALIDATE_VECTORS) {
+      if (! BatchValidator.validate(incoming)) {
+        throw new IllegalStateException(
+            "Batch validation failed. Source operator: " +
+            incoming.getClass().getSimpleName());
+      }
+      // The following validation currently calculates, and discards
+      // a hash code. Since it requires manual checking, it is
+      // disabled by default.
+      // VectorValidator.validate(incoming);
     }
   }
 
@@ -374,11 +374,6 @@ public class IteratorValidatorBatchIterator implements CloseableRecordBatch {
   }
 
   public RecordBatch getIncoming() { return incoming; }
-
-  @Override
-  public boolean hasFailed() {
-    return exceptionState != null || batchState == STOP;
-  }
 
   @Override
   public void dump() {

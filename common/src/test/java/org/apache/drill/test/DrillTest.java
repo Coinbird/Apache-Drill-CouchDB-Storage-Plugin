@@ -36,9 +36,10 @@ import org.slf4j.Logger;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
-public class DrillTest {
+public class DrillTest extends BaseTest {
 
   protected static final ObjectMapper objectMapper;
+
   static {
     System.setProperty("line.separator", "\n");
     objectMapper = new ObjectMapper();
@@ -65,12 +66,12 @@ public class DrillTest {
   @Rule public final ExpectedException thrownException = ExpectedException.none();
 
   @BeforeClass
-  public static void initDrillTest() throws Exception {
+  public static void initDrillTest() {
     memWatcher = new MemWatcher();
   }
 
   @AfterClass
-  public static void finiDrillTest() throws InterruptedException{
+  public static void finishDrillTest() {
     testReporter.info(String.format("Test Class done (%s): %s.", memWatcher.getMemString(true), className));
     // Clear interrupts for next test
     Thread.interrupted();

@@ -24,10 +24,11 @@ import java.util.List;
 import javax.inject.Named;
 
 import org.apache.drill.common.expression.SchemaPath;
+import org.apache.drill.exec.ExecConstants;
 import org.apache.drill.exec.compile.sig.RuntimeOverridden;
 import org.apache.drill.exec.exception.SchemaChangeException;
 import org.apache.drill.exec.expr.ClassGenerator;
-import org.apache.drill.exec.expr.TypeHelper;
+import org.apache.drill.exec.memory.BaseAllocator;
 import org.apache.drill.exec.memory.BufferAllocator;
 import org.apache.drill.exec.ops.AccountingDataTunnel;
 import org.apache.drill.exec.ops.ExchangeFragmentContext;
@@ -50,14 +51,15 @@ import org.apache.drill.exec.record.VectorWrapper;
 import org.apache.drill.exec.record.WritableBatch;
 import org.apache.drill.exec.record.selection.SelectionVector2;
 import org.apache.drill.exec.record.selection.SelectionVector4;
-import org.apache.drill.exec.vector.ValueVector;
-
 import org.apache.drill.shaded.guava.com.google.common.collect.Lists;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 public abstract class PartitionerTemplate implements Partitioner {
-  static final org.slf4j.Logger logger = org.slf4j.LoggerFactory.getLogger(PartitionerTemplate.class);
+  static final Logger logger = LoggerFactory.getLogger(PartitionerTemplate.class);
 
-  // Always keep the recordCount as (2^x) - 1 to better utilize the memory allocation in ValueVectors
+  // Always keep the recordCount as (2^x) - 1 to better utilize the memory
+  // allocation in ValueVectors
   private static final int DEFAULT_RECORD_BATCH_SIZE = (1 << 10) - 1;
 
   private SelectionVector2 sv2;
@@ -68,7 +70,7 @@ public abstract class PartitionerTemplate implements Partitioner {
   protected FragmentContext context;
   private int start;
   private int end;
-  private List<OutgoingRecordBatch> outgoingBatches = Lists.newArrayList();
+  private final List<OutgoingRecordBatch> outgoingBatches = Lists.newArrayList();
 
   private int outgoingRecordBatchSize = DEFAULT_RECORD_BATCH_SIZE;
 
@@ -102,9 +104,44 @@ public abstract class PartitionerTemplate implements Partitioner {
     this.end = end;
     doSetup(context, incoming, null);
 
-    // Half the outgoing record batch size if the number of senders exceeds 1000 to reduce the total amount of memory
-    // allocated.
-    if (popConfig.getDestinations().size() > 1000) {
+    // Consider the system/session option to allow the buffer size to shrink
+    // linearly with the increase in slice count, over some limit:
+    // exec.partition.mem_throttle:
+    // The default is 0, which leaves the current logic unchanged.
+    // If set to a positive value, then when the slice count exceeds that
+    // amount, the buffer size per sender is reduced.
+    // The reduction factor is 1 / (slice count - threshold), with a minimum
+    // batch size of 256 records.
+    //
+    // So, if we set the threshold at 2, and run 10 slices, each slice will
+    // get 1024 / 8 = 256 records.
+    //
+    // This option controls memory, but at an obvious cost of increasing overhead.
+    // One could argue that this is a good thing. As the number of senders
+    // increases, the number of records going to each sender decreases, which
+    // increases the time that batches must accumulate before they are sent.
+    //
+    // If the option is enabled, and buffer size reduction kicks in, you'll
+    // find an info-level log message which details the reduction:
+    // exec.partition.mem_throttle is set to 2: 10 receivers,
+    //       reduced send buffer size from 1024 to 256 rows
+    //
+    // See  DRILL-7675, DRILL-7686.
+    int destinationCount = popConfig.getDestinations().size();
+    int reductionCutoff = oContext.getFragmentContext().getOptions().getInt(
+        ExecConstants.PARTITIONER_MEMORY_REDUCTION_THRESHOLD_KEY);
+    if (reductionCutoff > 0 && destinationCount >= reductionCutoff) {
+      int reducedBatchSize = Math.max(256,
+          (DEFAULT_RECORD_BATCH_SIZE + 1) / (destinationCount - reductionCutoff));
+      outgoingRecordBatchSize = BaseAllocator.nextPowerOfTwo(reducedBatchSize) - 1;
+      logger.info("{} is set to {}: {} receivers, reduced send buffer size from {} to {} rows",
+          ExecConstants.PARTITIONER_MEMORY_REDUCTION_THRESHOLD_KEY,
+          reductionCutoff, destinationCount,
+          DEFAULT_RECORD_BATCH_SIZE, outgoingRecordBatchSize);
+    } else if (destinationCount > 1000) {
+      // Half the outgoing record batch size if the number of senders exceeds 1000 to reduce the total amount of memory
+      // allocated.
+
       // Always keep the recordCount as (2^x) - 1 to better utilize the memory allocation in ValueVectors
       outgoingRecordBatchSize = (DEFAULT_RECORD_BATCH_SIZE + 1)/2 - 1;
     }
@@ -112,7 +149,7 @@ public abstract class PartitionerTemplate implements Partitioner {
     int fieldId = 0;
     for (MinorFragmentEndpoint destination : popConfig.getDestinations()) {
       // create outgoingBatches only for subset of Destination Points
-      if ( fieldId >= start && fieldId < end ) {
+      if (fieldId >= start && fieldId < end) {
         logger.debug("start: {}, count: {}, fieldId: {}", start, end, fieldId);
         outgoingBatches.add(newOutgoingRecordBatch(stats, popConfig,
           context.getDataTunnel(destination.getEndpoint()), context, oContext.getAllocator(), destination.getId()));
@@ -147,7 +184,6 @@ public abstract class PartitionerTemplate implements Partitioner {
    * generated inner class. Byte-code manipulation appears to fix up the byte codes
    * directly. The name is special, it must be "new" + inner class name.
    */
-
   protected OutgoingRecordBatch newOutgoingRecordBatch(
                                OperatorStats stats, HashPartitionSender operator, AccountingDataTunnel tunnel,
                                FragmentContext context, BufferAllocator allocator, int oppositeMinorFragmentId) {
@@ -257,24 +293,23 @@ public abstract class PartitionerTemplate implements Partitioner {
     private final AccountingDataTunnel tunnel;
     private final HashPartitionSender operator;
     private final FragmentContext context;
-    private final BufferAllocator allocator;
-    private final VectorContainer vectorContainer = new VectorContainer();
+    private final VectorContainer vectorContainer;
     private final int oppositeMinorFragmentId;
     private final OperatorStats stats;
 
-    private boolean isLast = false;
-    private boolean dropAll = false;
+    private boolean isLast;
+    private boolean dropAll;
     private int recordCount;
     private int totalRecords;
 
     public OutgoingRecordBatch(OperatorStats stats, HashPartitionSender operator, AccountingDataTunnel tunnel,
                                FragmentContext context, BufferAllocator allocator, int oppositeMinorFragmentId) {
       this.context = context;
-      this.allocator = allocator;
       this.operator = operator;
       this.tunnel = tunnel;
       this.stats = stats;
       this.oppositeMinorFragmentId = oppositeMinorFragmentId;
+      this.vectorContainer = new VectorContainer(allocator);
     }
 
     protected void copy(int inIndex) throws IOException {
@@ -306,10 +341,14 @@ public abstract class PartitionerTemplate implements Partitioner {
 
     public void flush(boolean schemaChanged) throws IOException {
       if (dropAll) {
-        // If we are in dropAll mode, we still want to copy the data, because we can't stop copying a single outgoing
-        // batch with out stopping all outgoing batches. Other option is check for status of dropAll before copying
-        // every single record in copy method which has the overhead for every record all the time. Resetting the output
-        // count, reusing the same buffers and copying has overhead only for outgoing batches whose receiver has
+        // If we are in dropAll mode, we still want to copy the data, because we
+        // can't stop copying a single outgoing
+        // batch with out stopping all outgoing batches. Other option is check
+        // for status of dropAll before copying
+        // every single record in copy method which has the overhead for every
+        // record all the time. Resetting the output
+        // count, reusing the same buffers and copying has overhead only for
+        // outgoing batches whose receiver has
         // terminated.
 
         // Reset the count to 0 and use existing buffers for exhausting input where receiver of this batch is terminated
@@ -332,11 +371,7 @@ public abstract class PartitionerTemplate implements Partitioner {
         return;
       }
 
-      if (recordCount != 0) {
-        for (VectorWrapper<?> w : vectorContainer) {
-          w.getValueVector().getMutator().setValueCount(recordCount);
-        }
-      }
+      vectorContainer.setValueCount(recordCount);
 
       FragmentWritableBatch writableBatch = new FragmentWritableBatch(isLastBatch,
           handle.getQueryId(),
@@ -354,8 +389,10 @@ public abstract class PartitionerTemplate implements Partitioner {
         stats.stopWait();
       }
 
-      // If the current batch is the last batch, then set a flag to ignore any requests to flush the data
-      // This is possible when the receiver is terminated, but we still get data from input operator
+      // If the current batch is the last batch, then set a flag to ignore any
+      // requests to flush the data
+      // This is possible when the receiver is terminated, but we still get data
+      // from input operator
       if (isLastBatch) {
         dropAll = true;
       }
@@ -372,9 +409,7 @@ public abstract class PartitionerTemplate implements Partitioner {
     }
 
     private void allocateOutgoingRecordBatch() {
-      for (VectorWrapper<?> v : vectorContainer) {
-        v.getValueVector().allocateNew();
-      }
+      vectorContainer.allocate(outgoingRecordBatchSize);
     }
 
     public void updateStats(FragmentWritableBatch writableBatch) {
@@ -387,13 +422,7 @@ public abstract class PartitionerTemplate implements Partitioner {
      * Initialize the OutgoingBatch based on the current schema in incoming RecordBatch
      */
     public void initializeBatch() {
-      for (VectorWrapper<?> v : incoming) {
-        // create new vector
-        @SuppressWarnings("resource")
-        ValueVector outgoingVector = TypeHelper.getNewVector(v.getField(), allocator);
-        outgoingVector.setInitialCapacity(outgoingRecordBatchSize);
-        vectorContainer.add(outgoingVector);
-      }
+      vectorContainer.buildFrom(incoming.getSchema());
       allocateOutgoingRecordBatch();
       try {
         doSetup(incoming, vectorContainer);
@@ -421,7 +450,6 @@ public abstract class PartitionerTemplate implements Partitioner {
     public int getRecordCount() {
       return recordCount;
     }
-
 
     @Override
     public long getTotalRecords() {
@@ -460,6 +488,5 @@ public abstract class PartitionerTemplate implements Partitioner {
     public void clear(){
       vectorContainer.clear();
     }
-
   }
 }

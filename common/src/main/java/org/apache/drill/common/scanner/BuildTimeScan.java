@@ -28,9 +28,12 @@ import java.net.URL;
 import java.util.List;
 import java.util.Set;
 
+import org.apache.drill.common.config.ConfigConstants;
 import org.apache.drill.common.config.DrillConfig;
 import org.apache.drill.common.exceptions.DrillRuntimeException;
 import org.apache.drill.common.scanner.persistence.ScanResult;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.ObjectReader;
@@ -41,7 +44,7 @@ import com.fasterxml.jackson.databind.ObjectWriter;
  * @see BuildTimeScan#main(String[])
  */
 public class BuildTimeScan {
-  private static final org.slf4j.Logger logger = org.slf4j.LoggerFactory.getLogger(BuildTimeScan.class);
+  private static final Logger logger = LoggerFactory.getLogger(BuildTimeScan.class);
   private static final String REGISTRY_FILE = "META-INF/drill-module-scan/registry.json";
 
   private static final ObjectMapper mapper = new ObjectMapper().enable(INDENT_OUTPUT);
@@ -136,7 +139,7 @@ public class BuildTimeScan {
       basePath = "/" + basePath;
     }
     URL url = new URL("file:" + basePath);
-    Set<URL> markedPaths = ClassPathScanner.getMarkedPaths();
+    Set<URL> markedPaths = ClassPathScanner.getMarkedPaths(ConfigConstants.DRILL_JAR_MARKER_FILE_RESOURCE_PATHNAME);
     if (!markedPaths.contains(url)) {
       throw new IllegalArgumentException(url + " not in " + markedPaths);
     }

@@ -23,8 +23,6 @@ import org.apache.drill.exec.ops.MetricDef;
 import org.apache.drill.exec.physical.base.PhysicalOperator;
 
 public abstract class AbstractBinaryRecordBatch<T extends PhysicalOperator> extends  AbstractRecordBatch<T> {
-  private static final org.slf4j.Logger logger =
-    org.slf4j.LoggerFactory.getLogger(new Object() {}.getClass().getEnclosingClass());
 
   protected final RecordBatch left;
   protected final RecordBatch right;
@@ -76,15 +74,6 @@ public abstract class AbstractBinaryRecordBatch<T extends PhysicalOperator> exte
   }
 
   protected boolean verifyOutcomeToSetBatchState(IterOutcome leftOutcome, IterOutcome rightOutcome) {
-    if (leftOutcome == IterOutcome.STOP || rightOutcome == IterOutcome.STOP) {
-      state = BatchState.STOP;
-      return false;
-    }
-
-    if (leftOutcome == IterOutcome.OUT_OF_MEMORY || rightOutcome == IterOutcome.OUT_OF_MEMORY) {
-      state = BatchState.OUT_OF_MEMORY;
-      return false;
-    }
 
     if (checkForEarlyFinish(leftOutcome, rightOutcome)) {
       state = BatchState.DONE;
@@ -93,7 +82,6 @@ public abstract class AbstractBinaryRecordBatch<T extends PhysicalOperator> exte
 
     // EMIT outcome is not expected as part of first batch from either side
     if (leftOutcome == IterOutcome.EMIT || rightOutcome == IterOutcome.EMIT) {
-      state = BatchState.STOP;
       throw new IllegalStateException("Unexpected IterOutcome.EMIT received either from left or right side in " +
         "buildSchema phase");
     }
@@ -141,5 +129,11 @@ public abstract class AbstractBinaryRecordBatch<T extends PhysicalOperator> exte
     stats.setLongStat(Metric.AVG_OUTPUT_BATCH_BYTES, batchMemoryManager.getAvgOutputBatchSize());
     stats.setLongStat(Metric.AVG_OUTPUT_ROW_BYTES, batchMemoryManager.getAvgOutputRowWidth());
     stats.setLongStat(Metric.OUTPUT_RECORD_COUNT, batchMemoryManager.getTotalOutputRecords());
+  }
+
+  @Override
+  protected void cancelIncoming() {
+    left.cancel();
+    right.cancel();
   }
 }

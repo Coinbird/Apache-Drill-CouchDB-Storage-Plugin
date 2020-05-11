@@ -19,7 +19,6 @@ package org.apache.drill.exec.vector.accessor.writer;
 
 import org.apache.drill.exec.record.metadata.ColumnMetadata;
 import org.apache.drill.exec.vector.BaseDataValueVector;
-import org.apache.drill.exec.vector.accessor.ColumnConversionFactory;
 import org.apache.drill.exec.vector.accessor.ColumnWriter;
 import org.apache.drill.exec.vector.accessor.ColumnWriterIndex;
 import org.apache.drill.exec.vector.accessor.ObjectType;
@@ -32,7 +31,6 @@ import org.apache.drill.exec.vector.accessor.impl.HierarchicalFormatter;
  * throw an exception; subclasses simply override the supported
  * method(s).
  */
-
 public abstract class AbstractScalarWriterImpl extends AbstractScalarWriter implements WriterEvents {
 
   /**
@@ -48,18 +46,10 @@ public abstract class AbstractScalarWriterImpl extends AbstractScalarWriter impl
    */
   public static class ScalarObjectWriter extends AbstractObjectWriter {
 
-    private final WriterEvents writerEvents;
-    private ScalarWriter scalarWriter;
+    private final AbstractScalarWriterImpl scalarWriter;
 
-    public ScalarObjectWriter(AbstractScalarWriterImpl scalarWriter) {
-      final ColumnMetadata metadata = scalarWriter.schema();
-      final ColumnConversionFactory factory = metadata.typeConverter();
-      writerEvents = scalarWriter;
-      if (factory == null) {
-        this.scalarWriter = scalarWriter;
-      } else {
-        this.scalarWriter = factory.newWriter(metadata, scalarWriter);
-      }
+    public ScalarObjectWriter(AbstractScalarWriterImpl baseWriter) {
+      scalarWriter = baseWriter;
     }
 
     @Override
@@ -69,14 +59,14 @@ public abstract class AbstractScalarWriterImpl extends AbstractScalarWriter impl
     public ColumnWriter writer() { return scalarWriter; }
 
     @Override
-    public WriterEvents events() { return writerEvents; }
+    public WriterEvents events() { return scalarWriter; }
 
     @Override
     public void dump(HierarchicalFormatter format) {
       format
         .startObject(this)
         .attribute("scalarWriter");
-      writerEvents.dump(format);
+      scalarWriter.dump(format);
       format.endObject();
     }
   }
@@ -89,7 +79,6 @@ public abstract class AbstractScalarWriterImpl extends AbstractScalarWriter impl
    * For example, all top-level, simple columns see the same row index.
    * All columns within a repeated map see the same (inner) index, etc.
    */
-
   protected ColumnWriterIndex vectorIndex;
 
   @Override
@@ -130,6 +119,9 @@ public abstract class AbstractScalarWriterImpl extends AbstractScalarWriter impl
 
   @Override
   public void saveRow() { }
+
+  @Override
+  public boolean isProjected() { return true; }
 
   @Override
   public void dump(HierarchicalFormatter format) {

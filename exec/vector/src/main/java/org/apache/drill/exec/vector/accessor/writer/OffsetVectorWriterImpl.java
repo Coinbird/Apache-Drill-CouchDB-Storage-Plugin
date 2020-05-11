@@ -19,6 +19,8 @@ package org.apache.drill.exec.vector.accessor.writer;
 
 import org.apache.drill.exec.vector.BaseDataValueVector;
 import org.apache.drill.exec.vector.UInt4Vector;
+import org.apache.drill.exec.vector.accessor.ColumnReader;
+import org.apache.drill.exec.vector.accessor.InvalidConversionError;
 import org.apache.drill.exec.vector.accessor.ValueType;
 import org.apache.drill.exec.vector.accessor.impl.HierarchicalFormatter;
 
@@ -116,6 +118,24 @@ import org.apache.drill.exec.vector.accessor.impl.HierarchicalFormatter;
  * <p>
  * See {@link ObjectArrayWriter} for information about arrays of
  * maps (arrays of multiple columns.)
+ *
+ * <h4>Empty Slots</h4>
+ *
+ * The offset vector writer handles empty slots in two distinct ways.
+ * First, the writer handles its own empties. Suppose that this is the offset
+ * vector for a VarChar column. Suppose we write "Foo" in the first slot. Now
+ * we have an offset vector with the values <tt>[ 0 3 ]</tt>. Suppose the client
+ * skips several rows and next writes at slot 5. We must copy the latest
+ * offset (3) into all the skipped slots: <tt>[ 0 3 3 3 3 3 ]</tt>. The result
+ * is a set of four empty VarChars in positions 1, 2, 3 and 4. (Here, remember
+ * that the offset vector always has one more value than the the number of rows.)
+ * <p>
+ * The second way to fill empties is in the data vector. The data vector may choose
+ * to fill the four "empty" slots with a value, say "X". In this case, it is up to
+ * the data vector to fill in the values, calling into this vector to set each
+ * offset. Note that when doing this, the calls are a bit different than for writing
+ * a regular value because we want to write at the "last write position", not the
+ * current row position. See {@link BaseVarWidthWriter} for an example.
  */
 
 public class OffsetVectorWriterImpl extends AbstractFixedWidthWriter implements OffsetVectorWriter {
@@ -139,7 +159,7 @@ public class OffsetVectorWriterImpl extends AbstractFixedWidthWriter implements 
    * committed in {@link @endValue()}.
    */
 
-  private int nextOffset;
+  protected int nextOffset;
 
   public OffsetVectorWriterImpl(UInt4Vector vector) {
     this.vector = vector;
@@ -175,7 +195,7 @@ public class OffsetVectorWriterImpl extends AbstractFixedWidthWriter implements 
   }
 
   @Override
-  public int nextOffset() { return nextOffset; }
+  public int nextOffset() {return nextOffset; }
 
   @Override
   public int rowStartOffset() { return rowStartOffset; }
@@ -193,63 +213,68 @@ public class OffsetVectorWriterImpl extends AbstractFixedWidthWriter implements 
 
   protected final int prepareWrite() {
 
-    // "Fast path" for the normal case of no fills, no overflow.
-    // This is the only bounds check we want to do for the entire
-    // set operation.
-
     // This is performance critical code; every operation counts.
     // Please be thoughtful when changing the code.
 
-    final int valueIndex = vectorIndex.vectorIndex();
-    int writeIndex = valueIndex + 1;
-    if (lastWriteIndex + 1 < valueIndex || writeIndex >= capacity) {
-      writeIndex =  prepareWrite(writeIndex);
+    int valueIndex = prepareFill();
+    int fillCount = valueIndex - lastWriteIndex - 1;
+    if (fillCount > 0) {
+      fillEmpties(fillCount);
     }
 
     // Track the last write location for zero-fill use next time around.
 
     lastWriteIndex = valueIndex;
-    return writeIndex;
-  }
-
-  protected int prepareWrite(int writeIndex) {
-
-    // Either empties must be filed or the vector is full.
-
-    resize(writeIndex);
-
-    // Call to resize may cause rollover, so reset write index
-    // afterwards.
-
-    final int valueIndex = vectorIndex.vectorIndex();
-
-    // Fill empties to the write position.
-    // Fill empties works of the row index, not the write
-    // index. (Yes, this is complex...)
-
-    fillEmpties(valueIndex);
     return valueIndex + 1;
   }
 
+  public final int prepareFill() {
+    int valueIndex = vectorIndex.vectorIndex();
+    if (valueIndex + 1 < capacity) {
+      return valueIndex;
+    }
+    resize(valueIndex + 1);
+
+    // Call to resize may cause rollover, so get new write index afterwards.
+
+    return vectorIndex.vectorIndex();
+  }
+
   @Override
-  protected final void fillEmpties(final int valueIndex) {
-    while (lastWriteIndex < valueIndex - 1) {
-      drillBuf.setInt((++lastWriteIndex + 1) * VALUE_WIDTH, nextOffset);
+  protected final void fillEmpties(int fillCount) {
+    for (int i = 0; i < fillCount; i++) {
+      fillOffset(nextOffset);
     }
   }
 
   @Override
-  public final void setNextOffset(final int newOffset) {
-    final int writeIndex = prepareWrite();
+  public final void setNextOffset(int newOffset) {
+    int writeIndex = prepareWrite();
     drillBuf.setInt(writeIndex * VALUE_WIDTH, newOffset);
     nextOffset = newOffset;
+  }
+
+  public final void reviseOffset(int newOffset) {
+    int writeIndex = vectorIndex.vectorIndex() + 1;
+    drillBuf.setInt(writeIndex * VALUE_WIDTH, newOffset);
+    nextOffset = newOffset;
+  }
+
+  public final void fillOffset(int newOffset) {
+    drillBuf.setInt((++lastWriteIndex + 1) * VALUE_WIDTH, newOffset);
+    nextOffset = newOffset;
+  }
+
+  @Override
+  public final void setValue(Object value) {
+    throw new InvalidConversionError(
+        "setValue() not supported for the offset vector writer: " + value);
   }
 
   @Override
   public void skipNulls() {
 
-    // Nothing to do. Fill empties logic will fill in missing
-    // offsets.
+    // Nothing to do. Fill empties logic will fill in missing offsets.
   }
 
   @Override
@@ -264,27 +289,42 @@ public class OffsetVectorWriterImpl extends AbstractFixedWidthWriter implements 
     // Rollover is occurring. This means the current row is not complete.
     // We want to keep 0..(row index - 1) which gives us (row index)
     // rows. But, this being an offset vector, we add one to account
-    // for the extra 0 value at the start.
+    // for the extra 0 value at the start. That is, we want to set
+    // the value count to the current row start index, which already
+    // is set to one past the index of the last zero-based index.
+    // (Offset vector indexes are confusing.)
 
-    setValueCount(vectorIndex.rowStartIndex() + 1);
+    setValueCount(vectorIndex.rowStartIndex());
   }
 
   @Override
   public void postRollover() {
-    final int newNext = nextOffset - rowStartOffset;
+    int newNext = nextOffset - rowStartOffset;
     super.postRollover();
     nextOffset = newNext;
   }
 
   @Override
   public void setValueCount(int valueCount) {
-    mandatoryResize(valueCount);
 
-    // Value count are in offset vector positions. Fill empties
-    // works in row positions.
+    if (valueCount == 0) {
 
-    fillEmpties(valueCount);
-    vector().getBuffer().writerIndex((valueCount + 1) * VALUE_WIDTH);
+      // Special case: if the total number of values is zero,
+      // then the offset vector should have 0 (not 1) values.
+      // Serialization code relies on this fact.
+
+      vector().getBuffer().writerIndex(0);
+    } else {
+
+      // Value count is in row positions, not index
+      // positions. (There are one more index positions
+      // than row positions.)
+
+      int offsetCount = valueCount + 1;
+      mandatoryResize(offsetCount);
+      fillEmpties(valueCount - lastWriteIndex - 1);
+      vector().getBuffer().writerIndex(offsetCount * VALUE_WIDTH);
+    }
   }
 
   @Override
@@ -295,5 +335,15 @@ public class OffsetVectorWriterImpl extends AbstractFixedWidthWriter implements 
       .attribute("lastWriteIndex", lastWriteIndex)
       .attribute("nextOffset", nextOffset)
       .endObject();
+  }
+
+  @Override
+  public void setDefaultValue(Object value) {
+    throw new UnsupportedOperationException("Encoding not supported for offset vectors");
+  }
+
+  @Override
+  public void copy(ColumnReader from) {
+    throw new UnsupportedOperationException("Copying of offset vectors not supported");
   }
 }

@@ -24,32 +24,30 @@ import org.apache.calcite.linq4j.tree.Expressions;
 import org.apache.calcite.schema.SchemaPlus;
 import org.apache.calcite.schema.impl.AbstractSchema;
 import org.apache.calcite.util.BuiltInMethod;
-import org.apache.drill.common.exceptions.ExecutionSetupException;
 import org.apache.drill.common.exceptions.UserException;
 import org.apache.drill.common.exceptions.UserExceptionUtils;
 import org.apache.drill.exec.planner.sql.SchemaUtilites;
 import org.apache.drill.exec.store.SchemaConfig;
 import org.apache.drill.exec.store.StoragePlugin;
 import org.apache.drill.exec.store.StoragePluginRegistry;
+import org.apache.drill.exec.store.StoragePluginRegistry.PluginException;
 import org.apache.drill.exec.store.SubSchemaWrapper;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 
 /**
- * This class is to allow us loading schemas from storage plugins later when {@link #getSubSchema(String, boolean)}
+ * Loads schemas from storage plugins later when {@link #getSubSchema(String, boolean)}
  * is called.
  */
 public class DynamicRootSchema extends DynamicSchema {
-  private static final org.slf4j.Logger logger = org.slf4j.LoggerFactory.getLogger(DynamicRootSchema.class);
+  private static final Logger logger = LoggerFactory.getLogger(DynamicRootSchema.class);
 
-  protected SchemaConfig schemaConfig;
-  protected StoragePluginRegistry storages;
-
-  public StoragePluginRegistry getSchemaFactories() {
-    return storages;
-  }
+  private final SchemaConfig schemaConfig;
+  private final StoragePluginRegistry storages;
 
   /** Creates a root schema. */
   DynamicRootSchema(StoragePluginRegistry storages, SchemaConfig schemaConfig) {
@@ -61,6 +59,8 @@ public class DynamicRootSchema extends DynamicSchema {
   @Override
   protected CalciteSchema getImplicitSubSchema(String schemaName,
                                                boolean caseSensitive) {
+    // Drill registers schemas in lower case, see AbstractSchema constructor
+    schemaName = schemaName == null ? null : schemaName.toLowerCase();
     CalciteSchema retSchema = getSubSchemaMap().get(schemaName);
     if (retSchema != null) {
       return retSchema;
@@ -76,11 +76,11 @@ public class DynamicRootSchema extends DynamicSchema {
    * @param schemaName the name of the schema
    * @param caseSensitive whether matching for the schema name is case sensitive
    */
-  public void loadSchemaFactory(String schemaName, boolean caseSensitive) {
+  private void loadSchemaFactory(String schemaName, boolean caseSensitive) {
     try {
       SchemaPlus schemaPlus = this.plus();
-      StoragePlugin plugin = getSchemaFactories().getPlugin(schemaName);
-      if (plugin != null && plugin.getConfig().isEnabled()) {
+      StoragePlugin plugin = storages.getPlugin(schemaName);
+      if (plugin != null) {
         plugin.registerSchemas(schemaConfig, schemaPlus);
         return;
       }
@@ -88,7 +88,7 @@ public class DynamicRootSchema extends DynamicSchema {
       // Could not find the plugin of schemaName. The schemaName could be `dfs.tmp`, a 2nd level schema under 'dfs'
       List<String> paths = SchemaUtilites.getSchemaPathAsList(schemaName);
       if (paths.size() == 2) {
-        plugin = getSchemaFactories().getPlugin(paths.get(0));
+        plugin = storages.getPlugin(paths.get(0));
         if (plugin == null) {
           return;
         }
@@ -117,7 +117,7 @@ public class DynamicRootSchema extends DynamicSchema {
           schemaPlus.add(wrapper.getName(), wrapper);
         }
       }
-    } catch(ExecutionSetupException | IOException ex) {
+    } catch(PluginException | IOException ex) {
       logger.warn("Failed to load schema for \"" + schemaName + "\"!", ex);
       // We can't proceed further without a schema, throw a runtime exception.
       UserException.Builder exceptBuilder =

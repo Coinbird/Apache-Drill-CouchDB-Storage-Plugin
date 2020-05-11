@@ -19,6 +19,8 @@ package org.apache.drill.yarn.appMaster;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
+import org.apache.drill.common.util.GuavaPatcher;
+import org.apache.drill.common.util.ProtobufPatcher;
 import org.apache.drill.yarn.appMaster.ControllerFactory.ControllerFactoryException;
 import org.apache.drill.yarn.appMaster.http.WebServer;
 import org.apache.drill.yarn.core.DoyConfigException;
@@ -44,6 +46,21 @@ import org.apache.drill.yarn.core.DrillOnYarnConfig;
  */
 
 public class DrillApplicationMaster {
+
+  static {
+    /*
+     * Drill-on-YARN uses Hadoop dependencies that use older version of protobuf,
+     * and override some methods that became final in recent protobuf versions.
+     * This code removes these final modifiers.
+     */
+    ProtobufPatcher.patch();
+    /*
+     * Some libraries, such as Hadoop or HBase, depend on incompatible versions of Guava.
+     * This code adds back some methods to so that the libraries can work with single Guava version.
+     */
+    GuavaPatcher.patch();
+  }
+
   private static final Log LOG = LogFactory
       .getLog(DrillApplicationMaster.class);
 

@@ -17,22 +17,19 @@
  */
 package org.apache.drill.exec.store.parquet.columnreaders;
 
+import org.apache.drill.exec.store.CommonParquetRecordReader;
 import org.apache.drill.shaded.guava.com.google.common.base.Stopwatch;
 import org.apache.drill.shaded.guava.com.google.common.collect.ImmutableList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
-import org.apache.drill.common.exceptions.DrillRuntimeException;
 import org.apache.drill.common.exceptions.ExecutionSetupException;
 import org.apache.drill.common.expression.SchemaPath;
 import org.apache.drill.exec.ExecConstants;
 import org.apache.drill.exec.exception.OutOfMemoryException;
 import org.apache.drill.exec.ops.FragmentContext;
-import org.apache.drill.exec.ops.MetricDef;
 import org.apache.drill.exec.ops.OperatorContext;
 import org.apache.drill.exec.physical.impl.OutputMutator;
-import org.apache.drill.exec.store.AbstractRecordReader;
-import org.apache.drill.exec.store.parquet.ParquetReaderStats;
 import org.apache.drill.exec.store.parquet.ParquetReaderUtility;
 import org.apache.drill.exec.store.parquet.columnreaders.batchsizing.RecordBatchSizerManager;
 import org.apache.drill.exec.util.record.RecordBatchStats.RecordBatchStatsContext;
@@ -41,132 +38,80 @@ import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.parquet.hadoop.CodecFactory;
 import org.apache.parquet.hadoop.metadata.ParquetMetadata;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
-public class ParquetRecordReader extends AbstractRecordReader {
-  private static final org.slf4j.Logger logger = org.slf4j.LoggerFactory.getLogger(ParquetRecordReader.class);
+public class ParquetRecordReader extends CommonParquetRecordReader {
 
-  /** Set when caller wants to read all the rows contained within the Parquet file */
-  static final int NUM_RECORDS_TO_READ_NOT_SPECIFIED = -1;
+  private static final Logger logger = LoggerFactory.getLogger(ParquetRecordReader.class);
 
   // When no column is required by the downstream operator, ask SCAN to return a DEFAULT column. If such column does not exist,
   // it will return as a nullable-int column. If that column happens to exist, return that column.
-  protected static final List<SchemaPath> DEFAULT_COLS_TO_READ = ImmutableList.of(SchemaPath.getSimplePath("_DEFAULT_COL_TO_READ_"));
+  private static final List<SchemaPath> DEFAULT_COLS_TO_READ = ImmutableList.of(SchemaPath.getSimplePath("_DEFAULT_COL_TO_READ_"));
 
-  // TODO - should probably find a smarter way to set this, currently 1 megabyte
-  public static final int PARQUET_PAGE_MAX_SIZE = 1024 * 1024 * 1;
-
-  // used for clearing the last n bits of a byte
-  public static final byte[] endBitMasks = {-2, -4, -8, -16, -32, -64, -128};
-  // used for clearing the first n bits of a byte
-  public static final byte[] startBitMasks = {127, 63, 31, 15, 7, 3, 1};
-
-  private OperatorContext operatorContext;
-
-  private FileSystem fileSystem;
+  private final FileSystem fileSystem;
   private final long numRecordsToRead; // number of records to read
-
-  Path hadoopPath;
-  private ParquetMetadata footer;
-
+  private final Path hadoopPath;
   private final CodecFactory codecFactory;
-  int rowGroupIndex;
-  private final FragmentContext fragmentContext;
-  ParquetReaderUtility.DateCorruptionStatus dateCorruptionStatus;
+  private final int rowGroupIndex;
+  private final ParquetReaderUtility.DateCorruptionStatus dateCorruptionStatus;
 
-  /** Parquet Schema */
-  ParquetSchema schema;
   /** Container object for holding Parquet columnar readers state */
-  ReadState readState;
+  private ReadState readState;
   /** Responsible for managing record batch size constraints */
-  RecordBatchSizerManager batchSizerMgr;
-
-  public boolean useAsyncColReader;
-  public boolean useAsyncPageReader;
-  public boolean useBufferedReader;
-  public int bufferedReadSize;
-  public boolean useFadvise;
-  public boolean enforceTotalSize;
-  public long readQueueSize;
-  public boolean useBulkReader;
-
-  @SuppressWarnings("unused")
-  private String name;
-
-  public ParquetReaderStats parquetReaderStats = new ParquetReaderStats();
+  private RecordBatchSizerManager batchSizerMgr;
   private BatchReader batchReader;
 
-  public enum Metric implements MetricDef {
-    NUM_DICT_PAGE_LOADS,         // Number of dictionary pages read
-    NUM_DATA_PAGE_lOADS,         // Number of data pages read
-    NUM_DATA_PAGES_DECODED,      // Number of data pages decoded
-    NUM_DICT_PAGES_DECOMPRESSED, // Number of dictionary pages decompressed
-    NUM_DATA_PAGES_DECOMPRESSED, // Number of data pages decompressed
-    TOTAL_DICT_PAGE_READ_BYTES,  // Total bytes read from disk for dictionary pages
-    TOTAL_DATA_PAGE_READ_BYTES,  // Total bytes read from disk for data pages
-    TOTAL_DICT_DECOMPRESSED_BYTES, // Total bytes decompressed for dictionary pages (same as compressed bytes on disk)
-    TOTAL_DATA_DECOMPRESSED_BYTES, // Total bytes decompressed for data pages (same as compressed bytes on disk)
-    TIME_DICT_PAGE_LOADS,          // Time in nanos in reading dictionary pages from disk
-    TIME_DATA_PAGE_LOADS,          // Time in nanos in reading data pages from disk
-    TIME_DATA_PAGE_DECODE,         // Time in nanos in decoding data pages
-    TIME_DICT_PAGE_DECODE,         // Time in nanos in decoding dictionary pages
-    TIME_DICT_PAGES_DECOMPRESSED,  // Time in nanos in decompressing dictionary pages
-    TIME_DATA_PAGES_DECOMPRESSED,  // Time in nanos in decompressing data pages
-    TIME_DISK_SCAN_WAIT,           // Time in nanos spent in waiting for an async disk read to complete
-    TIME_DISK_SCAN,                // Time in nanos spent in reading data from disk.
-    TIME_FIXEDCOLUMN_READ,         // Time in nanos spent in converting fixed width data to value vectors
-    TIME_VARCOLUMN_READ,           // Time in nanos spent in converting varwidth data to value vectors
-    TIME_PROCESS;                  // Time in nanos spent in processing
+  final boolean useAsyncColReader;
+  final boolean useAsyncPageReader;
+  final boolean useBufferedReader;
+  final int bufferedReadSize;
+  final boolean useFadvise;
+  final boolean enforceTotalSize;
+  final long readQueueSize;
 
-    @Override public int metricId() {
-      return ordinal();
-    }
-  }
+  private final boolean useBulkReader;
 
   public ParquetRecordReader(FragmentContext fragmentContext,
-      String path,
+      Path path,
       int rowGroupIndex,
       long numRecordsToRead,
       FileSystem fs,
       CodecFactory codecFactory,
       ParquetMetadata footer,
       List<SchemaPath> columns,
-      ParquetReaderUtility.DateCorruptionStatus dateCorruptionStatus) throws ExecutionSetupException {
-    this(fragmentContext, numRecordsToRead,
-         path, rowGroupIndex, fs, codecFactory, footer, columns, dateCorruptionStatus);
+      ParquetReaderUtility.DateCorruptionStatus dateCorruptionStatus) {
+    this(fragmentContext, numRecordsToRead, path, rowGroupIndex, fs, codecFactory, footer, columns, dateCorruptionStatus);
   }
 
   public ParquetRecordReader(FragmentContext fragmentContext,
-      String path,
+      Path path,
       int rowGroupIndex,
       FileSystem fs,
       CodecFactory codecFactory,
       ParquetMetadata footer,
       List<SchemaPath> columns,
-      ParquetReaderUtility.DateCorruptionStatus dateCorruptionStatus)
-      throws ExecutionSetupException {
-      this(fragmentContext, footer.getBlocks().get(rowGroupIndex).getRowCount(),
-           path, rowGroupIndex, fs, codecFactory, footer, columns, dateCorruptionStatus);
+      ParquetReaderUtility.DateCorruptionStatus dateCorruptionStatus) {
+    this(fragmentContext, footer.getBlocks().get(rowGroupIndex).getRowCount(), path, rowGroupIndex, fs, codecFactory,
+        footer, columns, dateCorruptionStatus);
   }
 
   public ParquetRecordReader(
       FragmentContext fragmentContext,
       long numRecordsToRead,
-      String path,
+      Path path,
       int rowGroupIndex,
       FileSystem fs,
       CodecFactory codecFactory,
       ParquetMetadata footer,
       List<SchemaPath> columns,
-      ParquetReaderUtility.DateCorruptionStatus dateCorruptionStatus) throws ExecutionSetupException {
-
-    this.name = path;
-    this.hadoopPath = new Path(path);
+      ParquetReaderUtility.DateCorruptionStatus dateCorruptionStatus) {
+    super(footer, fragmentContext);
+    this.hadoopPath = path;
     this.fileSystem = fs;
     this.codecFactory = codecFactory;
     this.rowGroupIndex = rowGroupIndex;
-    this.footer = footer;
     this.dateCorruptionStatus = dateCorruptionStatus;
-    this.fragmentContext = fragmentContext;
     this.numRecordsToRead = initNumRecordsToRead(numRecordsToRead, rowGroupIndex, footer);
     this.useAsyncColReader = fragmentContext.getOptions().getOption(ExecConstants.PARQUET_COLUMNREADER_ASYNC).bool_val;
     this.useAsyncPageReader = fragmentContext.getOptions().getOption(ExecConstants.PARQUET_PAGEREADER_ASYNC).bool_val;
@@ -206,10 +151,6 @@ public class ParquetRecordReader extends AbstractRecordReader {
     return rowGroupIndex;
   }
 
-  public int getBitWidthAllFixedFields() {
-    return schema.getBitWidthAllFixedFields();
-  }
-
   public RecordBatchSizerManager getBatchSizesMgr() {
     return batchSizerMgr;
   }
@@ -229,6 +170,10 @@ public class ParquetRecordReader extends AbstractRecordReader {
     return useBulkReader;
   }
 
+  public ReadState getReadState() {
+    return readState;
+  }
+
   /**
    * Prepare the Parquet reader. First determine the set of columns to read (the schema
    * for this read.) Then, create a state object to track the read across calls to
@@ -240,10 +185,10 @@ public class ParquetRecordReader extends AbstractRecordReader {
   @Override
   public void setup(OperatorContext operatorContext, OutputMutator output) throws ExecutionSetupException {
     this.operatorContext = operatorContext;
-    schema = new ParquetSchema(fragmentContext.getOptions(), rowGroupIndex, footer, isStarQuery() ? null : getColumns());
+    ParquetSchema schema = new ParquetSchema(fragmentContext.getOptions(), rowGroupIndex, footer, isStarQuery() ? null : getColumns());
     batchSizerMgr = new RecordBatchSizerManager(fragmentContext.getOptions(), schema, numRecordsToRead, new RecordBatchStatsContext(fragmentContext, operatorContext));
 
-    logger.debug("Reading row group({}) with {} records in file {}.", rowGroupIndex, footer.getBlocks().get(rowGroupIndex).getRowCount(),
+    logger.debug("Reading {} records from row group({}) in file {}.", numRecordsToRead, rowGroupIndex,
         hadoopPath.toUri().getPath());
 
     try {
@@ -252,7 +197,7 @@ public class ParquetRecordReader extends AbstractRecordReader {
       readState = new ReadState(schema, batchSizerMgr, parquetReaderStats, numRecordsToRead, useAsyncColReader);
       readState.buildReader(this, output);
     } catch (Exception e) {
-      throw handleException("Failure in setting up reader", e);
+      throw handleAndRaise("Failure in setting up reader", e);
     }
 
     ColumnReader<?> firstColumnStatus = readState.getFirstColumnReader();
@@ -263,12 +208,6 @@ public class ParquetRecordReader extends AbstractRecordReader {
     } else {
       batchReader = new BatchReader.VariableWidthReader(readState);
     }
-  }
-
-  protected DrillRuntimeException handleException(String s, Exception e) {
-    String message = "Error in parquet record reader.\nMessage: " + s +
-      "\nParquet Metadata: " + footer;
-    return new DrillRuntimeException(message, e);
   }
 
   @Override
@@ -287,10 +226,10 @@ public class ParquetRecordReader extends AbstractRecordReader {
     try {
       return batchReader.readBatch();
     } catch (Exception e) {
-      throw handleException("\nHadoop path: " + hadoopPath.toUri().getPath() +
+      throw handleAndRaise("\nHadoop path: " + hadoopPath.toUri().getPath() +
         "\nTotal records read: " + readState.recordsRead() +
         "\nRow group index: " + rowGroupIndex +
-        "\nRecords in row group: " + footer.getBlocks().get(rowGroupIndex).getRowCount(), e);
+        "\nRecords to read: " + numRecordsToRead, e);
     } finally {
       parquetReaderStats.timeProcess.addAndGet(timer.elapsed(TimeUnit.NANOSECONDS));
     }
@@ -323,15 +262,7 @@ public class ParquetRecordReader extends AbstractRecordReader {
 
     codecFactory.release();
 
-    if (parquetReaderStats != null) {
-      updateStats();
-      parquetReaderStats.logStats(logger, hadoopPath);
-      parquetReaderStats = null;
-    }
-  }
-
-  private void updateStats() {
-    parquetReaderStats.update(operatorContext.getStats());
+    closeStats(logger, hadoopPath);
   }
 
   @Override
@@ -339,21 +270,11 @@ public class ParquetRecordReader extends AbstractRecordReader {
     return DEFAULT_COLS_TO_READ;
   }
 
-  private int initNumRecordsToRead(long numRecordsToRead, int rowGroupIndex, ParquetMetadata footer) {
-    // Callers can pass -1 if they want to read all rows.
-    if (numRecordsToRead == NUM_RECORDS_TO_READ_NOT_SPECIFIED) {
-      return (int) footer.getBlocks().get(rowGroupIndex).getRowCount();
-    } else {
-      assert (numRecordsToRead >= 0);
-      return (int) Math.min(numRecordsToRead, footer.getBlocks().get(rowGroupIndex).getRowCount());
-    }
-  }
-
   @Override
   public String toString() {
     return "ParquetRecordReader[File=" + hadoopPath.toUri()
         + ", Row group index=" + rowGroupIndex
-        + ", Records in row group=" + footer.getBlocks().get(rowGroupIndex).getRowCount()
+        + ", Records to read=" + numRecordsToRead
         + ", Total records read=" + (readState != null ? readState.recordsRead() : -1)
         + ", Metadata" + footer
         + "]";

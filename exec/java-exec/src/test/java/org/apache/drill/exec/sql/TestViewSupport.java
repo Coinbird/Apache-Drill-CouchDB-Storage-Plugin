@@ -428,7 +428,8 @@ public class TestViewSupport extends TestBaseViewSupport {
 
       // Test record in INFORMATION_SCHEMA.TABLES
       testBuilder()
-          .sqlQuery("SELECT * FROM INFORMATION_SCHEMA.`TABLES` WHERE TABLE_NAME = '%s'", viewName)
+          .sqlQuery("SELECT TABLE_CATALOG, TABLE_SCHEMA, TABLE_NAME, TABLE_TYPE" +
+            " FROM INFORMATION_SCHEMA.`TABLES` WHERE TABLE_NAME = '%s'", viewName)
           .unOrdered()
           .baselineColumns("TABLE_CATALOG", "TABLE_SCHEMA", "TABLE_NAME", "TABLE_TYPE")
           .baselineValues("DRILL", DFS_TMP_SCHEMA, viewName, "VIEW")
@@ -789,13 +790,13 @@ public class TestViewSupport extends TestBaseViewSupport {
   }
 
   @Test // DRILL-6944
-  public void testMapTypeFullyQualifiedInNewlyCreatedView() throws Exception {
+  public void testMapTypeTreatedAsAnyInNewlyCreatedView() throws Exception {
     try {
       test("CREATE VIEW dfs.tmp.`mapf_view` AS SELECT `mapf` FROM dfs.`avro/map_string_to_long.avro`");
       testPlanWithAttributesMatchingPatterns("SELECT * FROM dfs.tmp.`mapf_view`", new String[]{
-          "Screen : rowType = RecordType\\(\\(VARCHAR\\(65535\\), BIGINT\\) MAP mapf\\)",
-          "Project\\(mapf=\\[\\$0\\]\\) : rowType = RecordType\\(\\(VARCHAR\\(65535\\), BIGINT\\) MAP mapf\\)",
-          "Scan.*avro/map_string_to_long.avro.*rowType = RecordType\\(\\(VARCHAR\\(65535\\), BIGINT\\) MAP mapf\\)"
+          "Screen : rowType = RecordType\\(ANY mapf\\)",
+          "Project\\(mapf=\\[\\$0\\]\\) : rowType = RecordType\\(ANY mapf\\)",
+          "Scan.*avro/map_string_to_long.avro.*rowType = RecordType\\(ANY mapf\\)"
       }, null);
     } finally {
       test("DROP VIEW IF EXISTS dfs.tmp.`mapf_view`");
@@ -821,4 +822,28 @@ public class TestViewSupport extends TestBaseViewSupport {
     }, null);
   }
 
+  @Test
+  @Category(UnlikelyTest.class)
+  public void testViewContainingWithClauseAndUnionAllInDefinition() throws Exception{
+    String viewName = "test_view";
+    try {
+      String viewDefinition = "create or replace view %s.`%s` as " +
+          "with tbl_un as " +
+          "(" +
+          "(select c_name from cp.`tpch/customer.parquet` limit 1)" +
+          "union all " +
+          "(select c_name from cp.`tpch/customer.parquet` limit 1 offset 1) " +
+          ") " +
+          "select * from tbl_un";
+      test(viewDefinition, DFS_TMP_SCHEMA, viewName);
+      testBuilder()
+          .sqlQuery("select * from %s.`%s`", DFS_TMP_SCHEMA, viewName)
+          .unOrdered()
+          .baselineColumns("c_name")
+          .baselineValuesForSingleColumn("Customer#000000001", "Customer#000000002")
+          .go();
+    } finally {
+      test("drop view if exists %s.`%s`", DFS_TMP_SCHEMA, viewName);
+    }
+  }
 }

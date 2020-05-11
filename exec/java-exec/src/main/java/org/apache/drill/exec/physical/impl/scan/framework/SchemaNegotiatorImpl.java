@@ -17,10 +17,14 @@
  */
 package org.apache.drill.exec.physical.impl.scan.framework;
 
+import org.apache.drill.common.exceptions.CustomErrorContext;
 import org.apache.drill.exec.ops.OperatorContext;
-import org.apache.drill.exec.physical.rowSet.ResultSetLoader;
+import org.apache.drill.exec.physical.resultSet.ResultSetLoader;
 import org.apache.drill.exec.record.metadata.TupleMetadata;
+import org.apache.drill.exec.server.options.OptionSet;
 import org.apache.drill.exec.vector.ValueVector;
+
+import com.typesafe.config.Config;
 
 /**
  * Implementation of the schema negotiation between scan operator and
@@ -47,32 +51,91 @@ import org.apache.drill.exec.vector.ValueVector;
  * filled in by the scan projector (assuming, of course, that "c"
  * is nullable or an array.)
  */
-
 public class SchemaNegotiatorImpl implements SchemaNegotiator {
 
-  protected final AbstractScanFramework<?> basicFramework;
-  private final ShimBatchReader<? extends SchemaNegotiator> shim;
+  public interface NegotiatorListener {
+    ResultSetLoader build(SchemaNegotiatorImpl schemaNegotiator);
+  }
+
+  protected final ManagedScanFramework framework;
+  private NegotiatorListener listener;
+  protected CustomErrorContext context;
+  protected TupleMetadata providedSchema;
   protected TupleMetadata tableSchema;
+  protected boolean isSchemaComplete;
   protected int batchSize = ValueVector.MAX_ROW_COUNT;
 
-  public SchemaNegotiatorImpl(AbstractScanFramework<?> framework, ShimBatchReader<? extends SchemaNegotiator> shim) {
-    basicFramework = framework;
-    this.shim = shim;
+  public SchemaNegotiatorImpl(ManagedScanFramework framework) {
+    this.framework = framework;
+    this.providedSchema = framework.outputSchema();
+  }
+
+  public void bind(NegotiatorListener listener) {
+    this.listener = listener;
+  }
+
+  @Override
+  public boolean isProjectionEmpty() {
+    return framework.scanOrchestrator().isProjectNone();
+  }
+
+  @Override
+  public boolean hasProvidedSchema() {
+    // Does not count as an output schema if no columns
+    // (only properties) are provided.
+    return providedSchema != null && providedSchema.size() > 0;
+  }
+
+  @Override
+  public TupleMetadata providedSchema() {
+    return providedSchema;
   }
 
   @Override
   public OperatorContext context() {
-    return basicFramework.context();
+    return framework.context();
   }
 
   @Override
-  public void setTableSchema(TupleMetadata schema) {
+  public Config drillConfig() {
+    return context().getFragmentContext().getConfig();
+  }
+
+  @Override
+  public OptionSet queryOptions() {
+    return context().getFragmentContext().getOptions();
+  }
+
+  @Override
+  public CustomErrorContext parentErrorContext() {
+    return framework.errorContext();
+  }
+
+  public CustomErrorContext errorContext() {
+    return context;
+  }
+
+  @Override
+  public void setErrorContext(CustomErrorContext context) {
+    this.context = context;
+  }
+
+  @Override
+  public void tableSchema(TupleMetadata schema, boolean isComplete) {
     tableSchema = schema;
+    isSchemaComplete = schema != null && isComplete;
+  }
+
+  public boolean isSchemaComplete() { return tableSchema != null && isSchemaComplete; }
+
+  @Override
+  public void batchSize(int maxRecordsPerBatch) {
+    batchSize = maxRecordsPerBatch;
   }
 
   @Override
-  public void setBatchSize(int maxRecordsPerBatch) {
-    batchSize = maxRecordsPerBatch;
+  public String userName() {
+    return framework.builder.userName;
   }
 
   /**
@@ -84,17 +147,10 @@ public class SchemaNegotiatorImpl implements SchemaNegotiator {
    * schema information
    * @return the result set loader to be used by the reader
    */
-
   @Override
   public ResultSetLoader build() {
 
     // Build and return the result set loader to be used by the reader.
-
-    return shim.build(this);
-  }
-
-  @Override
-  public boolean isProjectionEmpty() {
-    return basicFramework.scanOrchestrator().isProjectNone();
+    return listener.build(this);
   }
 }

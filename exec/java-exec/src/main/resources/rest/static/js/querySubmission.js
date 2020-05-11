@@ -64,15 +64,15 @@ function doSubmitQueryWithAutoLimit() {
     //Clear field when submitting if not mustWrapWithLimit
     if (!mustWrapWithLimit) {
       //Wipe out any numeric entry in the field before
-      $('#queryLimit').attr('value', '');
+      $('#autoLimit').attr('value', '');
     } else {
-      let autoLimitValue=document.getElementById('queryLimit').value;
+      let autoLimitValue=document.getElementById('autoLimit').value;
       let positiveIntRegex = new RegExp("^[1-9]\\d*$");
-      let isValidRowCount = positiveIntRegex.test(autoLimitValue);
+      let isValidRowCount = positiveIntRegex.test(autoLimitValue.trim());
       if (!isValidRowCount) {
-        let alertValues = {'_autoLimitValue_': autoLimitValue };
+        let alertValues = {'_autoLimitValue_': autoLimitValue.trim() };
         populateAndShowAlert("invalidRowCount", alertValues);
-        $('#queryLimit').focus();
+        $('#autoLimit').focus();
         return;
       }
     }
@@ -83,25 +83,6 @@ function doSubmitQueryWithAutoLimit() {
 //Submit Query
 function submitQuery() {
     popupAndWait();
-    //Submit query
-    $.ajax({
-        type: "POST",
-        beforeSend: function (request) {
-            if (typeof userName !== 'undefined' && userName !== null && userName.length > 0) {
-              request.setRequestHeader("User-Name", userName);
-            }
-        },
-        url: "/query",
-        data: $("#queryForm").serializeArray(),
-        success: function (response) {
-            closePopup();
-            var newDoc = document.open("text/html", "replace");
-            newDoc.write(response);
-            newDoc.close();
-        },
-        error: function (request, textStatus, errorThrown) {
-            closePopup();
-            alert(errorThrown);
-        }
-    });
+    $("#queryForm").submit();
+    $(window).bind("pageshow", function(event) { closePopup();});
 }

@@ -25,7 +25,11 @@ import java.util.List;
 
 import org.apache.calcite.avatica.util.TimeUnit;
 import org.apache.calcite.rel.type.RelDataType;
+import org.apache.calcite.sql.SqlKind;
+import org.apache.calcite.sql.type.BasicSqlType;
+import org.apache.calcite.sql.type.SqlTypeName;
 import org.apache.commons.lang3.StringUtils;
+import org.apache.drill.common.exceptions.DrillRuntimeException;
 import org.apache.drill.common.exceptions.UserException;
 import org.apache.drill.common.expression.ExpressionPosition;
 import org.apache.drill.common.expression.FieldReference;
@@ -63,6 +67,8 @@ import org.apache.calcite.util.NlsString;
 
 import org.apache.drill.shaded.guava.com.google.common.base.Preconditions;
 import org.apache.drill.shaded.guava.com.google.common.collect.Lists;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.apache.drill.exec.planner.physical.PlannerSettings;
 import org.apache.drill.exec.work.ExecErrorConstants;
 
@@ -73,7 +79,7 @@ import static org.apache.drill.exec.planner.physical.PlannerSettings.ENABLE_DECI
  */
 public class DrillOptiq {
   public static final String UNSUPPORTED_REX_NODE_ERROR = "Cannot convert RexNode to equivalent Drill expression. ";
-  private static final org.slf4j.Logger logger = org.slf4j.LoggerFactory.getLogger(DrillOptiq.class);
+  private static final Logger logger = LoggerFactory.getLogger(DrillOptiq.class);
 
   /**
    * Converts a tree of {@link RexNode} operators into a scalar expression in Drill syntax using one input.
@@ -106,7 +112,6 @@ public class DrillOptiq {
   }
 
   public static class RexToDrill extends RexVisitorImpl<LogicalExpression> {
-    private final List<RelNode> inputs;
     private final DrillParseContext context;
     private final List<RelDataTypeField> fieldList;
     private final RelDataType rowType;
@@ -115,8 +120,7 @@ public class DrillOptiq {
     RexToDrill(DrillParseContext context, List<RelNode> inputs) {
       super(true);
       this.context = context;
-      this.inputs = inputs;
-      this.fieldList = Lists.newArrayList();
+      this.fieldList = new ArrayList<>();
       if (inputs.size() > 0 && inputs.get(0)!=null) {
         this.rowType = inputs.get(0).getRowType();
         this.builder = inputs.get(0).getCluster().getRexBuilder();
@@ -153,7 +157,6 @@ public class DrillOptiq {
       this.context = context;
       this.rowType = rowType;
       this.builder = builder;
-      this.inputs = Lists.newArrayList();
       this.fieldList = rowType.getFieldList();
     }
 
@@ -188,17 +191,18 @@ public class DrillOptiq {
       case POSTFIX:
         logger.debug("Postfix");
         switch(call.getKind()){
-        case IS_NOT_NULL:
-        case IS_NOT_TRUE:
-        case IS_NOT_FALSE:
-        case IS_NULL:
-        case IS_TRUE:
-        case IS_FALSE:
-        case OTHER:
-          return FunctionCallFactory.createExpression(call.getOperator().getName().toLowerCase(),
-              ExpressionPosition.UNKNOWN, call.getOperands().get(0).accept(this));
+          case IS_NOT_NULL:
+          case IS_NOT_TRUE:
+          case IS_NOT_FALSE:
+          case IS_NULL:
+          case IS_TRUE:
+          case IS_FALSE:
+          case OTHER:
+            return FunctionCallFactory.createExpression(call.getOperator().getName().toLowerCase(),
+                ExpressionPosition.UNKNOWN, call.getOperands().get(0).accept(this));
+          default:
+            throw notImplementedException(syntax, call);
         }
-        throw new AssertionError("todo: implement syntax " + syntax + "(" + call + ")");
       case PREFIX:
         LogicalExpression arg = call.getOperands().get(0).accept(this);
         switch(call.getKind()){
@@ -206,20 +210,32 @@ public class DrillOptiq {
             return FunctionCallFactory.createExpression(call.getOperator().getName().toLowerCase(),
                 ExpressionPosition.UNKNOWN, arg);
           case MINUS_PREFIX:
-            List<LogicalExpression> operands = Lists.newArrayList();
+            List<LogicalExpression> operands = new ArrayList<>();
             operands.add(call.getOperands().get(0).accept(this));
             return FunctionCallFactory.createExpression("u-", operands);
+          default:
+            throw notImplementedException(syntax, call);
         }
-        throw new AssertionError("todo: implement syntax " + syntax + "(" + call + ")");
       case SPECIAL:
         switch(call.getKind()){
         case CAST:
           return getDrillCastFunctionFromOptiq(call);
+        case ROW:
+          List<RelDataTypeField> fieldList = call.getType().getFieldList();
+          List<RexNode> oldOperands = call.getOperands();
+          List<LogicalExpression> newOperands = new ArrayList<>();
+          for (int i = 0; i < oldOperands.size(); i++) {
+            RexLiteral nameOperand = getRexBuilder().makeLiteral(fieldList.get(i).getName());
+            RexNode valueOperand = call.operands.get(i);
+            newOperands.add(nameOperand.accept(this));
+            newOperands.add(valueOperand.accept(this));
+          }
+          return FunctionCallFactory.createExpression(call.op.getName().toLowerCase(), newOperands);
         case LIKE:
         case SIMILAR:
           return getDrillFunctionFromOptiqCall(call);
         case CASE:
-          List<LogicalExpression> caseArgs = Lists.newArrayList();
+          List<LogicalExpression> caseArgs = new ArrayList<>();
           for(RexNode r : call.getOperands()){
             caseArgs.add(r.accept(this));
           }
@@ -235,29 +251,12 @@ public class DrillOptiq {
               .setIfCondition(new IfCondition(caseArgs.get(i + 1), caseArgs.get(i))).build();
           }
           return elseExpression;
+
+        default:
         }
 
         if (call.getOperator() == SqlStdOperatorTable.ITEM) {
-          SchemaPath left = (SchemaPath) call.getOperands().get(0).accept(this);
-
-          // Convert expr of item[*, 'abc'] into column expression 'abc'
-          String rootSegName = left.getRootSegment().getPath();
-          if (StarColumnHelper.isStarColumn(rootSegName)) {
-            rootSegName = rootSegName.substring(0, rootSegName.indexOf(SchemaPath.DYNAMIC_STAR));
-            final RexLiteral literal = (RexLiteral) call.getOperands().get(1);
-            return SchemaPath.getSimplePath(rootSegName + literal.getValue2().toString());
-          }
-
-          final RexLiteral literal = (RexLiteral) call.getOperands().get(1);
-          switch(literal.getTypeName()){
-          case DECIMAL:
-          case INTEGER:
-            return left.getChild(((BigDecimal)literal.getValue()).intValue());
-          case CHAR:
-            return left.getChild(literal.getValue2().toString());
-          default:
-            // fall through
-          }
+          return handleItemOperator(call, syntax);
         }
 
         if (call.getOperator() == SqlStdOperatorTable.DATETIME_PLUS) {
@@ -270,12 +269,150 @@ public class DrillOptiq {
 
         // fall through
       default:
-        throw new AssertionError("todo: implement syntax " + syntax + "(" + call + ")");
+        throw notImplementedException(syntax, call);
       }
     }
 
+    private SchemaPath handleItemOperator(RexCall call, SqlSyntax syntax) {
+      SchemaPath left = (SchemaPath) call.getOperands().get(0).accept(this);
+
+      RelDataType dataType = call.getOperands().get(0).getType();
+      boolean isMap = dataType.getSqlTypeName() == SqlTypeName.MAP;
+
+      // Convert expr of item[*, 'abc'] into column expression 'abc'
+      String rootSegName = left.getRootSegment().getPath();
+      if (StarColumnHelper.isStarColumn(rootSegName)) {
+        rootSegName = rootSegName.substring(0, rootSegName.indexOf(SchemaPath.DYNAMIC_STAR));
+        final RexLiteral literal = (RexLiteral) call.getOperands().get(1);
+        return SchemaPath.getSimplePath(rootSegName + literal.getValue2().toString());
+      }
+
+      final RexLiteral literal;
+      RexNode operand = call.getOperands().get(1);
+      if (operand instanceof RexLiteral) {
+        literal = (RexLiteral) operand;
+      } else if (isMap && operand.getKind() == SqlKind.CAST) {
+        SqlTypeName castType = operand.getType().getSqlTypeName();
+        SqlTypeName keyType = dataType.getKeyType().getSqlTypeName();
+        Preconditions.checkArgument(castType == keyType,
+            String.format("Wrong type CAST: expected '%s' but found '%s'", keyType.getName(), castType.getName()));
+        literal = (RexLiteral) ((RexCall) operand).operands.get(0);
+      } else {
+        throw notImplementedException(syntax, call);
+      }
+
+      switch (literal.getTypeName()) {
+        case DECIMAL:
+        case INTEGER:
+          if (isMap) {
+            return handleMapNumericKey(literal, operand, dataType, left);
+          }
+          return left.getChild(((BigDecimal) literal.getValue()).intValue());
+        case CHAR:
+          if (isMap) {
+            return handleMapCharKey(literal, operand, dataType, left);
+          }
+          return left.getChild(literal.getValue2().toString());
+        case BOOLEAN:
+          if (isMap) {
+            BasicSqlType sqlType = (BasicSqlType) operand.getType();
+            TypeProtos.DataMode mode = sqlType.isNullable() ? TypeProtos.DataMode.OPTIONAL : TypeProtos.DataMode.REQUIRED;
+            return left.getChild(literal.getValue().toString(), literal.getValue(), Types.withMode(MinorType.BIT, mode));
+          }
+          // fall through
+        default:
+          throw notImplementedException(syntax, call);
+      }
+    }
+
+    private DrillRuntimeException notImplementedException(SqlSyntax syntax, RexCall call) {
+      String message = String.format("Syntax '%s(%s)' is not implemented.", syntax.toString(), call.toString());
+      throw new DrillRuntimeException(message);
+    }
+
+    private SchemaPath handleMapNumericKey(RexLiteral literal, RexNode operand, RelDataType mapType, SchemaPath parentPath) {
+      BigDecimal literalValue = (BigDecimal) literal.getValue();
+      RelDataType sqlType = operand.getType();
+      Object originalValue;
+
+      TypeProtos.DataMode mode = sqlType.isNullable() ? TypeProtos.DataMode.OPTIONAL : TypeProtos.DataMode.REQUIRED;
+      boolean arraySegment = false;
+      MajorType type;
+      switch (mapType.getKeyType().getSqlTypeName()) {
+        case DOUBLE:
+          type = Types.withMode(MinorType.FLOAT8, mode);
+          originalValue = literalValue.doubleValue();
+          break;
+        case FLOAT:
+          type = Types.withMode(MinorType.FLOAT4, mode);
+          originalValue = literalValue.floatValue();
+          break;
+        case DECIMAL:
+          type = Types.withPrecisionAndScale(MinorType.VARDECIMAL, mode, literalValue.precision(), literalValue.scale());
+          originalValue = literalValue;
+          break;
+        case BIGINT:
+          type = Types.withMode(MinorType.BIGINT, mode);
+          originalValue = literalValue.longValue();
+          break;
+        case INTEGER:
+          type = Types.withMode(MinorType.INT, mode);
+          originalValue = literalValue.intValue();
+          arraySegment = true;
+          break;
+        case SMALLINT:
+          type = Types.withMode(MinorType.SMALLINT, mode);
+          originalValue = literalValue.shortValue();
+          arraySegment = true;
+          break;
+        case TINYINT:
+          type = Types.withMode(MinorType.TINYINT, mode);
+          originalValue = literalValue.byteValue();
+          arraySegment = true;
+          break;
+        default:
+          throw new AssertionError("Shouldn't reach there. Type: " + mapType.getKeyType().getSqlTypeName());
+      }
+
+      if (arraySegment) {
+        return parentPath.getChild((int) originalValue, originalValue, type);
+      } else {
+        return parentPath.getChild(originalValue.toString(), originalValue, type);
+      }
+    }
+
+    private SchemaPath handleMapCharKey(RexLiteral literal, RexNode operand, RelDataType mapType, SchemaPath parentPath) {
+      TypeProtos.DataMode mode = operand.getType().isNullable()
+          ? TypeProtos.DataMode.OPTIONAL : TypeProtos.DataMode.REQUIRED;
+      TypeProtos.MajorType type;
+      switch (mapType.getKeyType().getSqlTypeName()) {
+        case TIMESTAMP:
+          type = Types.withMode(MinorType.TIMESTAMP, mode);
+          break;
+        case DATE:
+          type = Types.withMode(MinorType.DATE, mode);
+          break;
+        case TIME:
+          type = Types.withMode(MinorType.TIME, mode);
+          break;
+        case INTERVAL_DAY:
+          type = Types.withMode(MinorType.INTERVALDAY, mode);
+          break;
+        case INTERVAL_YEAR:
+          type = Types.withMode(MinorType.INTERVALYEAR, mode);
+          break;
+        case INTERVAL_MONTH:
+          type = Types.withMode(MinorType.INTERVAL, mode);
+          break;
+        default:
+          type = Types.withMode(MinorType.VARCHAR, mode);
+          break;
+      }
+      return parentPath.getChild(literal.getValue2().toString(), literal.getValue2(), type);
+    }
+
     private LogicalExpression doFunction(RexCall call, String funcName) {
-      List<LogicalExpression> args = Lists.newArrayList();
+      List<LogicalExpression> args = new ArrayList<>();
       for(RexNode r : call.getOperands()){
         args.add(r.accept(this));
       }
@@ -326,71 +463,68 @@ public class DrillOptiq {
 
     @Override
     public LogicalExpression visitFieldAccess(RexFieldAccess fieldAccess) {
-      return super.visitFieldAccess(fieldAccess);
+      SchemaPath logicalRef = (SchemaPath) fieldAccess.getReferenceExpr().accept(this);
+      return logicalRef.getChild(fieldAccess.getField().getName());
     }
 
     private LogicalExpression getDrillCastFunctionFromOptiq(RexCall call){
       LogicalExpression arg = call.getOperands().get(0).accept(this);
       MajorType castType;
 
-      switch(call.getType().getSqlTypeName().getName()){
-      case "VARCHAR":
-      case "CHAR":
-        castType = Types.required(MinorType.VARCHAR).toBuilder().setPrecision(call.getType().getPrecision()).build();
-        break;
-      case "INTEGER":
-        castType = Types.required(MinorType.INT);
-        break;
-      case "FLOAT":
-        castType = Types.required(MinorType.FLOAT4);
-        break;
-      case "DOUBLE":
-        castType = Types.required(MinorType.FLOAT8);
-        break;
-      case "DECIMAL":
-        if (!context.getPlannerSettings().getOptions().getOption(PlannerSettings.ENABLE_DECIMAL_DATA_TYPE_KEY).bool_val) {
-          throw UserException
-              .unsupportedError()
-              .message(ExecErrorConstants.DECIMAL_DISABLE_ERR_MSG)
-              .build(logger);
-        }
+      switch (call.getType().getSqlTypeName()) {
+        case VARCHAR:
+        case CHAR:
+          castType = Types.required(MinorType.VARCHAR).toBuilder().setPrecision(call.getType().getPrecision()).build();
+          break;
+        case INTEGER:
+          castType = Types.required(MinorType.INT);
+          break;
+        case FLOAT:
+          castType = Types.required(MinorType.FLOAT4);
+          break;
+        case DOUBLE:
+          castType = Types.required(MinorType.FLOAT8);
+          break;
+        case DECIMAL:
+          if (!context.getPlannerSettings().getOptions().getOption(PlannerSettings.ENABLE_DECIMAL_DATA_TYPE)) {
+            throw UserException.unsupportedError()
+                .message(ExecErrorConstants.DECIMAL_DISABLE_ERR_MSG)
+                .build(logger);
+          }
 
-        int precision = call.getType().getPrecision();
-        int scale = call.getType().getScale();
+          int precision = call.getType().getPrecision();
+          int scale = call.getType().getScale();
 
-        castType =
-            TypeProtos.MajorType
-                .newBuilder()
+          castType = TypeProtos.MajorType.newBuilder()
                 .setMinorType(MinorType.VARDECIMAL)
                 .setPrecision(precision)
                 .setScale(scale)
                 .build();
-        break;
-
-        case "INTERVAL_YEAR":
-        case "INTERVAL_YEAR_MONTH":
-        case "INTERVAL_MONTH":
+          break;
+        case INTERVAL_YEAR:
+        case INTERVAL_YEAR_MONTH:
+        case INTERVAL_MONTH:
           castType = Types.required(MinorType.INTERVALYEAR);
           break;
-        case "INTERVAL_DAY":
-        case "INTERVAL_DAY_HOUR":
-        case "INTERVAL_DAY_MINUTE":
-        case "INTERVAL_DAY_SECOND":
-        case "INTERVAL_HOUR":
-        case "INTERVAL_HOUR_MINUTE":
-        case "INTERVAL_HOUR_SECOND":
-        case "INTERVAL_MINUTE":
-        case "INTERVAL_MINUTE_SECOND":
-        case "INTERVAL_SECOND":
+        case INTERVAL_DAY:
+        case INTERVAL_DAY_HOUR:
+        case INTERVAL_DAY_MINUTE:
+        case INTERVAL_DAY_SECOND:
+        case INTERVAL_HOUR:
+        case INTERVAL_HOUR_MINUTE:
+        case INTERVAL_HOUR_SECOND:
+        case INTERVAL_MINUTE:
+        case INTERVAL_MINUTE_SECOND:
+        case INTERVAL_SECOND:
           castType = Types.required(MinorType.INTERVALDAY);
           break;
-        case "BOOLEAN":
+        case BOOLEAN:
           castType = Types.required(MinorType.BIT);
           break;
-        case "BINARY":
+        case BINARY:
           castType = Types.required(MinorType.VARBINARY);
           break;
-        case "ANY":
+        case ANY:
           return arg; // Type will be same as argument.
         default:
           castType = Types.required(MinorType.valueOf(call.getType().getSqlTypeName().getName()));
@@ -592,12 +726,11 @@ public class DrillOptiq {
         case MILLENNIUM:
           final String functionPostfix = StringUtils.capitalize(timeUnitStr.toLowerCase());
           return FunctionCallFactory.createExpression("date_trunc_" + functionPostfix, args.subList(1, 2));
+        default:
+          throw new UnsupportedOperationException("date_trunc function supports the following time units: " +
+              "YEAR, MONTH, DAY, HOUR, MINUTE, SECOND, WEEK, QUARTER, DECADE, CENTURY, MILLENNIUM");
       }
-
-      throw new UnsupportedOperationException("date_trunc function supports the following time units: " +
-          "YEAR, MONTH, DAY, HOUR, MINUTE, SECOND, WEEK, QUARTER, DECADE, CENTURY, MILLENNIUM");
     }
-
 
     @Override
     public LogicalExpression visitLiteral(RexLiteral literal) {
@@ -642,11 +775,12 @@ public class DrillOptiq {
             .getBoolean(ENABLE_DECIMAL_DATA_TYPE.getOptionName())) {
           if (isLiteralNull(literal)) {
             return new TypedNullConstant(
-                Types.withScaleAndPrecision(
+                Types.withPrecisionAndScale(
                     MinorType.VARDECIMAL,
                     TypeProtos.DataMode.OPTIONAL,
-                    literal.getType().getScale(),
-                    literal.getType().getPrecision()));
+                    literal.getType().getPrecision(),
+                    literal.getType().getScale()
+                ));
           }
           return ValueExpressions.getVarDecimal((BigDecimal) literal.getValue(),
               literal.getType().getPrecision(),

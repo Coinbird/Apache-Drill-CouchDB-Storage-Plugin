@@ -38,14 +38,14 @@ import org.apache.drill.shaded.guava.com.google.common.collect.Lists;
 
 @JsonPropertyOrder({ "head", "graph" })
 public class PhysicalPlan {
-  static final org.slf4j.Logger logger = org.slf4j.LoggerFactory.getLogger(PhysicalPlan.class);
 
-  PlanProperties properties;
+  protected PlanProperties properties;
 
-  Graph<PhysicalOperator, Root, Leaf> graph;
+  protected Graph<PhysicalOperator, Root, Leaf> graph;
 
   @JsonCreator
-  public PhysicalPlan(@JsonProperty("head") PlanProperties properties, @JsonProperty("graph") List<PhysicalOperator> operators){
+  public PhysicalPlan(@JsonProperty("head") PlanProperties properties,
+                      @JsonProperty("graph") List<PhysicalOperator> operators) {
     this.properties = properties;
     this.graph = Graph.newGraph(operators, Root.class, Leaf.class);
   }
@@ -92,7 +92,7 @@ public class PhysicalPlan {
   public double totalCost() {
     double totalCost = 0;
     for (final PhysicalOperator ops : getSortedOperators()) {
-      totalCost += ops.getCost();
+      totalCost += ops.getCost().getOutputRowCount();
     }
     return totalCost;
   }

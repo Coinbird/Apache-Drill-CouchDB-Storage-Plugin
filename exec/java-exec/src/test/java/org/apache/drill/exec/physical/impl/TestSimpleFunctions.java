@@ -63,7 +63,6 @@ public class TestSimpleFunctions extends ExecTest {
 
   @Test
   public void testHashFunctionResolution() throws JClassAlreadyExistsException, IOException {
-    @SuppressWarnings("resource")
     final FunctionImplementationRegistry registry = new FunctionImplementationRegistry(c);
     // test required vs nullable Int input
     resolveHash(new TypedNullConstant(Types.optional(TypeProtos.MinorType.INT)),
@@ -103,7 +102,7 @@ public class TestSimpleFunctions extends ExecTest {
   }
 
   public void resolveHash(LogicalExpression arg, TypeProtos.DataMode expectedBestInputMode,
-                          FunctionImplementationRegistry registry) throws JClassAlreadyExistsException, IOException {
+                          FunctionImplementationRegistry registry) {
     final List<LogicalExpression> args = new ArrayList<>();
     args.add(arg);
     FunctionCall call = new FunctionCall(
@@ -113,7 +112,7 @@ public class TestSimpleFunctions extends ExecTest {
     );
     final FunctionResolver resolver = FunctionResolverFactory.getResolver(call);
     final DrillFuncHolder matchedFuncHolder = registry.findDrillFunction(resolver, call);
-    assertEquals( expectedBestInputMode, matchedFuncHolder.getParmMajorType(0).getMode());
+    assertEquals(expectedBestInputMode, matchedFuncHolder.getParamMajorType(0).getMode());
   }
 
   @Test

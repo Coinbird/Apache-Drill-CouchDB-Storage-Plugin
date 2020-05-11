@@ -19,8 +19,12 @@ package org.apache.drill.exec.vector.accessor.writer;
 
 import java.math.BigDecimal;
 
+import org.apache.drill.exec.record.metadata.ColumnMetadata;
 import org.apache.drill.exec.vector.accessor.UnsupportedConversionError;
 import org.apache.drill.exec.vector.accessor.impl.HierarchicalFormatter;
+import org.joda.time.Instant;
+import org.joda.time.LocalDate;
+import org.joda.time.LocalTime;
 import org.joda.time.Period;
 
 import io.netty.buffer.DrillBuf;
@@ -128,7 +132,6 @@ import io.netty.buffer.DrillBuf;
  * They are also very useful when working through the logic of performing
  * a roll-over when a vector overflows.
  */
-
 public abstract class BaseScalarWriter extends AbstractScalarWriterImpl {
 
   public static final int MIN_BUFFER_SIZE = 256;
@@ -137,8 +140,13 @@ public abstract class BaseScalarWriter extends AbstractScalarWriterImpl {
    * Listener invoked if the vector overflows. If not provided, then the writer
    * does not support vector overflow.
    */
-
   protected ColumnWriterListener listener;
+
+  /**
+   * Value to use to fill empties. Must be at least as wide as each
+   * value.
+   */
+  protected byte emptyValue[];
 
   protected DrillBuf drillBuf;
 
@@ -147,12 +155,22 @@ public abstract class BaseScalarWriter extends AbstractScalarWriterImpl {
    * the vector. Updated each time the buffer changes. The capacity is in
    * values (rather than bytes) to streamline the per-write logic.
    */
-
   protected int capacity;
 
   @Override
   public void bindListener(ColumnWriterListener listener) {
     this.listener = listener;
+  }
+
+  @Override
+  public void bindSchema(ColumnMetadata schema) {
+    super.bindSchema(schema);
+
+    // Set the default value, if any, from the schema.
+    final Object defaultValue = schema.decodeDefaultValue();
+    if (defaultValue != null) {
+      setDefaultValue(defaultValue);
+    }
   }
 
   /**
@@ -161,7 +179,6 @@ public abstract class BaseScalarWriter extends AbstractScalarWriterImpl {
    * by binding to a vector in bindVector(), or by resizing the vector
    * in prepareWrite().
    */
-
   protected abstract void setBuffer();
 
   protected void realloc(int size) {
@@ -177,7 +194,6 @@ public abstract class BaseScalarWriter extends AbstractScalarWriterImpl {
    * @return true if the vector can be grown, false if an
    * overflow should be triggered
    */
-
   protected boolean canExpand(int delta) {
     if (listener == null) {
       return true;
@@ -191,7 +207,6 @@ public abstract class BaseScalarWriter extends AbstractScalarWriterImpl {
    * we may need to grow the vector immediately after overflow. Since a double
    * overflow is not allowed, this recursive call won't continue forever.
    */
-
   protected void overflowed() {
     if (listener == null) {
       throw new UnsupportedOperationException("Overflow not supported");
@@ -208,6 +223,11 @@ public abstract class BaseScalarWriter extends AbstractScalarWriterImpl {
   @Override
   public void setNull() {
     throw UnsupportedConversionError.nullError(schema());
+  }
+
+  @Override
+  public void setBoolean(boolean value) {
+    throw conversionError("boolean");
   }
 
   @Override
@@ -236,6 +256,11 @@ public abstract class BaseScalarWriter extends AbstractScalarWriterImpl {
   }
 
   @Override
+  public void appendBytes(byte[] value, int len) {
+    throw conversionError("bytes");
+  }
+
+  @Override
   public void setDecimal(BigDecimal value) {
     throw conversionError("Decimal");
   }
@@ -243,6 +268,21 @@ public abstract class BaseScalarWriter extends AbstractScalarWriterImpl {
   @Override
   public void setPeriod(Period value) {
     throw conversionError("Period");
+  }
+
+  @Override
+  public void setDate(LocalDate value) {
+    throw conversionError("LocalDate");
+  }
+
+  @Override
+  public void setTime(LocalTime value) {
+    throw conversionError("LocalTime");
+  }
+
+  @Override
+  public void setTimestamp(Instant value) {
+    throw conversionError("Instant");
   }
 
   @Override

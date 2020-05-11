@@ -26,10 +26,7 @@ import org.apache.drill.exec.physical.impl.scan.project.VectorSource;
  * Represents a partition column (usually dir0, dir1, ...). This is an implicit
  * column that has a variable part: the partition index.
  */
-
 public class PartitionColumn extends MetadataColumn {
-
-  public static final int ID = 16;
 
   protected final int partition;
 
@@ -45,9 +42,6 @@ public class PartitionColumn extends MetadataColumn {
   }
 
   public int partition() { return partition; }
-
-  @Override
-  public int nodeType() { return ID; }
 
   @Override
   public MetadataColumn resolve(FileMetadata fileInfo, VectorSource source, int sourceIndex) {

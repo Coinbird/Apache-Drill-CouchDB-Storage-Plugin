@@ -17,6 +17,7 @@
  */
 package org.apache.drill.exec.physical.unit;
 
+import org.apache.drill.exec.record.BatchSchemaBuilder;
 import org.apache.drill.shaded.guava.com.google.common.collect.Lists;
 import org.apache.calcite.rel.RelFieldCollation;
 import org.apache.calcite.rel.core.JoinRelType;
@@ -41,6 +42,7 @@ import org.apache.drill.exec.record.metadata.SchemaBuilder;
 import org.apache.drill.exec.store.dfs.DrillFileSystem;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
+import org.apache.hadoop.fs.Path;
 import org.junit.BeforeClass;
 import org.junit.Ignore;
 import org.junit.Test;
@@ -86,9 +88,11 @@ public class TestNullInputMiniPlan extends MiniPlanUnitTestBase{
   public void testJsonInputMixedWithEmptyFiles1() throws Exception {
     RecordBatch scanBatch = createScanBatchFromJson(SINGLE_EMPTY_JSON, SINGLE_JSON, SINGLE_EMPTY_JSON2, SINGLE_JSON2);
 
-    BatchSchema expectedSchema = new SchemaBuilder()
+    SchemaBuilder schemaBuilder = new SchemaBuilder()
         .addNullable("id", TypeProtos.MinorType.BIGINT)
-        .addNullable("name", TypeProtos.MinorType.VARCHAR)
+        .addNullable("name", TypeProtos.MinorType.VARCHAR);
+    BatchSchema expectedSchema = new BatchSchemaBuilder()
+        .withSchemaBuilder(schemaBuilder)
         .build();
 
     new MiniPlanTestBuilder()
@@ -109,9 +113,11 @@ public class TestNullInputMiniPlan extends MiniPlanUnitTestBase{
   public void testJsonInputMixedWithEmptyFiles2() throws Exception {
     RecordBatch scanBatch = createScanBatchFromJson(SINGLE_EMPTY_JSON, SINGLE_EMPTY_JSON2, SINGLE_JSON, SINGLE_JSON2);
 
-    BatchSchema expectedSchema = new SchemaBuilder()
+    SchemaBuilder schemaBuilder = new SchemaBuilder()
         .addNullable("id", TypeProtos.MinorType.BIGINT)
-        .addNullable("name", TypeProtos.MinorType.VARCHAR)
+        .addNullable("name", TypeProtos.MinorType.VARCHAR);
+    BatchSchema expectedSchema = new BatchSchemaBuilder()
+        .withSchemaBuilder(schemaBuilder)
         .build();
 
     new MiniPlanTestBuilder()
@@ -131,9 +137,11 @@ public class TestNullInputMiniPlan extends MiniPlanUnitTestBase{
   public void testJsonInputMixedWithEmptyFiles3() throws Exception {
     RecordBatch scanBatch = createScanBatchFromJson(SINGLE_EMPTY_JSON, SINGLE_JSON, SINGLE_JSON2, SINGLE_EMPTY_JSON2);
 
-    BatchSchema expectedSchema = new SchemaBuilder()
+    SchemaBuilder schemaBuilder = new SchemaBuilder()
         .addNullable("id", TypeProtos.MinorType.BIGINT)
-        .addNullable("name", TypeProtos.MinorType.VARCHAR)
+        .addNullable("name", TypeProtos.MinorType.VARCHAR);
+    BatchSchema expectedSchema = new BatchSchemaBuilder()
+        .withSchemaBuilder(schemaBuilder)
         .build();
 
     new MiniPlanTestBuilder()
@@ -153,9 +161,11 @@ public class TestNullInputMiniPlan extends MiniPlanUnitTestBase{
   public void testJsonInputMixedWithEmptyFiles4() throws Exception {
     RecordBatch scanBatch = createScanBatchFromJson(SINGLE_JSON, SINGLE_JSON2, SINGLE_EMPTY_JSON2, SINGLE_EMPTY_JSON2);
 
-    BatchSchema expectedSchema = new SchemaBuilder()
+    SchemaBuilder schemaBuilder = new SchemaBuilder()
         .addNullable("id", TypeProtos.MinorType.BIGINT)
-        .addNullable("name", TypeProtos.MinorType.VARCHAR)
+        .addNullable("name", TypeProtos.MinorType.VARCHAR);
+    BatchSchema expectedSchema = new BatchSchemaBuilder()
+        .withSchemaBuilder(schemaBuilder)
         .build();
 
     new MiniPlanTestBuilder()
@@ -187,7 +197,7 @@ public class TestNullInputMiniPlan extends MiniPlanUnitTestBase{
 
   @Test
   public void testStreamingAggEmpty() throws Exception {
-    final PhysicalOperator hashAgg = new StreamingAggregate(null, parseExprs("a", "a"), parseExprs("sum(b)", "b_sum"), 1.0f);
+    final PhysicalOperator hashAgg = new StreamingAggregate(null, parseExprs("a", "a"), parseExprs("sum(b)", "b_sum"));
     testSingleInputNullBatchHandling(hashAgg);
   }
 
@@ -272,11 +282,12 @@ public class TestNullInputMiniPlan extends MiniPlanUnitTestBase{
     RecordBatch left = createScanBatchFromJson(SINGLE_EMPTY_JSON);
 
     String file = DrillFileUtils.getResourceAsFile("/tpchmulti/region/01.parquet").toURI().toString();
+    List<Path> filePath = Collections.singletonList(new Path(file));
 
     RecordBatch scanBatch = new ParquetScanBuilder()
         .fileSystem(fs)
         .columnsToRead("R_REGIONKEY")
-        .inputPaths(Lists.newArrayList(file))
+        .inputPaths(filePath)
         .build();
 
     RecordBatch projectBatch = new PopBuilder()
@@ -290,8 +301,10 @@ public class TestNullInputMiniPlan extends MiniPlanUnitTestBase{
         .addInput(projectBatch)
         .build();
 
-    BatchSchema expectedSchema = new SchemaBuilder()
-        .add("regionkey", TypeProtos.MinorType.BIGINT)
+    SchemaBuilder schemaBuilder = new SchemaBuilder()
+        .add("regionkey", TypeProtos.MinorType.BIGINT);
+    BatchSchema expectedSchema = new BatchSchemaBuilder()
+        .withSchemaBuilder(schemaBuilder)
         .build();
 
     new MiniPlanTestBuilder()
@@ -321,9 +334,11 @@ public class TestNullInputMiniPlan extends MiniPlanUnitTestBase{
         .addInput(rightScan)
         .build();
 
-    BatchSchema expectedSchema = new SchemaBuilder()
+    SchemaBuilder schemaBuilder = new SchemaBuilder()
         .addNullable("a", TypeProtos.MinorType.BIGINT)
-        .addNullable("b", TypeProtos.MinorType.BIGINT)
+        .addNullable("b", TypeProtos.MinorType.BIGINT);
+    BatchSchema expectedSchema = new BatchSchemaBuilder()
+        .withSchemaBuilder(schemaBuilder)
         .withSVMode(BatchSchema.SelectionVectorMode.NONE)
         .build();
 
@@ -352,9 +367,11 @@ public class TestNullInputMiniPlan extends MiniPlanUnitTestBase{
         .addInput(right)
         .build();
 
-    BatchSchema expectedSchema = new SchemaBuilder()
+    SchemaBuilder schemaBuilder = new SchemaBuilder()
         .addNullable("a", TypeProtos.MinorType.BIGINT)
-        .addNullable("b", TypeProtos.MinorType.BIGINT)
+        .addNullable("b", TypeProtos.MinorType.BIGINT);
+    BatchSchema expectedSchema = new BatchSchemaBuilder()
+        .withSchemaBuilder(schemaBuilder)
         .withSVMode(BatchSchema.SelectionVectorMode.NONE)
         .build();
 
@@ -384,9 +401,11 @@ public class TestNullInputMiniPlan extends MiniPlanUnitTestBase{
         .addInput(rightScan)
         .build();
 
-    BatchSchema expectedSchema = new SchemaBuilder()
+    SchemaBuilder schemaBuilder = new SchemaBuilder()
         .addNullable("a", TypeProtos.MinorType.BIGINT)
-        .addNullable("b", TypeProtos.MinorType.BIGINT)
+        .addNullable("b", TypeProtos.MinorType.BIGINT);
+    BatchSchema expectedSchema = new BatchSchemaBuilder()
+        .withSchemaBuilder(schemaBuilder)
         .withSVMode(BatchSchema.SelectionVectorMode.NONE)
         .build();
 
@@ -415,9 +434,11 @@ public class TestNullInputMiniPlan extends MiniPlanUnitTestBase{
         .addInput(right)
         .build();
 
-    BatchSchema expectedSchema = new SchemaBuilder()
+    SchemaBuilder schemaBuilder = new SchemaBuilder()
         .addNullable("a", TypeProtos.MinorType.BIGINT)
-        .addNullable("b", TypeProtos.MinorType.BIGINT)
+        .addNullable("b", TypeProtos.MinorType.BIGINT);
+    BatchSchema expectedSchema = new BatchSchemaBuilder()
+        .withSchemaBuilder(schemaBuilder)
         .withSVMode(BatchSchema.SelectionVectorMode.NONE)
         .build();
 
@@ -457,14 +478,16 @@ public class TestNullInputMiniPlan extends MiniPlanUnitTestBase{
         .build();
 
     RecordBatch batch = new PopBuilder()
-        .physicalOperator(new UnionAll(Collections.EMPTY_LIST)) // Children list is provided through RecordBatch
+        .physicalOperator(new UnionAll(Collections.emptyList())) // Children list is provided through RecordBatch
         .addInput(leftFilter)
         .addInput(rightFilter)
         .build();
 
-    BatchSchema expectedSchema = new SchemaBuilder()
+    SchemaBuilder schemaBuilder = new SchemaBuilder()
         .addNullable("a", TypeProtos.MinorType.BIGINT)
-        .addNullable("b", TypeProtos.MinorType.VARCHAR)
+        .addNullable("b", TypeProtos.MinorType.VARCHAR);
+    BatchSchema expectedSchema = new BatchSchemaBuilder()
+        .withSchemaBuilder(schemaBuilder)
         .withSVMode(BatchSchema.SelectionVectorMode.NONE)
         .build();
 
@@ -484,11 +507,13 @@ public class TestNullInputMiniPlan extends MiniPlanUnitTestBase{
         "100.0", "col3",
         "cast(nonExist as varchar(100))", "col4"), null, true);
 
-    BatchSchema expectedSchema = new SchemaBuilder()
+    SchemaBuilder schemaBuilder = new SchemaBuilder()
         .addNullable("col1", TypeProtos.MinorType.INT)
         .addNullable("col2", TypeProtos.MinorType.INT)
         .add("col3", TypeProtos.MinorType.FLOAT8)
-        .addNullable("col4", TypeProtos.MinorType.VARCHAR, 100)
+        .addNullable("col4", TypeProtos.MinorType.VARCHAR, 100);
+    BatchSchema expectedSchema = new BatchSchemaBuilder()
+        .withSchemaBuilder(schemaBuilder)
         .withSVMode(BatchSchema.SelectionVectorMode.NONE)
         .build();
 
@@ -554,10 +579,10 @@ public class TestNullInputMiniPlan extends MiniPlanUnitTestBase{
   }
 
   private RecordBatch createScanBatchFromJson(String... resourcePaths) throws Exception {
-    List<String> inputPaths = new ArrayList<>();
+    List<Path> inputPaths = new ArrayList<>();
 
     for (String resource : resourcePaths) {
-      inputPaths.add(DrillFileUtils.getResourceAsFile(resource).toURI().toString());
+      inputPaths.add(new Path(DrillFileUtils.getResourceAsFile(resource).toURI()));
     }
 
     RecordBatch scanBatch = new JsonScanBuilder()

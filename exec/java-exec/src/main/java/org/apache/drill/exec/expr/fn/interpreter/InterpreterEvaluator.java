@@ -17,6 +17,7 @@
  */
 package org.apache.drill.exec.expr.fn.interpreter;
 
+import java.lang.reflect.Array;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.util.Objects;
@@ -26,6 +27,7 @@ import javax.inject.Inject;
 
 import org.apache.drill.exec.expr.BasicTypeHelper;
 import org.apache.drill.shaded.guava.com.google.common.base.Function;
+import org.apache.drill.common.FunctionNames;
 import org.apache.drill.common.exceptions.DrillRuntimeException;
 import org.apache.drill.common.expression.BooleanOperator;
 import org.apache.drill.common.expression.ConvertExpression;
@@ -87,7 +89,6 @@ public class InterpreterEvaluator {
     }
 
     outVV.getMutator().setValueCount(recordCount);
-
   }
 
   /**
@@ -101,7 +102,8 @@ public class InterpreterEvaluator {
    * @throws Exception if {@code args} types does not match function input arguments types
    */
   public static ValueHolder evaluateFunction(DrillSimpleFunc interpreter, Object[] args, String funcName) throws Exception {
-    Preconditions.checkArgument(interpreter != null, "interpreter could not be null when use interpreted model to evaluate function " + funcName);
+    Preconditions.checkArgument(interpreter != null,
+        "interpreter could not be null when use interpreted model to evaluate function " + funcName);
 
     // the current input index to assign into the next available parameter, found using the @Param notation
     // the order parameters are declared in the java class for the DrillFunc is meaningful
@@ -113,10 +115,17 @@ public class InterpreterEvaluator {
         // if this is annotated as a parameter to the function
         if (f.getAnnotation(Param.class) != null) {
           f.setAccessible(true);
-          if (currParameterIndex < args.length) {
+          if (f.getType().getComponentType() != null) {
+            Object array = Array.newInstance(f.getType().getComponentType(), args.length - currParameterIndex);
+            for (int i = 0; i < args.length - currParameterIndex; i++) {
+              Array.set(array, i, args[currParameterIndex + i]);
+            }
+            currParameterIndex = args.length;
+            f.set(interpreter, array);
+          } else if (currParameterIndex < args.length) {
             f.set(interpreter, args[currParameterIndex]);
+            currParameterIndex++;
           }
-          currParameterIndex++;
         } else if (f.getAnnotation(Output.class) != null) {
           f.setAccessible(true);
           outField = f;
@@ -144,7 +153,7 @@ public class InterpreterEvaluator {
 
   private static class InitVisitor extends AbstractExprVisitor<LogicalExpression, VectorAccessible, RuntimeException> {
 
-    private UdfUtilities udfUtilities;
+    private final UdfUtilities udfUtilities;
 
     protected InitVisitor(UdfUtilities udfUtilities) {
       super();
@@ -153,7 +162,7 @@ public class InterpreterEvaluator {
 
     @Override
     public LogicalExpression visitFunctionHolderExpression(FunctionHolderExpression holderExpr, VectorAccessible incoming) {
-      if (! (holderExpr.getHolder() instanceof DrillSimpleFuncHolder)) {
+      if (!(holderExpr.getHolder() instanceof DrillSimpleFuncHolder)) {
         throw new UnsupportedOperationException("Only Drill simple UDF can be used in interpreter mode!");
       }
 
@@ -167,7 +176,7 @@ public class InterpreterEvaluator {
         DrillSimpleFunc interpreter = holder.createInterpreter();
         Field[] fields = interpreter.getClass().getDeclaredFields();
         for (Field f : fields) {
-          if ( f.getAnnotation(Inject.class) != null ) {
+          if (f.getAnnotation(Inject.class) != null) {
             f.setAccessible(true);
             Class<?> fieldType = f.getType();
             if (UdfUtilities.INJECTABLE_GETTER_METHODS.get(fieldType) != null) {
@@ -200,10 +209,9 @@ public class InterpreterEvaluator {
     }
   }
 
-
   public static class EvalVisitor extends AbstractExprVisitor<ValueHolder, Integer, RuntimeException> {
-    private VectorAccessible incoming;
-    private UdfUtilities udfUtilities;
+    private final VectorAccessible incoming;
+    private final UdfUtilities udfUtilities;
 
     protected EvalVisitor(VectorAccessible incoming, UdfUtilities udfUtilities) {
       super();
@@ -223,12 +231,12 @@ public class InterpreterEvaluator {
 
     @Override
     public ValueHolder visitDecimal9Constant(ValueExpressions.Decimal9Expression decExpr,Integer value) throws RuntimeException {
-      return ValueHolderHelper.getDecimal9Holder(decExpr.getIntFromDecimal(), decExpr.getScale(), decExpr.getPrecision());
+      return ValueHolderHelper.getDecimal9Holder(decExpr.getIntFromDecimal(), decExpr.getPrecision(), decExpr.getScale());
     }
 
     @Override
     public ValueHolder visitDecimal18Constant(ValueExpressions.Decimal18Expression decExpr,Integer value) throws RuntimeException {
-      return ValueHolderHelper.getDecimal18Holder(decExpr.getLongFromDecimal(), decExpr.getScale(), decExpr.getPrecision());
+      return ValueHolderHelper.getDecimal18Holder(decExpr.getLongFromDecimal(), decExpr.getPrecision(), decExpr.getScale());
     }
 
     @Override
@@ -306,9 +314,9 @@ public class InterpreterEvaluator {
     public ValueHolder visitNullExpression(NullExpression e,Integer value) throws RuntimeException {
       return visitUnknown(e, value);
     }
+
     // TODO - review what to do with these (2 functions above)
     //********************************************
-
     @Override
     public ValueHolder visitFunctionHolderExpression(FunctionHolderExpression holderExpr, Integer inIndex) {
       if (! (holderExpr.getHolder() instanceof DrillSimpleFuncHolder)) {
@@ -324,7 +332,7 @@ public class InterpreterEvaluator {
         ValueHolder valueHolder = holderExpr.args.get(i).accept(this, inIndex);
         Object resultArg = valueHolder;
         TypeProtos.MajorType argType = TypeHelper.getValueHolderType(valueHolder);
-        TypeProtos.MajorType holderParamType = holder.getParameters()[i].getType();
+        TypeProtos.MajorType holderParamType = holder.getParamMajorType(i);
         // In case function use "NULL_IF_NULL" policy.
         if (holder.getNullHandling() == FunctionTemplate.NullHandling.NULL_IF_NULL) {
           // Case 1: parameter is non-nullable, argument is nullable.
@@ -343,7 +351,7 @@ public class InterpreterEvaluator {
             resultArg = TypeHelper.nullify(valueHolder);
           }
         }
-        if (holder.getParameters()[i].isFieldReader()) {
+        if (holder.getAttributeParameter(i).isFieldReader()) {
           resultArg = BasicTypeHelper.getHolderReaderImpl(argType, valueHolder);
         }
         args[i] = resultArg;
@@ -368,19 +376,19 @@ public class InterpreterEvaluator {
       } catch (Exception ex) {
         throw new RuntimeException("Error in evaluating function of " + holderExpr.getName(), ex);
       }
-
     }
-
 
     @Override
     public ValueHolder visitBooleanOperator(BooleanOperator op, Integer inIndex) {
       // Apply short circuit evaluation to boolean operator.
-      if (op.getName().equals("booleanAnd")) {
+      if (op.getName().equals(FunctionNames.AND)) {
         return visitBooleanAnd(op, inIndex);
-      }else if(op.getName().equals("booleanOr")) {
+      } else if(op.getName().equals(FunctionNames.OR)) {
         return visitBooleanOr(op, inIndex);
       } else {
-        throw new UnsupportedOperationException("BooleanOperator can only be booleanAnd, booleanOr. You are using " + op.getName());
+        throw new UnsupportedOperationException(
+            String.format("BooleanOperator can only be %s, %s. You are using %s",
+                FunctionNames.AND, FunctionNames.OR, op.getName()));
       }
     }
 
@@ -435,7 +443,6 @@ public class InterpreterEvaluator {
       });
     }
 
-
     @Override
     public ValueHolder visitUnknown(LogicalExpression e, Integer inIndex) throws RuntimeException {
       if (e instanceof ValueVectorReadExpression) {
@@ -443,7 +450,6 @@ public class InterpreterEvaluator {
       } else {
         return super.visitUnknown(e, inIndex);
       }
-
     }
 
     protected ValueHolder visitValueVectorReadExpression(ValueVectorReadExpression e, Integer inIndex)
@@ -479,10 +485,10 @@ public class InterpreterEvaluator {
     //          2) if none argument is false, but at least one is null, return null.
     //          3) finally, return true (finalValue).
     private ValueHolder visitBooleanAnd(BooleanOperator op, Integer inIndex) {
-      ValueHolder [] args = new ValueHolder [op.args.size()];
+      ValueHolder [] args = new ValueHolder [op.argCount()];
       boolean hasNull = false;
-      for (int i = 0; i < op.args.size(); i++) {
-        args[i] = op.args.get(i).accept(this, inIndex);
+      for (int i = 0; i < op.argCount(); i++) {
+        args[i] = op.arg(i).accept(this, inIndex);
 
         Trivalent flag = isBitOn(args[i]);
 
@@ -510,10 +516,10 @@ public class InterpreterEvaluator {
     //    null    false    null
     //    null    null     null
     private ValueHolder visitBooleanOr(BooleanOperator op, Integer inIndex) {
-      ValueHolder [] args = new ValueHolder [op.args.size()];
+      ValueHolder [] args = new ValueHolder [op.argCount()];
       boolean hasNull = false;
-      for (int i = 0; i < op.args.size(); i++) {
-        args[i] = op.args.get(i).accept(this, inIndex);
+      for (int i = 0; i < op.argCount(); i++) {
+        args[i] = op.arg(i).accept(this, inIndex);
 
         Trivalent flag = isBitOn(args[i]);
 
@@ -557,8 +563,6 @@ public class InterpreterEvaluator {
     private ValueHolder getConstantValueHolder(String value, MinorType type, Function<DrillBuf, ValueHolder> holderInitializer) {
       return udfUtilities.getConstantValueHolder(value, type, holderInitializer);
     }
-
   }
-
 }
 

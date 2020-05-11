@@ -56,6 +56,7 @@ import org.apache.drill.exec.record.VectorAccessible;
 import org.apache.drill.exec.server.DrillbitContext;
 import org.apache.drill.exec.store.RecordReader;
 import org.apache.drill.exec.rpc.NamedThreadFactory;
+import org.apache.hadoop.fs.Path;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Rule;
@@ -128,7 +129,7 @@ public class PhysicalOpUnitTestBase extends ExecTest {
 
   protected static class BatchIterator implements Iterable<VectorAccessible> {
 
-    private RecordBatch operator;
+    private final RecordBatch operator;
     public BatchIterator(RecordBatch operator) {
       this.operator = operator;
     }
@@ -144,11 +145,8 @@ public class PhysicalOpUnitTestBase extends ExecTest {
             lastResultOutcome = operator.next();
             needToGrabNext = false;
           }
-          if (lastResultOutcome == RecordBatch.IterOutcome.NONE
-            || lastResultOutcome == RecordBatch.IterOutcome.STOP) {
+          if (lastResultOutcome == RecordBatch.IterOutcome.NONE) {
             return false;
-          } else if (lastResultOutcome == RecordBatch.IterOutcome.OUT_OF_MEMORY) {
-            throw new RuntimeException("Operator ran out of memory");
           } else {
             return true;
           }
@@ -249,7 +247,7 @@ public class PhysicalOpUnitTestBase extends ExecTest {
     }
 
     @Override
-    public WorkEventBus getWorkEventbus() {
+    public WorkEventBus getWorkEventBus() {
       return null;
     }
 
@@ -307,8 +305,7 @@ public class PhysicalOpUnitTestBase extends ExecTest {
     }
 
     @Override
-    public RuntimeFilterWritable getRuntimeFilter(long rfIdentifier, long maxWaitTime, TimeUnit timeUnit)
-    {
+    public RuntimeFilterWritable getRuntimeFilter(long rfIdentifier, long maxWaitTime, TimeUnit timeUnit) {
       return null;
     }
   }
@@ -399,9 +396,9 @@ public class PhysicalOpUnitTestBase extends ExecTest {
    * @param columnsToRead
    * @return The {@link org.apache.drill.exec.store.easy.json.JSONRecordReader} corresponding to each given input path.
    */
-  public static Iterator<RecordReader> getJsonReadersFromInputFiles(DrillFileSystem fs, List<String> inputPaths, FragmentContext fragContext, List<SchemaPath> columnsToRead) {
+  public static Iterator<RecordReader> getJsonReadersFromInputFiles(DrillFileSystem fs, List<Path> inputPaths, FragmentContext fragContext, List<SchemaPath> columnsToRead) {
     List<RecordReader> readers = new ArrayList<>();
-    for (String inputPath : inputPaths) {
+    for (Path inputPath : inputPaths) {
       readers.add(new JSONRecordReader(fragContext, inputPath, fs, columnsToRead));
     }
     return readers.iterator();

@@ -22,6 +22,8 @@ import static org.junit.Assert.assertNull;
 
 import java.util.List;
 
+import org.apache.drill.common.util.DrillStringUtils;
+import org.apache.drill.exec.util.DrillFileSystemUtil;
 import org.apache.drill.shaded.guava.com.google.common.collect.ImmutableList;
 import org.apache.drill.test.BaseTestQuery;
 import org.apache.hadoop.fs.FileStatus;
@@ -30,7 +32,7 @@ import org.junit.Test;
 
 public class TestFileSelection extends BaseTestQuery {
   private static final List<FileStatus> EMPTY_STATUSES = ImmutableList.of();
-  private static final List<String> EMPTY_FILES = ImmutableList.of();
+  private static final List<Path> EMPTY_FILES = ImmutableList.of();
   private static final String EMPTY_ROOT = "";
 
   @Test
@@ -38,8 +40,8 @@ public class TestFileSelection extends BaseTestQuery {
     for (final Object statuses : new Object[] { null, EMPTY_STATUSES}) {
       for (final Object files : new Object[]{null, EMPTY_FILES}) {
         for (final Object root : new Object[]{null, EMPTY_ROOT}) {
-          final FileSelection selection = FileSelection.create((List<FileStatus>) statuses, (List<String>) files,
-              (String)root);
+          FileSelection selection = FileSelection.create((List<FileStatus>) statuses, (List<Path>) files,
+                  DrillFileSystemUtil.createPathSafe((String) root));
           assertNull(selection);
         }
       }
@@ -61,7 +63,7 @@ public class TestFileSelection extends BaseTestQuery {
       boolean isPathGood = true;
       try {
         String parent = badPaths[i][0];
-        String subPath = FileSelection.removeLeadingSlash(badPaths[i][1]);
+        String subPath = DrillStringUtils.removeLeadingSlash(badPaths[i][1]);
         String path = new Path(parent, subPath).toString();
         FileSelection.checkBackPaths(parent, path, subPath);
       } catch (IllegalArgumentException e) {
@@ -87,7 +89,7 @@ public class TestFileSelection extends BaseTestQuery {
     for (int i = 0; i < goodPaths.length; i++) {
       try {
         String parent = goodPaths[i][0];
-        String subPath = FileSelection.removeLeadingSlash(goodPaths[i][1]);
+        String subPath = DrillStringUtils.removeLeadingSlash(goodPaths[i][1]);
         String path = new Path(parent, subPath).toString();
         FileSelection.checkBackPaths(parent, path, subPath);
       } catch (IllegalArgumentException e) {

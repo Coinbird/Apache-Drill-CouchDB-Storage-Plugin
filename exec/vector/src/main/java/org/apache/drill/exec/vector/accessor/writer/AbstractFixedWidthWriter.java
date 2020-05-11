@@ -17,16 +17,30 @@
  */
 package org.apache.drill.exec.vector.accessor.writer;
 
+import java.math.BigDecimal;
+
 import org.apache.drill.exec.memory.BaseAllocator;
 import org.apache.drill.exec.vector.ValueVector;
+import org.apache.drill.exec.vector.accessor.InvalidConversionError;
 import org.apache.drill.exec.vector.accessor.impl.HierarchicalFormatter;
 
 /**
  * Base class for writers for fixed-width vectors. Handles common
  * tasks, leaving the generated code to handle only type-specific
  * operations.
+ * <p>
+ * Fixed-width writers provide default values for empty (unused) slots.
+ * Suppose a client writes to slot 0, skips a few rows, then writes to slot
+ * 5. We could leave the intermediate values unwritten. But, since Drill
+ * reuses buffers, the slots may contain garbage. Instead, we implement
+ * "fill empties" logic. When we write to slot 5, we notice that the last
+ * slot written was 0, and we fill in slots 1, 2, 3 and 4 with values.
+ * <p>
+ * The fill value defaults to 0, and is defined as a block of zero-bytes
+ * (at least) the same length as each data value. Derived classes also
+ * allow setting a default value. In this case, the default value is encoded
+ * into a byte array, and that array is copied to each slot as the fill value.
  */
-
 public abstract class AbstractFixedWidthWriter extends BaseScalarWriter {
 
   public static abstract class BaseFixedWidthWriter extends AbstractFixedWidthWriter {
@@ -35,8 +49,11 @@ public abstract class AbstractFixedWidthWriter extends BaseScalarWriter {
      * Buffer of zeros used to back-fill vector buffers with
      * zeros.
      */
-
     private static final byte ZERO_BUF[] = new byte[256];
+
+    public BaseFixedWidthWriter() {
+      emptyValue = ZERO_BUF;
+    }
 
     /**
      * Determine the write index, growing, overflowing and back-filling
@@ -52,7 +69,6 @@ public abstract class AbstractFixedWidthWriter extends BaseScalarWriter {
      *
      * @return the index at which to write the current value
      */
-
     protected final int prepareWrite() {
 
       // "Fast path" for the normal case of no fills, no overflow.
@@ -68,7 +84,6 @@ public abstract class AbstractFixedWidthWriter extends BaseScalarWriter {
       }
 
       // Track the last write location for zero-fill use next time around.
-
       lastWriteIndex = writeIndex;
       return writeIndex;
     }
@@ -76,30 +91,77 @@ public abstract class AbstractFixedWidthWriter extends BaseScalarWriter {
     protected final int prepareWrite(int writeIndex) {
 
       // Either empties must be filed or the vector is full.
-
       writeIndex = resize(writeIndex);
 
       // Fill empties to the write position.
-
       fillEmpties(writeIndex);
       return writeIndex;
     }
 
     /**
      * Fill empties. This is required because the allocated memory is not
-     * zero-filled.
+     * zero-filled. Also allows filling a non-nullable vector with a defined
+     * default value.
      */
-
     @Override
     protected final void fillEmpties(final int writeIndex) {
       final int width = width();
-      final int stride = ZERO_BUF.length / width;
+      final int stride = emptyValue.length / width;
       int dest = lastWriteIndex + 1;
       while (dest < writeIndex) {
-        int length = writeIndex - dest;
-        length = Math.min(length, stride);
-        drillBuf.setBytes(dest * width, ZERO_BUF, 0, length * width);
+        final int length = Math.min(writeIndex - dest, stride);
+        drillBuf.setBytes(dest * width, emptyValue, 0, length * width);
         dest += length;
+      }
+    }
+  }
+
+  /**
+   * Base class for writers that use the Java int type as their native
+   * type. Handles common implicit conversions from other types to int.
+   */
+  public static abstract class BaseIntWriter extends BaseFixedWidthWriter {
+
+    @Override
+    public final void setBoolean(final boolean value) {
+      setInt(value ? 1 : 0);
+    }
+
+    @Override
+    public final void setLong(final long value) {
+      try {
+        // Catches int overflow. Does not catch overflow for smaller types.
+        setInt(Math.toIntExact(value));
+      } catch (final ArithmeticException e) {
+        throw InvalidConversionError.writeError(schema(), value, e);
+      }
+    }
+
+    @Override
+    public final void setDouble(final double value) {
+      try {
+        // Catches int overflow. Does not catch overflow from
+        // double. See Math.round for details.
+        setInt(Math.toIntExact(Math.round(value)));
+      } catch (final ArithmeticException e) {
+        throw InvalidConversionError.writeError(schema(), value, e);
+      }
+    }
+
+    @Override
+    public final void setDecimal(final BigDecimal value) {
+      try {
+        // Catches int overflow.
+        setInt(value.intValueExact());
+      } catch (final ArithmeticException e) {
+        throw InvalidConversionError.writeError(schema(), value, e);
+      }
+    }
+
+    @Override
+    public final void setValue(final Object value) {
+      if (value != null) {
+        setInt((int) value);
       }
     }
   }
@@ -110,7 +172,6 @@ public abstract class AbstractFixedWidthWriter extends BaseScalarWriter {
    * and at the end of a batch. Note that this is the position of the last
    * write, not the next write position. Starts at -1 (no last write).
    */
-
   protected int lastWriteIndex;
 
   @Override
@@ -134,7 +195,6 @@ public abstract class AbstractFixedWidthWriter extends BaseScalarWriter {
 
     // Since some vectors start off as 0 length, set a
     // minimum size to avoid silly thrashing on early rows.
-
     final int size = BaseAllocator.nextPowerOfTwo(
         Math.max((writeIndex + 1) * width(), MIN_BUFFER_SIZE));
     realloc(size);
@@ -148,7 +208,6 @@ public abstract class AbstractFixedWidthWriter extends BaseScalarWriter {
 
     // Since some vectors start off as 0 length, set a
     // minimum size to avoid silly thrashing on early rows.
-
     final int size = BaseAllocator.nextPowerOfTwo(
         Math.max((writeIndex + 1) * width, MIN_BUFFER_SIZE));
 
@@ -161,14 +220,12 @@ public abstract class AbstractFixedWidthWriter extends BaseScalarWriter {
     // a new set of vectors. Internal fragmentation will result, but this
     // approach (along with proper initial vector sizing), minimizes that
     // fragmentation.
-
     if (size <= ValueVector.MAX_BUFFER_SIZE &&
         canExpand(size - capacity * width)) {
 
       // Optimized form of reAlloc() which does not zero memory, does not do
       // bounds checks (since they were already done above). The write index
       // and offset remain unchanged.
-
       realloc(size);
     } else {
 
@@ -178,13 +235,11 @@ public abstract class AbstractFixedWidthWriter extends BaseScalarWriter {
       // The call to endWrite() will also set the final writer index for the
       // current vector. Then, bindVector() will be called to provide the new
       // vector. The write index changes with the new vector.
-
       overflowed();
     }
 
     // Call to resize may cause rollover, so reset write index
     // afterwards.
-
     return vectorIndex.vectorIndex();
   }
 
@@ -198,7 +253,6 @@ public abstract class AbstractFixedWidthWriter extends BaseScalarWriter {
    *
    * @param index new last write index
    */
-
   public void setLastWriteIndex(int index) {
     lastWriteIndex = index;
   }
@@ -209,7 +263,6 @@ public abstract class AbstractFixedWidthWriter extends BaseScalarWriter {
     // Pretend we've written up to the previous value.
     // This will leave null values (as specified by the
     // caller) uninitialized.
-
     lastWriteIndex = vectorIndex.vectorIndex() - 1;
   }
 
@@ -225,7 +278,7 @@ public abstract class AbstractFixedWidthWriter extends BaseScalarWriter {
 
   @Override
   public void postRollover() {
-    int newIndex = Math.max(lastWriteIndex - vectorIndex.rowStartIndex(), -1);
+    final int newIndex = Math.max(lastWriteIndex - vectorIndex.rowStartIndex(), -1);
     startWrite();
     lastWriteIndex = newIndex;
   }
@@ -247,7 +300,6 @@ public abstract class AbstractFixedWidthWriter extends BaseScalarWriter {
     // odd cases, the call to writeOffset() might cause the vector to
     // resize (as part of filling empties), so grab the buffer AFTER
     // the call to writeOffset().
-
     mandatoryResize(valueCount - 1);
     fillEmpties(valueCount);
     vector().getBuffer().writerIndex(valueCount * width());
@@ -255,7 +307,6 @@ public abstract class AbstractFixedWidthWriter extends BaseScalarWriter {
     // Last write index is either the last value we just filled,
     // or it is the last actual write, if this is an overflow
     // situation.
-
     lastWriteIndex = Math.max(lastWriteIndex, valueCount - 1);
   }
 

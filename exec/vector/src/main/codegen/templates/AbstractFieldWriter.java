@@ -95,6 +95,12 @@ abstract class AbstractFieldWriter extends AbstractBaseWriter implements FieldWr
   }
 
   @Override
+  public DictWriter dict() {
+    fail("Dict");
+    return null;
+  }
+
+  @Override
   public ListWriter list() {
     fail("List");
     return null;
@@ -107,8 +113,48 @@ abstract class AbstractFieldWriter extends AbstractBaseWriter implements FieldWr
   }
 
   @Override
+  public DictWriter dict(String name) {
+    fail("Dict");
+    return null;
+  }
+
+  @Override
+  public FieldWriter getKeyWriter() {
+    fail("KeyWriter");
+    return null;
+  }
+
+  @Override
+  public FieldWriter getValueWriter() {
+    fail("ValueWriter");
+    return null;
+  }
+
+  @Override
+  public void startKeyValuePair() {
+    fail("startKeyValuePair()");
+  }
+
+  @Override
+  public void endKeyValuePair() {
+    fail("endKeyValuePair()");
+  }
+
+  @Override
   public ListWriter list(String name) {
     fail("List");
+    return null;
+  }
+
+  @Override
+  public UnionVectorWriter union(String name) {
+    fail("Union");
+    return null;
+  }
+
+  @Override
+  public UnionVectorWriter union() {
+    fail("Union");
     return null;
   }
 
@@ -119,13 +165,13 @@ abstract class AbstractFieldWriter extends AbstractBaseWriter implements FieldWr
   <#assign capName = minor.class?cap_first />
   <#if minor.class?contains("Decimal") >
   @Override
-  public ${capName}Writer ${lowerName}(String name, int scale, int precision) {
+  public ${capName}Writer ${lowerName}(String name, int precision, int scale) {
     fail("${capName}");
     return null;
   }
 
   @Override
-  public ${capName}Writer ${lowerName}(int scale, int precision) {
+  public ${capName}Writer ${lowerName}(int precision, int scale) {
     fail("${capName}");
     return null;
   }

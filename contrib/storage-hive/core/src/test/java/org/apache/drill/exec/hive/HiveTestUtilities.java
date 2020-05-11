@@ -25,9 +25,18 @@ import java.nio.file.attribute.PosixFilePermission;
 import java.util.EnumSet;
 import java.util.Set;
 
-import org.apache.hadoop.hive.ql.CommandNeedRetryException;
+import org.apache.drill.test.QueryBuilder;
+import org.apache.drill.test.TestTools;
 import org.apache.hadoop.hive.ql.Driver;
 import org.apache.hadoop.hive.ql.processors.CommandProcessorResponse;
+import org.apache.hadoop.util.ComparableVersion;
+import org.apache.hive.common.util.HiveVersionInfo;
+import org.junit.AssumptionViolatedException;
+
+import static org.hamcrest.CoreMatchers.containsString;
+import static org.hamcrest.CoreMatchers.startsWith;
+import static org.junit.Assert.assertThat;
+import static org.junit.Assume.assumeThat;
 
 public class HiveTestUtilities {
 
@@ -38,27 +47,19 @@ public class HiveTestUtilities {
   private static final Set<PosixFilePermission> ALL_POSIX_PERMISSIONS = EnumSet.allOf(PosixFilePermission.class);
 
   /**
-   * Execute the give <i>query</i> on given <i>hiveDriver</i> instance. If a {@link CommandNeedRetryException}
-   * exception is thrown, it tries upto 3 times before returning failure.
-   * @param hiveDriver
-   * @param query
+   * Execute the give <i>query</i> on given <i>hiveDriver</i> instance.
    */
   public static void executeQuery(Driver hiveDriver, String query) {
-    CommandProcessorResponse response = null;
-    boolean failed = false;
-    int retryCount = 3;
-
+    CommandProcessorResponse response;
     try {
       response = hiveDriver.run(query);
-    } catch(CommandNeedRetryException ex) {
-      if (--retryCount == 0) {
-        failed = true;
-      }
+    } catch (Exception e) {
+       throw new RuntimeException(e);
     }
 
-    if (failed || response.getResponseCode() != 0 ) {
+    if (response.getResponseCode() != 0 ) {
       throw new RuntimeException(String.format("Failed to execute command '%s', errorMsg = '%s'",
-          query, (response != null ? response.getErrorMessage() : "")));
+          query, response.getErrorMessage()));
     }
   }
 
@@ -83,4 +84,71 @@ public class HiveTestUtilities {
     return dir;
   }
 
+  /**
+   * Load data from test resources file into table.
+   *
+   * @param driver hive driver
+   * @param tableName destination
+   * @param relativeTestResourcePath path to test resource
+   */
+  public static void loadData(Driver driver, String tableName, Path relativeTestResourcePath){
+    String dataAbsPath = TestTools.getResourceFile(relativeTestResourcePath).getAbsolutePath();
+    String loadDataSql = String.format("LOAD DATA LOCAL INPATH '%s' OVERWRITE INTO TABLE %s", dataAbsPath, tableName);
+    executeQuery(driver, loadDataSql);
+  }
+
+  /**
+   * Performs insert from select.
+   *
+   * @param driver hive driver
+   * @param srcTable source
+   * @param destTable destination
+   */
+  public static void insertData(Driver driver, String srcTable, String destTable){
+    executeQuery(driver, String.format(
+        "INSERT OVERWRITE TABLE %s SELECT * FROM %s",
+        destTable, srcTable
+    ));
+  }
+
+  /**
+   * Helper method used to ensure that native parquet scan will be used
+   * for table selection.
+   *
+   * @param queryBuilder test query builder
+   * @param table table to check
+   * @throws Exception may be thrown while getting query plan
+   */
+  public static void assertNativeScanUsed(QueryBuilder queryBuilder, String table) throws Exception {
+    String plan = queryBuilder.sql("SELECT * FROM hive.`%s`", table).explainText();
+    assertThat(plan, containsString("HiveDrillNativeParquetScan"));
+  }
+
+  /**
+   * Current Hive version doesn't support JDK 9+.
+   * Checks if current version is supported by Hive.
+   *
+   * @return {@code true} if current version is supported by Hive, {@code false} otherwise
+   */
+  public static boolean supportedJavaVersion() {
+    return System.getProperty("java.version").startsWith("1.8");
+  }
+
+  /**
+   * Checks whether current version is not less than hive 3.0
+   */
+  public static boolean isHive3() {
+    return new ComparableVersion(HiveVersionInfo.getVersion())
+        .compareTo(new ComparableVersion("3.0")) >= 0;
+  }
+
+  /**
+   * Checks if current version is supported by Hive.
+   *
+   * @throws AssumptionViolatedException if current version is not supported by Hive,
+   * so unit tests may be skipped.
+   */
+  public static void assumeJavaVersion() throws AssumptionViolatedException {
+    assumeThat("Skipping tests since Hive supports only JDK 8.", System.getProperty("java.version"), startsWith("1.8"));
+  }
 }

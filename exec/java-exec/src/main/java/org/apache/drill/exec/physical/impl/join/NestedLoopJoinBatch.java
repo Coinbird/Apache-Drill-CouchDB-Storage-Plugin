@@ -17,12 +17,13 @@
  */
 package org.apache.drill.exec.physical.impl.join;
 
-import java.io.IOException;
 import java.util.HashSet;
 import java.util.LinkedList;
 import java.util.Map;
 
 import org.apache.drill.shaded.guava.com.google.common.collect.ImmutableMap;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.apache.calcite.rel.core.JoinRelType;
 import org.apache.drill.common.exceptions.DrillRuntimeException;
 import org.apache.drill.common.expression.ErrorCollector;
@@ -33,7 +34,6 @@ import org.apache.drill.common.types.Types;
 import org.apache.drill.exec.ExecConstants;
 import org.apache.drill.exec.compile.sig.GeneratorMapping;
 import org.apache.drill.exec.compile.sig.MappingSet;
-import org.apache.drill.exec.exception.ClassTransformationException;
 import org.apache.drill.exec.exception.OutOfMemoryException;
 import org.apache.drill.exec.exception.SchemaChangeException;
 import org.apache.drill.exec.expr.ClassGenerator;
@@ -51,6 +51,7 @@ import org.apache.drill.exec.record.MaterializedField;
 import org.apache.drill.exec.record.RecordBatch;
 import org.apache.drill.exec.record.TypedFieldId;
 import org.apache.drill.exec.record.VectorAccessible;
+import org.apache.drill.exec.record.VectorAccessibleUtilities;
 import org.apache.drill.exec.record.VectorWrapper;
 import org.apache.drill.exec.util.record.RecordBatchStats;
 import org.apache.drill.exec.util.record.RecordBatchStats.RecordBatchIOType;
@@ -66,29 +67,29 @@ import org.apache.drill.exec.vector.complex.AbstractContainerVector;
  * RecordBatch implementation for the nested loop join operator
  */
 public class NestedLoopJoinBatch extends AbstractBinaryRecordBatch<NestedLoopJoinPOP> {
-  private static final org.slf4j.Logger logger = org.slf4j.LoggerFactory.getLogger(NestedLoopJoinBatch.class);
+  private static final Logger logger = LoggerFactory.getLogger(NestedLoopJoinBatch.class);
 
   // Input indexes to correctly update the stats
   protected static final int LEFT_INPUT = 0;
   protected static final int RIGHT_INPUT = 1;
 
   // Schema on the left side
-  private BatchSchema leftSchema = null;
+  private BatchSchema leftSchema;
 
   // Schema on the right side
-  private BatchSchema rightSchema = null;
+  private BatchSchema rightSchema;
 
   // Runtime generated class implementing the NestedLoopJoin interface
-  private NestedLoopJoin nljWorker = null;
+  private NestedLoopJoin nljWorker;
 
   // Number of output records in the current outgoing batch
-  private int outputRecords = 0;
+  private int outputRecords;
 
   // We accumulate all the batches on the right side in a hyper container.
-  private ExpandableHyperContainer rightContainer = new ExpandableHyperContainer();
+  private final ExpandableHyperContainer rightContainer = new ExpandableHyperContainer();
 
   // Record count of the individual batches in the right hyper container
-  private LinkedList<Integer> rightCounts = new LinkedList<>();
+  private final LinkedList<Integer> rightCounts = new LinkedList<>();
 
 
   // Generator mapping for the right side
@@ -135,8 +136,8 @@ public class NestedLoopJoinBatch extends AbstractBinaryRecordBatch<NestedLoopJoi
     int configuredBatchSize = (int) context.getOptions().getOption(ExecConstants.OUTPUT_BATCH_SIZE_VALIDATOR);
     batchMemoryManager = new JoinBatchMemoryManager(configuredBatchSize, left, right, new HashSet<>());
 
-      RecordBatchStats.logRecordBatchStats(getRecordBatchStatsContext(),
-        "configured output batch size: %d", configuredBatchSize);
+    RecordBatchStats.printConfiguredBatchSize(getRecordBatchStatsContext(),
+      configuredBatchSize);
   }
 
   /**
@@ -175,14 +176,11 @@ public class NestedLoopJoinBatch extends AbstractBinaryRecordBatch<NestedLoopJoi
               batchMemoryManager.getRecordBatchSizer(RIGHT_INDEX), getRecordBatchStatsContext());
             addBatchToHyperContainer(right);
             break;
-          case OUT_OF_MEMORY:
-            return IterOutcome.OUT_OF_MEMORY;
           case NONE:
-          case STOP:
-            //TODO we got a STOP, shouldn't we stop immediately ?
           case NOT_YET:
             drainRight = false;
             break;
+          default:
         }
       }
       nljWorker.setupNestedLoopJoin(context, left, rightContainer, rightCounts, this);
@@ -198,12 +196,7 @@ public class NestedLoopJoinBatch extends AbstractBinaryRecordBatch<NestedLoopJoi
     outputRecords = nljWorker.outputRecords(popConfig.getJoinType());
 
     // Set the record count
-    for (final VectorWrapper<?> vw : container) {
-      vw.getValueVector().getMutator().setValueCount(outputRecords);
-    }
-
-    // Set the record count in the container
-    container.setRecordCount(outputRecords);
+    container.setValueCount(outputRecords);
     container.buildSchema(BatchSchema.SelectionVectorMode.NONE);
 
     RecordBatchStats.logRecordBatchStats(RecordBatchIOType.OUTPUT, this, getRecordBatchStatsContext());
@@ -216,11 +209,9 @@ public class NestedLoopJoinBatch extends AbstractBinaryRecordBatch<NestedLoopJoi
     if (!hasMore(rightUpstream)) {
       return;
     }
-    right.kill(true);
+    right.cancel();
     while (hasMore(rightUpstream)) {
-      for (final VectorWrapper<?> wrapper : right) {
-        wrapper.getValueVector().clear();
-      }
+      VectorAccessibleUtilities.clear(right);
       rightUpstream = next(HashJoinHelper.RIGHT_INPUT, right);
     }
   }
@@ -237,7 +228,7 @@ public class NestedLoopJoinBatch extends AbstractBinaryRecordBatch<NestedLoopJoi
    * 3. emitRight() -> Project record from the right side (which is a hyper container)
    * @return the runtime generated class that implements the NestedLoopJoin interface
    */
-  private NestedLoopJoin setupWorker() throws IOException, ClassTransformationException, SchemaChangeException {
+  private NestedLoopJoin setupWorker()  {
     final CodeGenerator<NestedLoopJoin> nLJCodeGenerator = CodeGenerator.get(
         SETUP_LEFT_MAPPING, NestedLoopJoin.TEMPLATE_DEFINITION, context.getOptions());
     nLJCodeGenerator.plainJavaCapable(true);
@@ -272,10 +263,7 @@ public class NestedLoopJoinBatch extends AbstractBinaryRecordBatch<NestedLoopJoi
         false,
         false);
 
-    if (collector.hasErrors()) {
-      throw new SchemaChangeException(String.format("Failure while trying to materialize join condition. Errors:\n %s.",
-          collector.toErrorString()));
-    }
+    collector.reportErrors(logger);
 
     nLJClassGenerator.addExpr(new ReturnValueExpression(materialize), ClassGenerator.BlkCreateMode.FALSE);
 
@@ -294,10 +282,16 @@ public class NestedLoopJoinBatch extends AbstractBinaryRecordBatch<NestedLoopJoi
         // Add the vector to the output container
         container.addOrGet(field);
 
-        JVar inVV = nLJClassGenerator.declareVectorValueSetupAndMember("leftBatch",
-            new TypedFieldId(fieldType, false, fieldId));
-        JVar outVV = nLJClassGenerator.declareVectorValueSetupAndMember("outgoing",
-            new TypedFieldId(fieldType, false, outputFieldId));
+        TypedFieldId inFieldId = new TypedFieldId.Builder().finalType(fieldType)
+            .hyper(false)
+            .addId(fieldId)
+            .build();
+        JVar inVV = nLJClassGenerator.declareVectorValueSetupAndMember("leftBatch", inFieldId);
+        TypedFieldId outFieldId = new TypedFieldId.Builder().finalType(fieldType)
+            .hyper(false)
+            .addId(outputFieldId)
+            .build();
+        JVar outVV = nLJClassGenerator.declareVectorValueSetupAndMember("outgoing", outFieldId);
 
         nLJClassGenerator.getEvalBlock().add(outVV.invoke("copyFromSafe").arg(leftIndex).arg(outIndex).arg(inVV));
         nLJClassGenerator.rotateBlock();
@@ -328,10 +322,16 @@ public class NestedLoopJoinBatch extends AbstractBinaryRecordBatch<NestedLoopJoi
         MaterializedField newField = MaterializedField.create(field.getName(), outputType);
         container.addOrGet(newField);
 
-        JVar inVV = nLJClassGenerator.declareVectorValueSetupAndMember("rightContainer",
-            new TypedFieldId(inputType, true, fieldId));
-        JVar outVV = nLJClassGenerator.declareVectorValueSetupAndMember("outgoing",
-            new TypedFieldId(outputType, false, outputFieldId));
+        TypedFieldId inFieldId = new TypedFieldId.Builder().finalType(inputType)
+            .hyper(true)
+            .addId(fieldId)
+            .build();
+        JVar inVV = nLJClassGenerator.declareVectorValueSetupAndMember("rightContainer", inFieldId);
+        TypedFieldId outFieldId = new TypedFieldId.Builder().finalType(outputType)
+            .hyper(false)
+            .addId(outputFieldId)
+            .build();
+        JVar outVV = nLJClassGenerator.declareVectorValueSetupAndMember("outgoing", outFieldId);
         nLJClassGenerator.getEvalBlock().add(outVV.invoke("copyFromSafe")
             .arg(recordIndexWithinBatch)
             .arg(outIndex)
@@ -351,60 +351,54 @@ public class NestedLoopJoinBatch extends AbstractBinaryRecordBatch<NestedLoopJoi
    * @throws SchemaChangeException if batch schema was changed during execution
    */
   @Override
-  protected void buildSchema() throws SchemaChangeException {
-    try {
-      if (! prefetchFirstBatchFromBothSides()) {
-        return;
-      }
-
-      batchMemoryManager.update(RIGHT_INDEX, 0, true);
-      RecordBatchStats.logRecordBatchStats(RecordBatchIOType.INPUT_RIGHT,
-        batchMemoryManager.getRecordBatchSizer(RIGHT_INDEX), getRecordBatchStatsContext());
-
-      if (leftUpstream != IterOutcome.NONE) {
-        leftSchema = left.getSchema();
-        for (final VectorWrapper<?> vw : left) {
-          container.addOrGet(vw.getField());
-        }
-      }
-
-      if (rightUpstream != IterOutcome.NONE) {
-        // make right input schema optional if we have LEFT join
-        for (final VectorWrapper<?> vectorWrapper : right) {
-          TypeProtos.MajorType inputType = vectorWrapper.getField().getType();
-          TypeProtos.MajorType outputType;
-          if (popConfig.getJoinType() == JoinRelType.LEFT && inputType.getMode() == TypeProtos.DataMode.REQUIRED) {
-            outputType = Types.overrideMode(inputType, TypeProtos.DataMode.OPTIONAL);
-          } else {
-            outputType = inputType;
-          }
-          MaterializedField newField = MaterializedField.create(vectorWrapper.getField().getName(), outputType);
-          ValueVector valueVector = container.addOrGet(newField);
-          if (valueVector instanceof AbstractContainerVector) {
-            vectorWrapper.getValueVector().makeTransferPair(valueVector);
-            valueVector.clear();
-          }
-        }
-        rightSchema = right.getSchema();
-        addBatchToHyperContainer(right);
-      }
-
-      nljWorker = setupWorker();
-
-      // if left batch is empty, fetch next
-      if (leftUpstream != IterOutcome.NONE && left.getRecordCount() == 0) {
-        leftUpstream = next(LEFT_INPUT, left);
-      }
-
-      batchMemoryManager.update(LEFT_INDEX, 0);
-      RecordBatchStats.logRecordBatchStats(RecordBatchIOType.INPUT_LEFT,
-        batchMemoryManager.getRecordBatchSizer(LEFT_INDEX), getRecordBatchStatsContext());
-
-      container.buildSchema(BatchSchema.SelectionVectorMode.NONE);
-
-    } catch (ClassTransformationException | IOException e) {
-      throw new SchemaChangeException(e);
+  protected void buildSchema() {
+    if (! prefetchFirstBatchFromBothSides()) {
+      return;
     }
+
+    batchMemoryManager.update(RIGHT_INDEX, 0, true);
+    RecordBatchStats.logRecordBatchStats(RecordBatchIOType.INPUT_RIGHT,
+      batchMemoryManager.getRecordBatchSizer(RIGHT_INDEX), getRecordBatchStatsContext());
+
+    if (leftUpstream != IterOutcome.NONE) {
+      leftSchema = left.getSchema();
+      container.copySchemaFrom(left);
+    }
+
+    if (rightUpstream != IterOutcome.NONE) {
+      // make right input schema optional if we have LEFT join
+      for (final VectorWrapper<?> vectorWrapper : right) {
+        TypeProtos.MajorType inputType = vectorWrapper.getField().getType();
+        TypeProtos.MajorType outputType;
+        if (popConfig.getJoinType() == JoinRelType.LEFT && inputType.getMode() == TypeProtos.DataMode.REQUIRED) {
+          outputType = Types.overrideMode(inputType, TypeProtos.DataMode.OPTIONAL);
+        } else {
+          outputType = inputType;
+        }
+        MaterializedField newField = MaterializedField.create(vectorWrapper.getField().getName(), outputType);
+        ValueVector valueVector = container.addOrGet(newField);
+        if (valueVector instanceof AbstractContainerVector) {
+          vectorWrapper.getValueVector().makeTransferPair(valueVector);
+          valueVector.clear();
+        }
+      }
+      rightSchema = right.getSchema();
+      addBatchToHyperContainer(right);
+    }
+
+    nljWorker = setupWorker();
+
+    // if left batch is empty, fetch next
+    if (leftUpstream != IterOutcome.NONE && left.getRecordCount() == 0) {
+      leftUpstream = next(LEFT_INPUT, left);
+    }
+
+    batchMemoryManager.update(LEFT_INDEX, 0);
+    RecordBatchStats.logRecordBatchStats(RecordBatchIOType.INPUT_LEFT,
+      batchMemoryManager.getRecordBatchSizer(LEFT_INDEX), getRecordBatchStatsContext());
+
+    container.buildSchema(BatchSchema.SelectionVectorMode.NONE);
+    container.setEmpty();
   }
 
   private void addBatchToHyperContainer(RecordBatch inputBatch) {
@@ -450,9 +444,9 @@ public class NestedLoopJoinBatch extends AbstractBinaryRecordBatch<NestedLoopJoi
   }
 
   @Override
-  protected void killIncoming(boolean sendUpstream) {
-    this.left.kill(sendUpstream);
-    this.right.kill(sendUpstream);
+  protected void cancelIncoming() {
+    left.cancel();
+    right.cancel();
   }
 
   @Override

@@ -17,12 +17,12 @@
  */
 package org.apache.drill.exec.rpc.user;
 
+import org.apache.drill.common.concurrent.AbstractCheckedFuture;
+import org.apache.drill.common.concurrent.CheckedFuture;
 import org.apache.drill.shaded.guava.com.google.common.base.Strings;
 import org.apache.drill.shaded.guava.com.google.common.base.Throwables;
 import org.apache.drill.shaded.guava.com.google.common.collect.ImmutableList;
 import org.apache.drill.shaded.guava.com.google.common.collect.Sets;
-import org.apache.drill.shaded.guava.com.google.common.util.concurrent.AbstractCheckedFuture;
-import org.apache.drill.shaded.guava.com.google.common.util.concurrent.CheckedFuture;
 import org.apache.drill.shaded.guava.com.google.common.util.concurrent.SettableFuture;
 import com.google.protobuf.MessageLite;
 import io.netty.buffer.ByteBuf;
@@ -454,8 +454,8 @@ public class UserClient
       Thread.currentThread().setContextClassLoader(oldThreadCtxtCL);
 
       startSaslHandshake(connectionHandler, saslProperties, ugi, factory, RpcType.SASL_MESSAGE);
-    } catch (final IOException e) {
-      logger.error("Failed while doing setup for starting SASL handshake for connection", connection.getName());
+    } catch (IOException e) {
+      logger.error("Failed while doing setup for starting SASL handshake for connection {}", connection.getName());
       final Exception ex = new RpcException(String.format("Failed to initiate authentication for connection %s",
         connection.getName()), e);
       connectionHandler.connectionFailed(RpcConnectionHandler.FailureType.AUTHENTICATION, ex);

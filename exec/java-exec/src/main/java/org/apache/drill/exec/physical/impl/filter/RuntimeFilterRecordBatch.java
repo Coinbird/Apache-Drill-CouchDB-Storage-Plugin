@@ -17,6 +17,13 @@
  */
 package org.apache.drill.exec.physical.impl.filter;
 
+import java.util.ArrayList;
+import java.util.BitSet;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.TimeUnit;
+
 import org.apache.drill.common.exceptions.UserException;
 import org.apache.drill.common.expression.ExpressionPosition;
 import org.apache.drill.common.expression.LogicalExpression;
@@ -39,41 +46,40 @@ import org.apache.drill.exec.record.selection.SelectionVector2;
 import org.apache.drill.exec.record.selection.SelectionVector4;
 import org.apache.drill.exec.work.filter.BloomFilter;
 import org.apache.drill.exec.work.filter.RuntimeFilterWritable;
-import java.util.ArrayList;
-import java.util.BitSet;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.concurrent.TimeUnit;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
- * A RuntimeFilterRecordBatch steps over the ScanBatch. If the ScanBatch participates
- * in the HashJoinBatch and can be applied by a RuntimeFilter, it will generate a filtered
- * SV2, otherwise will generate a same recordCount-originalRecordCount SV2 which will not affect
- * the Query's performance ,but just do a memory transfer by the later RemovingRecordBatch op.
+ * A RuntimeFilterRecordBatch steps over the ScanBatch. If the ScanBatch
+ * participates in the HashJoinBatch and can be applied by a RuntimeFilter, it
+ * will generate a filtered SV2, otherwise will generate a same
+ * recordCount-originalRecordCount SV2 which will not affect the Query's
+ * performance ,but just do a memory transfer by the later RemovingRecordBatch
+ * op.
  */
 public class RuntimeFilterRecordBatch extends AbstractSingleRecordBatch<RuntimeFilterPOP> {
-  private SelectionVector2 sv2;
+  private static final Logger logger = LoggerFactory.getLogger(RuntimeFilterRecordBatch.class);
 
+  private SelectionVector2 sv2;
   private ValueVectorHashHelper.Hash64 hash64;
-  private Map<String, Integer> field2id = new HashMap<>();
+  private final Map<String, Integer> field2id = new HashMap<>();
   private List<String> toFilterFields;
   private List<BloomFilter> bloomFilters;
   private RuntimeFilterWritable current;
   private int originalRecordCount;
-  private long filteredRows = 0l;
-  private long appliedTimes = 0l;
-  private int batchTimes = 0;
-  private boolean waited = false;
-  private boolean enableRFWaiting;
-  private long maxWaitingTime;
-  private long rfIdentifier;
-  private static final org.slf4j.Logger logger = org.slf4j.LoggerFactory.getLogger(RuntimeFilterRecordBatch.class);
+  private long filteredRows;
+  private long appliedTimes;
+  private int batchTimes;
+  private boolean waited;
+  private final boolean enableRFWaiting;
+  private final long maxWaitingTime;
+  private final long rfIdentifier;
 
-  public RuntimeFilterRecordBatch(RuntimeFilterPOP pop, RecordBatch incoming, FragmentContext context) throws OutOfMemoryException {
+  public RuntimeFilterRecordBatch(RuntimeFilterPOP pop, RecordBatch incoming,
+      FragmentContext context) throws OutOfMemoryException {
     super(pop, context, incoming);
-    enableRFWaiting = context.getOptions().getOption(ExecConstants.HASHJOIN_RUNTIME_FILTER_WAITING_ENABLE_KEY).bool_val;
-    maxWaitingTime = context.getOptions().getOption(ExecConstants.HASHJOIN_RUNTIME_FILTER_MAX_WAITING_TIME_KEY).num_val;
+    enableRFWaiting = context.getOptions().getBoolean(ExecConstants.HASHJOIN_RUNTIME_FILTER_WAITING_ENABLE_KEY);
+    maxWaitingTime = context.getOptions().getLong(ExecConstants.HASHJOIN_RUNTIME_FILTER_MAX_WAITING_TIME_KEY);
     this.rfIdentifier = pop.getIdentifier();
   }
 
@@ -101,12 +107,9 @@ public class RuntimeFilterRecordBatch extends AbstractSingleRecordBatch<RuntimeF
   protected IterOutcome doWork() {
     originalRecordCount = incoming.getRecordCount();
     sv2.setBatchActualRecordCount(originalRecordCount);
-    try {
-      applyRuntimeFilter();
-    } catch (SchemaChangeException e) {
-      throw new UnsupportedOperationException(e);
-    }
+    applyRuntimeFilter();
     container.transferIn(incoming.getContainer());
+    container.setRecordCount(originalRecordCount);
     updateStats();
     return getFinalOutcome(false);
   }
@@ -123,7 +126,7 @@ public class RuntimeFilterRecordBatch extends AbstractSingleRecordBatch<RuntimeF
   }
 
   @Override
-  protected boolean setupNewSchema() throws SchemaChangeException {
+  protected boolean setupNewSchema() {
     if (sv2 != null) {
       sv2.clear();
     }
@@ -162,8 +165,9 @@ public class RuntimeFilterRecordBatch extends AbstractSingleRecordBatch<RuntimeF
   }
 
   /**
-   * Takes care of setting up HashHelper if RuntimeFilter is received and the HashHelper is not already setup. For each
-   * schema change hash64 should be reset and this method needs to be called again.
+   * Takes care of setting up HashHelper if RuntimeFilter is received and the
+   * HashHelper is not already setup. For each schema change hash64 should be
+   * reset and this method needs to be called again.
    */
   private void setupHashHelper() {
     current = context.getRuntimeFilter(rfIdentifier);
@@ -190,7 +194,9 @@ public class RuntimeFilterRecordBatch extends AbstractSingleRecordBatch<RuntimeF
           ValueVectorReadExpression toHashFieldExp = new ValueVectorReadExpression(typedFieldId);
           hashFieldExps.add(toHashFieldExp);
         }
-        hash64 = hashHelper.getHash64(hashFieldExps.toArray(new LogicalExpression[hashFieldExps.size()]), typedFieldIds.toArray(new TypedFieldId[typedFieldIds.size()]));
+        hash64 = hashHelper.getHash64(hashFieldExps.toArray(
+            new LogicalExpression[hashFieldExps.size()]),
+            typedFieldIds.toArray(new TypedFieldId[typedFieldIds.size()]));
       } catch (Exception e) {
         throw UserException.internalError(e).build(logger);
       }
@@ -198,12 +204,12 @@ public class RuntimeFilterRecordBatch extends AbstractSingleRecordBatch<RuntimeF
   }
 
   /**
-   * If RuntimeFilter is available then applies the filter condition on the incoming batch records and creates an SV2
-   * to store indexes which passes the filter condition. In case when RuntimeFilter is not available it just pass
+   * If RuntimeFilter is available then applies the filter condition on the
+   * incoming batch records and creates an SV2 to store indexes which passes the
+   * filter condition. In case when RuntimeFilter is not available it just pass
    * through all the records from incoming batch to downstream.
-   * @throws SchemaChangeException
    */
-  private void applyRuntimeFilter() throws SchemaChangeException {
+  private void applyRuntimeFilter() {
     if (originalRecordCount <= 0) {
       sv2.setRecordCount(0);
       return;
@@ -232,7 +238,12 @@ public class RuntimeFilterRecordBatch extends AbstractSingleRecordBatch<RuntimeF
       String fieldName = toFilterFields.get(0);
       int fieldId = field2id.get(fieldName);
       for (int rowIndex = 0; rowIndex < originalRecordCount; rowIndex++) {
-        long hash = hash64.hash64Code(rowIndex, 0, fieldId);
+        long hash;
+        try {
+          hash = hash64.hash64Code(rowIndex, 0, fieldId);
+        } catch (SchemaChangeException e) {
+          throw new UnsupportedOperationException(e);
+        }
         boolean contain = bloomFilter.find(hash);
         if (contain) {
           sv2.setIndex(svIndex, rowIndex);
@@ -245,7 +256,11 @@ public class RuntimeFilterRecordBatch extends AbstractSingleRecordBatch<RuntimeF
       for (int i = 0; i < toFilterFields.size(); i++) {
         BloomFilter bloomFilter = bloomFilters.get(i);
         String fieldName = toFilterFields.get(i);
-        computeBitSet(field2id.get(fieldName), bloomFilter, bitSet);
+        try {
+          computeBitSet(field2id.get(fieldName), bloomFilter, bitSet);
+        } catch (SchemaChangeException e) {
+          throw new UnsupportedOperationException(e);
+        }
       }
       for (int i = 0; i < originalRecordCount; i++) {
         boolean contain = bitSet.get(i);
@@ -257,7 +272,6 @@ public class RuntimeFilterRecordBatch extends AbstractSingleRecordBatch<RuntimeF
         }
       }
     }
-
 
     appliedTimes++;
     sv2.setRecordCount(svIndex);

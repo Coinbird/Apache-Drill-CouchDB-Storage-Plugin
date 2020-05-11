@@ -31,6 +31,7 @@ import org.eclipse.jetty.security.LoginService;
 import org.eclipse.jetty.server.UserIdentity;
 
 import javax.security.auth.Subject;
+import javax.servlet.ServletRequest;
 import java.security.Principal;
 
 /**
@@ -62,7 +63,7 @@ public class DrillRestLoginService implements LoginService {
   }
 
   @Override
-  public UserIdentity login(String username, Object credentials) {
+  public UserIdentity login(String username, Object credentials, ServletRequest request) {
     if (!(credentials instanceof String)) {
       return null;
     }
@@ -77,7 +78,7 @@ public class DrillRestLoginService implements LoginService {
       // Authenticate the user with configured Authenticator
       userAuthenticator.authenticate(username, credentials.toString());
 
-      logger.debug("WebUser {} is successfully authenticated", username);
+      logger.info("WebUser {} logged in from {}:{}", username, request.getRemoteHost(), request.getRemotePort());
 
       final SystemOptionManager sysOptions = drillbitContext.getOptionManager();
 
@@ -126,7 +127,7 @@ public class DrillRestLoginService implements LoginService {
   @Override
   public void logout(UserIdentity user) {
     // no-op
-    if(logger.isTraceEnabled()) {
+    if (logger.isTraceEnabled()) {
       logger.trace("Web user {} logged out.", user.getUserPrincipal().getName());
     }
   }

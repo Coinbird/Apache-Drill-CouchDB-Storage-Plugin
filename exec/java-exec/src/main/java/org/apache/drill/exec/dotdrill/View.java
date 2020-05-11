@@ -347,6 +347,12 @@ public class View {
          */
         type = factory.createSqlType(SqlTypeName.ANY);
       }
+    } else if (typeName == SqlTypeName.ARRAY || typeName == SqlTypeName.ROW) {
+      /*
+       * Treat as ANY to avoid generation of unsupported casts, like:
+       * CAST(fieldName,'ARRAY') or CAST(fieldName,'ROW')
+       */
+      type = factory.createSqlType(SqlTypeName.ANY);
     } else {
       type = factory.createSqlType(field.getType());
     }

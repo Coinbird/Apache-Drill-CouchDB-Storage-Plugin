@@ -17,6 +17,7 @@
  */
 package org.apache.drill.exec.planner.sql;
 
+import org.apache.calcite.sql.type.OperandTypes;
 import org.apache.drill.shaded.guava.com.google.common.base.Preconditions;
 import org.apache.calcite.rel.type.RelDataType;
 import org.apache.calcite.rel.type.RelDataTypeFactory;
@@ -26,7 +27,6 @@ import org.apache.calcite.sql.type.SqlTypeName;
 import org.apache.calcite.sql.validate.SqlValidator;
 import org.apache.calcite.sql.validate.SqlValidatorScope;
 import org.apache.drill.common.types.TypeProtos;
-import org.apache.drill.exec.expr.fn.DrillFuncHolder;
 
 import java.util.ArrayList;
 
@@ -34,11 +34,10 @@ public class DrillSqlOperatorWithoutInference extends DrillSqlOperator {
   private static final TypeProtos.MajorType NONE = TypeProtos.MajorType.getDefaultInstance();
   private final TypeProtos.MajorType returnType;
 
-  public DrillSqlOperatorWithoutInference(String name, int argCount, TypeProtos.MajorType returnType, boolean isDeterminisitic, boolean isNiladic) {
+  public DrillSqlOperatorWithoutInference(String name, int argCount, TypeProtos.MajorType returnType, boolean isDeterminisitic, boolean isNiladic, boolean isVarArg) {
     super(name,
-        new ArrayList< DrillFuncHolder>(),
-        argCount,
-        argCount,
+        new ArrayList<>(),
+        isVarArg ? OperandTypes.VARIADIC : Checker.getChecker(argCount, argCount),
         isDeterminisitic,
         DynamicReturnType.INSTANCE,
         isNiladic);

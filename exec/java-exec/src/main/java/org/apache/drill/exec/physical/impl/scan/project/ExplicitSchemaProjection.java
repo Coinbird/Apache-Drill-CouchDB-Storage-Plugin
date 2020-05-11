@@ -21,11 +21,15 @@ import java.util.List;
 
 import org.apache.drill.common.exceptions.UserException;
 import org.apache.drill.common.types.TypeProtos.MinorType;
-import org.apache.drill.exec.physical.rowSet.project.RequestedTuple;
-import org.apache.drill.exec.physical.rowSet.project.RequestedTuple.RequestedColumn;
+import org.apache.drill.exec.physical.impl.scan.project.AbstractUnresolvedColumn.UnresolvedColumn;
+import org.apache.drill.exec.physical.resultSet.project.RequestedColumn;
+import org.apache.drill.exec.physical.resultSet.project.RequestedTuple;
 import org.apache.drill.exec.record.MaterializedField;
 import org.apache.drill.exec.record.metadata.ColumnMetadata;
 import org.apache.drill.exec.record.metadata.TupleMetadata;
+import org.apache.drill.exec.vector.complex.DictVector;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Perform a schema projection for the case of an explicit list of
@@ -40,36 +44,51 @@ import org.apache.drill.exec.record.metadata.TupleMetadata;
  * unmatched projections.
  */
 
-public class ExplicitSchemaProjection extends SchemaLevelProjection {
+public class ExplicitSchemaProjection extends ReaderLevelProjection {
+  private static final Logger logger = LoggerFactory.getLogger(ExplicitSchemaProjection.class);
+
+  private final ScanLevelProjection scanProj;
 
   public ExplicitSchemaProjection(ScanLevelProjection scanProj,
-      TupleMetadata tableSchema,
+      TupleMetadata readerSchema,
       ResolvedTuple rootTuple,
-      List<SchemaProjectionResolver> resolvers) {
+      List<ReaderProjectionResolver> resolvers) {
     super(resolvers);
-    resolveRootTuple(scanProj, rootTuple, tableSchema);
+    this.scanProj = scanProj;
+    resolveRootTuple(rootTuple, readerSchema);
   }
 
-  private void resolveRootTuple(ScanLevelProjection scanProj,
-      ResolvedTuple rootTuple,
-      TupleMetadata tableSchema) {
+  private void resolveRootTuple(ResolvedTuple rootTuple,
+      TupleMetadata readerSchema) {
     for (ColumnProjection col : scanProj.columns()) {
-      if (col.nodeType() == UnresolvedColumn.UNRESOLVED) {
-        resolveColumn(rootTuple, ((UnresolvedColumn) col).element(), tableSchema);
+      if (col instanceof UnresolvedColumn) {
+        resolveColumn(rootTuple, ((UnresolvedColumn) col).element(), readerSchema);
       } else {
-        resolveSpecial(rootTuple, col, tableSchema);
+        resolveSpecial(rootTuple, col, readerSchema);
       }
     }
   }
 
   private void resolveColumn(ResolvedTuple outputTuple,
-      RequestedColumn inputCol, TupleMetadata tableSchema) {
-    int tableColIndex = tableSchema.index(inputCol.name());
+      RequestedColumn inputCol, TupleMetadata readerSchema) {
+    int tableColIndex = readerSchema.index(inputCol.name());
     if (tableColIndex == -1) {
       resolveNullColumn(outputTuple, inputCol);
     } else {
       resolveTableColumn(outputTuple, inputCol,
-          tableSchema.metadata(tableColIndex),
+          readerSchema.metadata(tableColIndex),
+          tableColIndex);
+    }
+  }
+
+  private void resolveDictValueColumn(ResolvedTuple outputTuple,
+      RequestedColumn inputCol, TupleMetadata readerSchema) {
+    int tableColIndex = readerSchema.index(DictVector.FIELD_VALUE_NAME);
+    if (tableColIndex == -1) {
+      resolveNullColumn(outputTuple, inputCol);
+    } else {
+      resolveTableColumn(outputTuple, inputCol,
+          readerSchema.metadata(tableColIndex),
           tableColIndex);
     }
   }
@@ -84,7 +103,11 @@ public class ExplicitSchemaProjection extends SchemaLevelProjection {
     // that x is a map.
 
     if (requestedCol.isTuple()) {
-      resolveMap(outputTuple, requestedCol, column, sourceIndex);
+      if (column.isDict()) {
+        resolveDict(outputTuple, requestedCol, column, sourceIndex);
+      } else {
+        resolveMap(outputTuple, requestedCol, column, sourceIndex);
+      }
     }
 
     // Is the requested column implied to be an array?
@@ -115,8 +138,10 @@ public class ExplicitSchemaProjection extends SchemaLevelProjection {
       throw UserException
         .validationError()
         .message("Project list implies a map column, but actual column is not a map")
-        .addContext("Projected column", requestedCol.fullName())
-        .addContext("Actual type", column.type().name())
+        .addContext("Projected column:", requestedCol.fullName())
+        .addContext("Table column:", column.name())
+        .addContext("Type:", column.type().name())
+        .addContext(scanProj.context())
         .build(logger);
     }
 
@@ -125,8 +150,8 @@ public class ExplicitSchemaProjection extends SchemaLevelProjection {
 
     ResolvedMapColumn mapCol = new ResolvedMapColumn(outputTuple,
         column.schema(), sourceIndex);
-    resolveTuple(mapCol.members(), requestedCol.mapProjection(),
-        column.mapSchema());
+    resolveTuple(mapCol.members(), requestedCol.tuple(),
+        column.tupleSchema());
 
     // If the projection is simple, then just project the map column
     // as is. A projection is simple if all map columns from the table
@@ -152,10 +177,46 @@ public class ExplicitSchemaProjection extends SchemaLevelProjection {
     }
   }
 
+  private void resolveDict(ResolvedTuple outputTuple,
+                          RequestedColumn requestedCol, ColumnMetadata column,
+                          int sourceIndex) {
+
+    // If the actual column isn't a dict, then the request is invalid.
+
+    if (!column.isDict()) {
+      throw UserException
+          .validationError()
+          .message("Project list implies a dict column, but actual column is not a dict")
+          .addContext("Projected column:", requestedCol.fullName())
+          .addContext("Table column:", column.name())
+          .addContext("Type:", column.type().name())
+          .addContext(scanProj.context())
+          .build(logger);
+    }
+
+    ResolvedDictColumn dictColumn = new ResolvedDictColumn(outputTuple, column.schema(), sourceIndex);
+    resolveDictTuple(dictColumn.members(), requestedCol.tuple(), column.tupleSchema());
+
+    // The same as for Map
+    if (dictColumn.members().isSimpleProjection()) {
+      outputTuple.removeChild(dictColumn.members());
+      projectTableColumn(outputTuple, requestedCol, column, sourceIndex);
+    } else {
+      outputTuple.add(dictColumn);
+    }
+  }
+
   private void resolveTuple(ResolvedTuple mapTuple,
       RequestedTuple requestedTuple, TupleMetadata mapSchema) {
     for (RequestedColumn col : requestedTuple.projections()) {
       resolveColumn(mapTuple, col, mapSchema);
+    }
+  }
+
+  private void resolveDictTuple(ResolvedTuple mapTuple,
+      RequestedTuple requestedTuple, TupleMetadata mapSchema) {
+    for (RequestedColumn col : requestedTuple.projections()) {
+      resolveDictValueColumn(mapTuple, col, mapSchema);
     }
   }
 
@@ -170,8 +231,11 @@ public class ExplicitSchemaProjection extends SchemaLevelProjection {
       throw UserException
         .validationError()
         .message("Project list implies an array, but actual column is not an array")
-        .addContext("Projected column", requestedCol.fullName())
-        .addContext("Actual cardinality", column.mode().name())
+        .addContext("Projected column:", requestedCol.fullName())
+        .addContext("Table column:", column.name())
+        .addContext("Type:", column.type().name())
+        .addContext("Actual cardinality:", column.mode().name())
+        .addContext(scanProj.context())
         .build(logger);
     }
 
@@ -239,7 +303,7 @@ public class ExplicitSchemaProjection extends SchemaLevelProjection {
   private ResolvedColumn resolveMapMembers(ResolvedTuple outputTuple, RequestedColumn col) {
     ResolvedMapColumn mapCol = new ResolvedMapColumn(outputTuple, col.name());
     ResolvedTuple members = mapCol.members();
-    for (RequestedColumn child : col.mapProjection().projections()) {
+    for (RequestedColumn child : col.tuple().projections()) {
       if (child.isTuple()) {
         members.add(resolveMapMembers(members, child));
       } else {

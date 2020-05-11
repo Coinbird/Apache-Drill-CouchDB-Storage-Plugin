@@ -20,6 +20,7 @@ package org.apache.drill.exec.store.dfs;
 import java.io.IOException;
 import java.net.URI;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -28,11 +29,11 @@ import java.util.Set;
 
 import org.apache.calcite.schema.SchemaPlus;
 import org.apache.drill.common.JSONOptions;
-import org.apache.drill.common.config.LogicalPlanPersistence;
 import org.apache.drill.common.exceptions.ExecutionSetupException;
 import org.apache.drill.common.expression.SchemaPath;
 import org.apache.drill.common.logical.FormatPluginConfig;
 import org.apache.drill.common.logical.StoragePluginConfig;
+import org.apache.drill.exec.metastore.MetadataProviderManager;
 import org.apache.drill.exec.ops.OptimizerRulesContext;
 import org.apache.drill.exec.physical.base.AbstractGroupScan;
 import org.apache.drill.exec.server.DrillbitContext;
@@ -42,33 +43,43 @@ import org.apache.drill.exec.store.ClassPathFileSystem;
 import org.apache.drill.exec.store.LocalSyncableFileSystem;
 import org.apache.drill.exec.store.SchemaConfig;
 import org.apache.drill.exec.store.StoragePluginOptimizerRule;
-import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.fs.FileSystem;
-
+import org.apache.drill.shaded.guava.com.google.common.base.Strings;
 import org.apache.drill.shaded.guava.com.google.common.collect.ImmutableSet;
 import org.apache.drill.shaded.guava.com.google.common.collect.ImmutableSet.Builder;
+import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.CommonConfigurationKeys;
+import org.apache.hadoop.fs.FileSystem;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
- * A Storage engine associated with a Hadoop FileSystem Implementation. Examples include HDFS, MapRFS, QuantacastFileSystem,
- * LocalFileSystem, as well Apache Drill specific CachedFileSystem, ClassPathFileSystem and LocalSyncableFileSystem.
- * Tables are file names, directories and path patterns. This storage engine delegates to FSFormatEngines but shares
+ * A Storage engine associated with a Hadoop FileSystem Implementation. Examples
+ * include HDFS, MapRFS, QuantacastFileSystem, LocalFileSystem, as well Apache
+ * Drill specific CachedFileSystem, ClassPathFileSystem and
+ * LocalSyncableFileSystem. Tables are file names, directories and path
+ * patterns. This storage engine delegates to FSFormatEngines but shares
  * references to the FileSystem configuration and path management.
  */
 public class FileSystemPlugin extends AbstractStoragePlugin {
+  private static final Logger logger = LoggerFactory.getLogger(FileSystemPlugin.class);
 
-  private static final org.slf4j.Logger logger = org.slf4j.LoggerFactory.getLogger(FileSystemPlugin.class);
+  /**
+   * The {@code org.apache.hadoop.io.compress} library supports such codecs as
+   * Gzip and Bzip2 out of box. This list stores only codecs that are missing in
+   * Hadoop library.
+   */
+  private static final List<String> ADDITIONAL_CODECS = Collections.singletonList(
+    ZipCodec.class.getCanonicalName());
 
   private final FileSystemSchemaFactory schemaFactory;
   private final FormatCreator formatCreator;
   private final Map<FormatPluginConfig, FormatPlugin> formatPluginsByConfig;
   private final FileSystemConfig config;
   private final Configuration fsConf;
-  private final LogicalPlanPersistence lpPersistance;
 
   public FileSystemPlugin(FileSystemConfig config, DrillbitContext context, String name) throws ExecutionSetupException {
     super(context, name);
     this.config = config;
-    this.lpPersistance = context.getLpPersistence();
 
     try {
       fsConf = new Configuration();
@@ -78,6 +89,8 @@ public class FileSystemPlugin extends AbstractStoragePlugin {
       fsConf.set(FileSystem.FS_DEFAULT_NAME_KEY, config.getConnection());
       fsConf.set("fs.classpath.impl", ClassPathFileSystem.class.getName());
       fsConf.set("fs.drill-local.impl", LocalSyncableFileSystem.class.getName());
+
+      addCodecs(fsConf);
 
       if (isS3Connection(fsConf)) {
         handleS3Credentials(fsConf);
@@ -95,19 +108,41 @@ public class FileSystemPlugin extends AbstractStoragePlugin {
       List<WorkspaceSchemaFactory> factories = new ArrayList<>();
       if (!noWorkspace) {
         for (Map.Entry<String, WorkspaceConfig> space : config.getWorkspaces().entrySet()) {
-          factories.add(new WorkspaceSchemaFactory(this, space.getKey(), name, space.getValue(), matchers, context.getLpPersistence(), context.getClasspathScan()));
+          factories.add(new WorkspaceSchemaFactory(
+              this, space.getKey(), name, space.getValue(), matchers,
+              context.getLpPersistence().getMapper(), context.getClasspathScan()));
         }
       }
 
       // if the "default" workspace is not given add one.
       if (noWorkspace || !config.getWorkspaces().containsKey(DEFAULT_WS_NAME)) {
-        factories.add(new WorkspaceSchemaFactory(this, DEFAULT_WS_NAME, name, WorkspaceConfig.DEFAULT, matchers, context.getLpPersistence(), context.getClasspathScan()));
+        factories.add(new WorkspaceSchemaFactory(this, DEFAULT_WS_NAME, name,
+            WorkspaceConfig.DEFAULT, matchers,
+            context.getLpPersistence().getMapper(), context.getClasspathScan()));
       }
 
       this.schemaFactory = new FileSystemSchemaFactory(name, factories);
     } catch (IOException e) {
       throw new ExecutionSetupException("Failure setting up file system plugin.", e);
     }
+  }
+
+  /**
+   * Merges codecs from configuration with the {@link #ADDITIONAL_CODECS}
+   * and updates configuration property.
+   * Drill built-in codecs are added at the beginning of the codecs string
+   * so config codecs can override Drill ones.
+   *
+   * @param conf Hadoop configuration
+   */
+  private void addCodecs(Configuration conf) {
+    String confCodecs = conf.get(CommonConfigurationKeys.IO_COMPRESSION_CODECS_KEY);
+    String builtInCodecs = String.join(",", ADDITIONAL_CODECS);
+    String newCodecs = Strings.isNullOrEmpty(confCodecs)
+      ? builtInCodecs
+      : builtInCodecs + ", " + confCodecs;
+    logger.trace("Codecs: {}", newCodecs);
+    conf.set(CommonConfigurationKeys.IO_COMPRESSION_CODECS_KEY, newCodecs);
   }
 
   private boolean isS3Connection(Configuration conf) {
@@ -130,7 +165,7 @@ public class FileSystemPlugin extends AbstractStoragePlugin {
     for (String key : credentialKeys) {
       char[] credentialChars = conf.getPassword(key);
       if (credentialChars == null) {
-        logger.warn(String.format("Property '%s' is absent.", key));
+        logger.warn("Property '{}' is absent.", key);
       } else {
         conf.set(key, String.valueOf(credentialChars));
       }
@@ -148,7 +183,7 @@ public class FileSystemPlugin extends AbstractStoragePlugin {
    * @return a new FormatCreator instance
    */
   protected FormatCreator newFormatCreator(FileSystemConfig config, DrillbitContext context, Configuration fsConf) {
-    return new FormatCreator(context, fsConf, config, context.getClasspathScan());
+    return new FormatCreator(context, fsConf, config);
   }
 
   @Override
@@ -162,20 +197,34 @@ public class FileSystemPlugin extends AbstractStoragePlugin {
   }
 
   @Override
-  public AbstractGroupScan getPhysicalScan(String userName, JSONOptions selection, SessionOptionManager options) throws IOException {
-    return getPhysicalScan(userName, selection, AbstractGroupScan.ALL_COLUMNS, options);
+  public AbstractGroupScan getPhysicalScan(String userName, JSONOptions selection,
+      SessionOptionManager options) throws IOException {
+    return getPhysicalScan(userName, selection, AbstractGroupScan.ALL_COLUMNS,
+        options, null);
   }
 
   @Override
-  public AbstractGroupScan getPhysicalScan(String userName, JSONOptions selection, List<SchemaPath> columns) throws IOException {
-    return getPhysicalScan(userName, selection, columns, null);
+  public AbstractGroupScan getPhysicalScan(String userName, JSONOptions selection,
+      SessionOptionManager options, MetadataProviderManager metadataProviderManager) throws IOException {
+    return getPhysicalScan(userName, selection, AbstractGroupScan.ALL_COLUMNS,
+        options, metadataProviderManager);
   }
 
   @Override
-  public AbstractGroupScan getPhysicalScan(String userName, JSONOptions selection, List<SchemaPath> columns, SessionOptionManager options) throws IOException {
-    FormatSelection formatSelection = selection.getWith(lpPersistance, FormatSelection.class);
+  public AbstractGroupScan getPhysicalScan(String userName, JSONOptions selection,
+      List<SchemaPath> columns) throws IOException {
+    return getPhysicalScan(userName, selection, columns, null, null);
+  }
+
+  @Override
+  public AbstractGroupScan getPhysicalScan(String userName, JSONOptions selection,
+      List<SchemaPath> columns, SessionOptionManager options,
+      MetadataProviderManager metadataProviderManager) throws IOException {
+    FormatSelection formatSelection = selection.getWith(
+        context.getLpPersistence().getMapper(), FormatSelection.class);
     FormatPlugin plugin = getFormatPlugin(formatSelection.getFormat());
-    return plugin.getGroupScan(userName, formatSelection.getSelection(), columns, options);
+    return plugin.getGroupScan(userName, formatSelection.getSelection(), columns,
+        options, metadataProviderManager);
   }
 
   @Override
@@ -188,8 +237,10 @@ public class FileSystemPlugin extends AbstractStoragePlugin {
   }
 
   /**
-   * If format plugin configuration is for named format plugin, will return format plugin from pre-loaded list by name.
-   * For other cases will try to find format plugin by its configuration, if not present will attempt to create one.
+   * If format plugin configuration is for named format plugin, will return
+   * format plugin from pre-loaded list by name. For other cases will try to
+   * find format plugin by its configuration, if not present will attempt to
+   * create one.
    *
    * @param config format plugin configuration
    * @return format plugin for given configuration if found, null otherwise
@@ -197,7 +248,7 @@ public class FileSystemPlugin extends AbstractStoragePlugin {
   @Override
   public FormatPlugin getFormatPlugin(FormatPluginConfig config) {
     if (config instanceof NamedFormatPluginConfig) {
-      return formatCreator.getFormatPluginByName(((NamedFormatPluginConfig) config).name);
+      return formatCreator.getFormatPluginByName(((NamedFormatPluginConfig) config).getName());
     }
 
     FormatPlugin plugin = formatPluginsByConfig.get(config);

@@ -19,7 +19,8 @@ package org.apache.drill.exec.expr.fn.registry;
 
 import org.apache.drill.shaded.guava.com.google.common.collect.ArrayListMultimap;
 import org.apache.drill.shaded.guava.com.google.common.collect.ListMultimap;
-
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.apache.drill.common.AutoCloseables.Closeable;
 import org.apache.drill.common.concurrent.AutoCloseableLock;
 import org.apache.drill.exec.expr.fn.DrillFuncHolder;
@@ -29,6 +30,8 @@ import java.util.HashMap;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
+import java.util.Optional;
 import java.util.Queue;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
@@ -83,9 +86,8 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
  * <li><b>function holder for upper(VARCHAR-REQUIRED)</b> is {@link DrillFuncHolder} initiated for each function.</li>
  *
  */
-public class FunctionRegistryHolder {
-
-  private static final org.slf4j.Logger logger = org.slf4j.LoggerFactory.getLogger(FunctionRegistryHolder.class);
+public class FunctionRegistryHolder implements AutoCloseable {
+  private static final Logger logger = LoggerFactory.getLogger(FunctionRegistryHolder.class);
 
   private final ReadWriteLock readWriteLock = new ReentrantReadWriteLock();
   private final AutoCloseableLock readLock = new AutoCloseableLock(readWriteLock.readLock());
@@ -198,7 +200,7 @@ public class FunctionRegistryHolder {
   /**
    * Retrieves all function names associated with the jar from {@link #jars}.
    * Returns empty list if jar is not registered.
-   * This is read operation, so several users can perform this operation at the same time.
+   * This is a read operation, so several users can perform this operation at the same time.
    *
    * @param jarName jar name
    * @return list of functions names associated from the jar
@@ -215,7 +217,7 @@ public class FunctionRegistryHolder {
    * Uses guava {@link ListMultimap} structure to return data.
    * If no functions present, will return empty {@link ListMultimap}.
    * If version holder is not null, updates it with current registry version number.
-   * This is read operation, so several users can perform this operation at the same time.
+   * This is a read operation, so several users can perform this operation at the same time.
    *
    * @param version version holder
    * @return all functions which their holders
@@ -235,7 +237,7 @@ public class FunctionRegistryHolder {
 
   /**
    * Returns list of functions with list of function holders for each functions without version number.
-   * This is read operation, so several users can perform this operation at the same time.
+   * This is a read operation, so several users can perform this operation at the same time.
    *
    * @return all functions which their holders
    */
@@ -247,7 +249,7 @@ public class FunctionRegistryHolder {
    * Returns list of functions with list of function signatures for each functions.
    * Uses guava {@link ListMultimap} structure to return data.
    * If no functions present, will return empty {@link ListMultimap}.
-   * This is read operation, so several users can perform this operation at the same time.
+   * This is a read operation, so several users can perform this operation at the same time.
    *
    * @return all functions which their signatures
    */
@@ -265,7 +267,7 @@ public class FunctionRegistryHolder {
    * Returns all function holders associated with function name.
    * If function is not present, will return empty list.
    * If version holder is not null, updates it with current registry version number.
-   * This is read operation, so several users can perform this operation at the same time.
+   * This is a read operation, so several users can perform this operation at the same time.
    *
    * @param functionName function name
    * @param version version holder
@@ -283,7 +285,7 @@ public class FunctionRegistryHolder {
 
   /**
    * Returns all function holders associated with function name without version number.
-   * This is read operation, so several users can perform this operation at the same time.
+   * This is a read operation, so several users can perform this operation at the same time.
    *
    * @param functionName function name
    * @return list of function holders
@@ -294,7 +296,7 @@ public class FunctionRegistryHolder {
 
   /**
    * Checks is jar is present in {@link #jars}.
-   * This is read operation, so several users can perform this operation at the same time.
+   * This is a read operation, so several users can perform this operation at the same time.
    *
    * @param jarName jar name
    * @return true if jar exists, else false
@@ -307,7 +309,7 @@ public class FunctionRegistryHolder {
 
   /**
    * Returns quantity of functions stored in {@link #functions}.
-   * This is read operation, so several users can perform this operation at the same time.
+   * This is a read operation, so several users can perform this operation at the same time.
    *
    * @return quantity of functions
    */
@@ -321,7 +323,7 @@ public class FunctionRegistryHolder {
    * Looks which jar in {@link #jars} contains passed function signature.
    * First looks by function name and if found checks if such function has passed function signature.
    * Returns jar name if found matching function signature, else null.
-   * This is read operation, so several users can perform this operation at the same time.
+   * This is a read operation, so several users can perform this operation at the same time.
    *
    * @param functionName function name
    * @param functionSignature function signature
@@ -376,28 +378,73 @@ public class FunctionRegistryHolder {
       return;
     }
 
+    boolean isClosed  = false;
     for (Map.Entry<String, Queue<String>> functionEntry : jar.entrySet()) {
       final String function = functionEntry.getKey();
       Map<String, DrillFuncHolder> functionHolders = functions.get(function);
       Queue<String> functionSignatures = functionEntry.getValue();
-      for (Map.Entry<String, DrillFuncHolder> entry : functionHolders.entrySet()) {
-        if (functionSignatures.contains(entry.getKey())) {
-          ClassLoader classLoader = entry.getValue().getClassLoader();
-          if (classLoader instanceof AutoCloseable) {
-            try {
-              ((AutoCloseable) classLoader).close();
-            } catch (Exception e) {
-              logger.warn("Problem during closing class loader", e);
-            }
-          }
-          break;
-        }
-      }
+      // closes class loader only one time
+      isClosed = !isClosed && closeClassLoader(function, functionSignatures);
       functionHolders.keySet().removeAll(functionSignatures);
 
       if (functionHolders.isEmpty()) {
         functions.remove(function);
       }
     }
+  }
+
+  @Override
+  public void close() {
+    try (@SuppressWarnings("unused") Closeable lock = writeLock.open()) {
+      jars.forEach((jarName, jar) -> {
+        if (!LocalFunctionRegistry.BUILT_IN.equals(jarName)) {
+          for (Map.Entry<String, Queue<String>> functionEntry : jar.entrySet()) {
+            if (closeClassLoader(functionEntry.getKey(), functionEntry.getValue())) {
+              // class loader is closed, iterates to another jar
+              break;
+            }
+          }
+        }
+      });
+    }
+  }
+
+  /**
+   * Produces search of {@link DrillFuncHolder} which corresponds to specified {@code String functionName}
+   * with signature from {@code Queue<String> functionSignatures},
+   * closes its class loader if {@link DrillFuncHolder} is found and returns true. Otherwise false is returned.
+   *
+   * @param functionName       name of the function
+   * @param functionSignatures function signatures
+   * @return {@code true} if {@link DrillFuncHolder} was found and attempted to close class loader disregarding the result
+   */
+  private boolean closeClassLoader(String functionName, Queue<String> functionSignatures) {
+    return getDrillFuncHolder(functionName, functionSignatures)
+        .map(drillFuncHolder -> {
+          ClassLoader classLoader = drillFuncHolder.getClassLoader();
+          try {
+            ((AutoCloseable) classLoader).close();
+          } catch (Exception e) {
+            logger.warn("Problem during closing class loader", e);
+          }
+          return true;
+        })
+        .orElse(false);
+  }
+
+  /**
+   * Produces search of {@link DrillFuncHolder} which corresponds to specified {@code String functionName}
+   * with signature from {@code Queue<String> functionSignatures} and returns first found instance.
+   *
+   * @param functionName       name of the function
+   * @param functionSignatures function signatures
+   * @return {@link Optional} with first found {@link DrillFuncHolder} instance
+   */
+  private Optional<DrillFuncHolder> getDrillFuncHolder(String functionName, Queue<String> functionSignatures) {
+    Map<String, DrillFuncHolder> functionHolders = functions.get(functionName);
+    return functionSignatures.stream()
+        .map(functionHolders::get)
+        .filter(Objects::nonNull)
+        .findAny();
   }
 }

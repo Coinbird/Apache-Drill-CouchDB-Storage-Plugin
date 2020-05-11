@@ -17,27 +17,27 @@
  */
 package org.apache.drill.exec.vector.complex.writer;
 
-import org.apache.commons.io.FileUtils;
-import org.apache.drill.exec.physical.impl.join.JoinTestBase;
-import org.apache.drill.test.BaseTestQuery;
-import org.apache.drill.common.exceptions.UserRemoteException;
-import org.apache.drill.common.expression.SchemaPath;
-import org.apache.drill.exec.ExecConstants;
-import org.apache.drill.exec.record.RecordBatchLoader;
-import org.apache.drill.exec.record.VectorWrapper;
-import org.apache.drill.exec.rpc.user.QueryDataBatch;
-import org.apache.drill.exec.vector.VarCharVector;
-import org.junit.Ignore;
-import org.junit.Test;
-
-import java.io.File;
-import java.util.List;
-
 import static org.apache.drill.test.TestBuilder.mapOf;
 import static org.hamcrest.CoreMatchers.containsString;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertThat;
 import static org.junit.Assert.assertTrue;
+
+import java.io.File;
+import java.util.List;
+
+import org.apache.commons.io.FileUtils;
+import org.apache.drill.common.exceptions.UserRemoteException;
+import org.apache.drill.common.expression.SchemaPath;
+import org.apache.drill.exec.ExecConstants;
+import org.apache.drill.exec.physical.impl.join.JoinTestBase;
+import org.apache.drill.exec.record.RecordBatchLoader;
+import org.apache.drill.exec.record.VectorWrapper;
+import org.apache.drill.exec.rpc.user.QueryDataBatch;
+import org.apache.drill.exec.vector.VarCharVector;
+import org.apache.drill.test.BaseTestQuery;
+import org.junit.Ignore;
+import org.junit.Test;
 
 public class TestJsonNanInf extends BaseTestQuery {
 
@@ -184,7 +184,7 @@ public class TestJsonNanInf extends BaseTestQuery {
       assertThat(e.getMessage(), containsString("Error parsing JSON"));
       throw e;
     } finally {
-      test("alter session reset `%s`", ExecConstants.JSON_READER_NAN_INF_NUMBERS);
+      resetSessionOption(ExecConstants.JSON_READER_NAN_INF_NUMBERS);
       FileUtils.deleteQuietly(file);
     }
   }
@@ -235,6 +235,17 @@ public class TestJsonNanInf extends BaseTestQuery {
   }
 
 
+
+  @Test
+  public void testLargeStringBinary() throws Exception {
+    String chunk = "0123456789";
+    StringBuilder builder = new StringBuilder();
+    for (int i = 0; i < 1000; i++) {
+      builder.append(chunk);
+    }
+    String data = builder.toString();
+    test("select string_binary(binary_string('%s')) from (values(1))", data);
+ }
 
   @Test
   public void testConvertToJsonFunction() throws Exception {

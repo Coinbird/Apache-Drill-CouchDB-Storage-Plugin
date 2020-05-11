@@ -30,9 +30,10 @@ import org.apache.drill.exec.ops.OperatorContext;
 import org.apache.drill.exec.record.BatchSchema.SelectionVectorMode;
 import org.apache.drill.exec.record.selection.SelectionVector2;
 import org.apache.drill.exec.record.selection.SelectionVector4;
+import org.apache.drill.exec.vector.AllocationHelper;
 import org.apache.drill.exec.vector.SchemaChangeCallBack;
 import org.apache.drill.exec.vector.ValueVector;
-
+import org.apache.drill.shaded.guava.com.google.common.annotations.VisibleForTesting;
 import org.apache.drill.shaded.guava.com.google.common.base.Preconditions;
 import org.apache.drill.shaded.guava.com.google.common.collect.Lists;
 import org.apache.drill.shaded.guava.com.google.common.collect.Sets;
@@ -42,11 +43,11 @@ public class VectorContainer implements VectorAccessible {
   private final BufferAllocator allocator;
   protected final List<VectorWrapper<?>> wrappers = Lists.newArrayList();
   private BatchSchema schema;
-
-  private int recordCount = 0;
-  private boolean initialized = false;
+  private int recordCount;
+  private boolean initialized;
   // private BufferAllocator allocator;
-  private boolean schemaChanged = true; // Schema has changed since last built. Must rebuild schema
+  // Schema has changed since last built. Must rebuild schema
+  private boolean schemaChanged = true;
 
   public VectorContainer() {
     allocator = null;
@@ -94,8 +95,18 @@ public class VectorContainer implements VectorAccessible {
 
   public BufferAllocator getAllocator() { return allocator; }
 
-  public boolean isSchemaChanged() {
-    return schemaChanged;
+  public boolean isSchemaChanged() { return schemaChanged; }
+
+  /**
+   * Indicate the schema changed. Normally set by mutating this container.
+   * If schemas are built externally, call this if the schema contained
+   * here is different than the one provided in a previous batch. (Some
+   * operators don't trust OK_NEW_SCHEMA, and use the schema changed
+   * flag for the "real" truth.
+   */
+
+  public void schemaChanged() {
+    schemaChanged = true;
   }
 
   public void addHyperList(List<ValueVector> vectors) {
@@ -115,9 +126,15 @@ public class VectorContainer implements VectorAccessible {
    * Transfer vectors from containerIn to this.
    */
   public void transferIn(VectorContainer containerIn) {
-    Preconditions.checkArgument(this.wrappers.size() == containerIn.wrappers.size());
-    for (int i = 0; i < this.wrappers.size(); ++i) {
-      containerIn.wrappers.get(i).transfer(this.wrappers.get(i));
+    rawTransferIn(containerIn);
+    setRecordCount(containerIn.getRecordCount());
+  }
+
+  @VisibleForTesting
+  public void rawTransferIn(VectorContainer containerIn) {
+    Preconditions.checkArgument(wrappers.size() == containerIn.wrappers.size());
+    for (int i = 0; i < wrappers.size(); ++i) {
+      containerIn.wrappers.get(i).transfer(wrappers.get(i));
     }
   }
 
@@ -228,21 +245,23 @@ public class VectorContainer implements VectorAccessible {
     * @param srcIndex The index of the row to copy from the source {@link VectorContainer}.
     * @return Position one above where the row was appended
     */
-    public int appendRow(VectorContainer srcContainer, int srcIndex) {
-      for (int vectorIndex = 0; vectorIndex < wrappers.size(); vectorIndex++) {
-        ValueVector destVector = wrappers.get(vectorIndex).getValueVector();
-        ValueVector srcVector = srcContainer.wrappers.get(vectorIndex).getValueVector();
-        destVector.copyEntry(recordCount, srcVector, srcIndex);
-      }
-      return incRecordCount();
+  public int appendRow(VectorContainer srcContainer, int srcIndex) {
+    for (int vectorIndex = 0; vectorIndex < wrappers.size(); vectorIndex++) {
+      ValueVector destVector = wrappers.get(vectorIndex).getValueVector();
+      ValueVector srcVector = srcContainer.wrappers.get(vectorIndex).getValueVector();
+      destVector.copyEntry(recordCount, srcVector, srcIndex);
     }
+    return incRecordCount();
+  }
 
   public TypedFieldId add(ValueVector vv) {
-    schemaChanged = true;
+    schemaChanged();
     schema = null;
     int i = wrappers.size();
     wrappers.add(SimpleVectorWrapper.create(vv));
-    return new TypedFieldId(vv.getField().getType(), i);
+    return new TypedFieldId.Builder().finalType(vv.getField().getType())
+        .addId(i)
+        .build();
   }
 
   public ValueVector getLast() {
@@ -256,7 +275,7 @@ public class VectorContainer implements VectorAccessible {
 
   public void add(ValueVector[] hyperVector, boolean releasable) {
     assert hyperVector.length != 0;
-    schemaChanged = true;
+    schemaChanged();
     schema = null;
     Class<?> clazz = hyperVector[0].getClass();
     ValueVector[] c = (ValueVector[]) Array.newInstance(clazz, hyperVector.length);
@@ -267,7 +286,7 @@ public class VectorContainer implements VectorAccessible {
 
   public void remove(ValueVector v) {
     schema = null;
-    schemaChanged = true;
+    schemaChanged();
     for (Iterator<VectorWrapper<?>> iter = wrappers.iterator(); iter.hasNext();) {
       VectorWrapper<?> w = iter.next();
       if (!w.isHyper() && v == w.getValueVector()) {
@@ -281,7 +300,7 @@ public class VectorContainer implements VectorAccessible {
 
   private void replace(ValueVector old, ValueVector newVector) {
     schema = null;
-    schemaChanged = true;
+    schemaChanged();
     int i = 0;
     for (VectorWrapper<?> w : wrappers){
       if (!w.isHyper() && old == w.getValueVector()) {
@@ -356,8 +375,8 @@ public class VectorContainer implements VectorAccessible {
     for (VectorWrapper<?> v : wrappers) {
       bldr.addField(v.getField());
     }
-    this.schema = bldr.build();
-    this.schemaChanged = false;
+    schema = bldr.build();
+    schemaChanged = false;
   }
 
   @Override
@@ -376,8 +395,8 @@ public class VectorContainer implements VectorAccessible {
   }
 
   public void setRecordCount(int recordCount) {
-      this.recordCount = recordCount;
-      initialized = true;
+    this.recordCount = recordCount;
+    initialized = true;
   }
 
   /**
@@ -422,6 +441,14 @@ public class VectorContainer implements VectorAccessible {
     return wrappers.size();
   }
 
+  public void allocate(int recordCount) {
+    for (VectorWrapper<?> w : wrappers) {
+      ValueVector v = w.getValueVector();
+      v.setInitialCapacity(recordCount);
+      v.allocateNew();
+    }
+  }
+
   public void allocateNew() {
     for (VectorWrapper<?> w : wrappers) {
       w.getValueVector().allocateNew();
@@ -435,6 +462,11 @@ public class VectorContainer implements VectorAccessible {
       }
     }
     return true;
+  }
+
+  public void setValueCount(int valueCount) {
+    VectorAccessibleUtilities.setValueCount(this, valueCount);
+    setRecordCount(valueCount);
   }
 
   /**
@@ -501,7 +533,7 @@ public class VectorContainer implements VectorAccessible {
     String separator = "";
     sb.append("[");
 
-    for (VectorWrapper vectorWrapper: wrappers) {
+    for (VectorWrapper<?> vectorWrapper: wrappers) {
       sb.append(separator);
       separator = ", ";
       final String columnName = vectorWrapper.getField().getName();
@@ -513,5 +545,42 @@ public class VectorContainer implements VectorAccessible {
 
     sb.append("]");
     return sb.toString();
+  }
+
+  /**
+   * Safely set this container to an empty batch. An empty batch is not
+   * fully empty: offset vectors must contain a single 0 entry in their
+   * first position.
+   */
+  public void setEmpty() {
+    // May not be needed; retaining for safety.
+    zeroVectors();
+    // Better to only allocate minimum-size offset vectors,
+    // but no good way to do that presently.
+    allocateNew();
+    // The "fill empties" logic will set the zero
+    // in the offset vectors that need it.
+    setValueCount(0);
+  }
+
+  public void copySchemaFrom(VectorAccessible other) {
+    for (VectorWrapper<?> wrapper : other) {
+      addOrGet(wrapper.getField());
+    }
+  }
+
+  public void buildFrom(BatchSchema sourceSchema) {
+    for (MaterializedField field : sourceSchema) {
+      add(TypeHelper.getNewVector(field, allocator));
+    }
+  }
+
+  public void allocatePrecomputedChildCount(int valueCount,
+      int bytesPerValue, int childValCount) {
+    for (VectorWrapper<?> w : wrappers) {
+      AllocationHelper.allocatePrecomputedChildCount(w.getValueVector(),
+          valueCount, bytesPerValue, childValCount);
+    }
+    setEmpty();
   }
 }

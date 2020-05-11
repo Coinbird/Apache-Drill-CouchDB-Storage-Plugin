@@ -19,7 +19,6 @@ package org.apache.drill.exec.record;
 
 import java.util.Iterator;
 
-import org.apache.drill.common.exceptions.DrillRuntimeException;
 import org.apache.drill.common.exceptions.UserException;
 import org.apache.drill.common.expression.SchemaPath;
 import org.apache.drill.exec.ExecConstants;
@@ -29,14 +28,16 @@ import org.apache.drill.exec.ops.FragmentContext;
 import org.apache.drill.exec.ops.OperatorContext;
 import org.apache.drill.exec.ops.OperatorStats;
 import org.apache.drill.exec.physical.base.PhysicalOperator;
-import org.apache.drill.exec.physical.impl.aggregate.SpilledRecordbatch;
+import org.apache.drill.exec.physical.impl.aggregate.SpilledRecordBatch;
 import org.apache.drill.exec.record.selection.SelectionVector2;
 import org.apache.drill.exec.record.selection.SelectionVector4;
 import org.apache.drill.exec.server.options.OptionValue;
 import org.apache.drill.exec.util.record.RecordBatchStats.RecordBatchStatsContext;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 public abstract class AbstractRecordBatch<T extends PhysicalOperator> implements CloseableRecordBatch {
-  private static final org.slf4j.Logger logger = org.slf4j.LoggerFactory.getLogger(new Object() {}.getClass().getEnclosingClass());
+  private static final Logger logger = LoggerFactory.getLogger(AbstractRecordBatch.class);
 
   protected final VectorContainer container;
   protected final T popConfig;
@@ -55,12 +56,12 @@ public abstract class AbstractRecordBatch<T extends PhysicalOperator> implements
     this(popConfig, context, true, context.newOperatorContext(popConfig));
   }
 
-  protected AbstractRecordBatch(final T popConfig, final FragmentContext context, final boolean buildSchema) throws OutOfMemoryException {
+  protected AbstractRecordBatch(T popConfig, FragmentContext context, boolean buildSchema) throws OutOfMemoryException {
     this(popConfig, context, buildSchema, context.newOperatorContext(popConfig));
   }
 
-  protected AbstractRecordBatch(final T popConfig, final FragmentContext context, final boolean buildSchema,
-      final OperatorContext oContext) {
+  protected AbstractRecordBatch(T popConfig, FragmentContext context, boolean buildSchema,
+      OperatorContext oContext) {
     this.context = context;
     this.popConfig = popConfig;
     this.oContext = oContext;
@@ -80,17 +81,13 @@ public abstract class AbstractRecordBatch<T extends PhysicalOperator> implements
     }
   }
 
-  public static enum BatchState {
+  public enum BatchState {
     /** Need to build schema and return. */
     BUILD_SCHEMA,
     /** This is still the first data batch. */
     FIRST,
     /** The first data batch has already been returned. */
     NOT_FIRST,
-    /** The query most likely failed, we need to propagate STOP to the root. */
-    STOP,
-    /** Out of Memory while building the Schema...Ouch! */
-    OUT_OF_MEMORY,
     /** All work is done, no more data to be sent. */
     DONE
   }
@@ -105,30 +102,26 @@ public abstract class AbstractRecordBatch<T extends PhysicalOperator> implements
     return context;
   }
 
-  public PhysicalOperator getPopConfig() {
+  public T getPopConfig() {
     return popConfig;
   }
 
-  public final IterOutcome next(final RecordBatch b) {
-    if(!context.getExecutorState().shouldContinue()) {
-      return IterOutcome.STOP;
-    }
+  public final IterOutcome next(RecordBatch b) {
+    checkContinue();
     return next(0, b);
   }
 
-  public final IterOutcome next(final int inputIndex, final RecordBatch b){
+  public final IterOutcome next(int inputIndex, RecordBatch b) {
     IterOutcome next;
-    stats.stopProcessing();
-    try{
-      if (!context.getExecutorState().shouldContinue()) {
-        return IterOutcome.STOP;
-      }
+    try {
+      stats.stopProcessing();
+      checkContinue();
       next = b.next();
     } finally {
       stats.startProcessing();
     }
 
-    if (b instanceof SpilledRecordbatch) {
+    if (b instanceof SpilledRecordBatch) {
       // Don't double count records which were already read and spilled.
       // TODO evaluate whether swapping out upstream record batch with a SpilledRecordBatch
       // is the right thing to do.
@@ -146,7 +139,6 @@ public abstract class AbstractRecordBatch<T extends PhysicalOperator> implements
         logger.debug("Number of records in received batch: {}", b.getRecordCount());
         break;
       default:
-        break;
     }
 
     return next;
@@ -162,14 +154,6 @@ public abstract class AbstractRecordBatch<T extends PhysicalOperator> implements
           switch (state) {
             case DONE:
               lastOutcome = IterOutcome.NONE;
-              break;
-            case OUT_OF_MEMORY:
-              // because we don't support schema changes, it is safe to fail the query right away
-              context.getExecutorState().fail(UserException.memoryError()
-                .build(logger));
-              // FALL-THROUGH
-            case STOP:
-              lastOutcome = IterOutcome.STOP;
               break;
             default:
               state = BatchState.FIRST;
@@ -187,12 +171,6 @@ public abstract class AbstractRecordBatch<T extends PhysicalOperator> implements
           break;
       }
       return lastOutcome;
-    } catch (final SchemaChangeException e) {
-      lastOutcome = IterOutcome.STOP;
-      throw new DrillRuntimeException(e);
-    } catch (Exception e) {
-      lastOutcome = IterOutcome.STOP;
-      throw e;
     } finally {
       stats.stopProcessing();
     }
@@ -209,15 +187,14 @@ public abstract class AbstractRecordBatch<T extends PhysicalOperator> implements
     }
   }
 
-  protected void buildSchema() throws SchemaChangeException {
-  }
+  protected void buildSchema() { }
 
   @Override
-  public void kill(final boolean sendUpstream) {
-    killIncoming(sendUpstream);
+  public void cancel() {
+    cancelIncoming();
   }
 
-  protected abstract void killIncoming(boolean sendUpstream);
+  protected abstract void cancelIncoming();
 
   @Override
   public void close() {
@@ -235,36 +212,30 @@ public abstract class AbstractRecordBatch<T extends PhysicalOperator> implements
   }
 
   @Override
-  public TypedFieldId getValueVectorId(final SchemaPath path) {
+  public TypedFieldId getValueVectorId(SchemaPath path) {
     return container.getValueVectorId(path);
   }
 
   @Override
-  public VectorWrapper<?> getValueAccessorById(final Class<?> clazz, final int... ids) {
+  public VectorWrapper<?> getValueAccessorById(Class<?> clazz, int... ids) {
     return container.getValueAccessorById(clazz, ids);
   }
 
   @Override
   public WritableBatch getWritableBatch() {
-//    logger.debug("Getting writable batch.");
-    final WritableBatch batch = WritableBatch.get(this);
-    return batch;
-
+    return WritableBatch.get(this);
   }
 
   @Override
   public VectorContainer getOutgoingContainer() {
-    throw new UnsupportedOperationException(String.format(" You should not call getOutgoingContainer() for class %s", this.getClass().getCanonicalName()));
+    throw new UnsupportedOperationException(String.format(
+        "You should not call getOutgoingContainer() for class %s",
+        getClass().getCanonicalName()));
   }
 
   @Override
   public VectorContainer getContainer() {
-    return  container;
-  }
-
-  @Override
-  public boolean hasFailed() {
-    return lastOutcome == IterOutcome.STOP;
+    return container;
   }
 
   public RecordBatchStatsContext getRecordBatchStatsContext() {
@@ -273,5 +244,26 @@ public abstract class AbstractRecordBatch<T extends PhysicalOperator> implements
 
   public boolean isRecordBatchStatsLoggingEnabled() {
     return batchStatsContext.isEnableBatchSzLogging();
+  }
+
+  /**
+   * Checks if the query should continue. Throws a UserException if not.
+   * Operators should call this periodically to detect cancellation
+   * requests. The operator need not catch the exception: it will bubble
+   * up the operator tree and be handled like any other fatal error.
+   */
+  public void checkContinue() {
+    context.getExecutorState().checkContinue();
+  }
+
+  protected UserException schemaChangeException(SchemaChangeException e, Logger logger) {
+    return schemaChangeException(e, getClass().getSimpleName(), logger);
+  }
+
+  public static UserException schemaChangeException(SchemaChangeException e,
+      String operator, Logger logger) {
+    return UserException.schemaChangeError(e)
+      .addContext("Unexpected schema change in %s operator", operator)
+      .build(logger);
   }
 }
