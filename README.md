@@ -6,6 +6,7 @@
 
 # Purpose of this fork:
 * Update CouchDB Storage Plugin to build with 1.18.0
+* NOTE: Building with JDK newer than jdk-8u251 seemed to cause problems (resultKey was being cleared, storage module wasn't showing up by default) so I'm using 8u251 for now.
 
 # Apache Drill
 
