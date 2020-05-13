@@ -75,6 +75,9 @@ public class CouchSchemaFactory extends AbstractSchemaFactory {
         public List<String> load(String key) throws Exception {
             List<String> dbNames = new ArrayList<>();
             String connection = plugin.getConfig().getConnection();
+            // WS Note: this loads couch via the connection specified in the storage
+            // However, actual queries use lightcouch and
+            // the connection string there is still hardcoded (see related TODO in CouchRecordReader)
             String url = connection + "/_all_dbs";
             logger.info(url);
             SimpleHttp http = new SimpleHttp();
@@ -94,6 +97,8 @@ public class CouchSchemaFactory extends AbstractSchemaFactory {
 
     private class TableNameLoader extends CacheLoader<String, List<String>> {
 
+        // WS Note - This is the same as dbNames code above
+        // TODO{WS} change to display "tables" (db's) without couch. prefix
         @Override
         public List<String> load(String dbName) throws Exception {
             List<String> tableNames = new ArrayList<>();
@@ -142,7 +147,7 @@ public class CouchSchemaFactory extends AbstractSchemaFactory {
 
                 // return new MongoDatabaseSchema(tables, this, name);
             } catch (ExecutionException e) {
-                logger.warn("Failure while attempting to access MongoDataBase '{}'.", name, e.getCause());
+                logger.warn("Failure while attempting to access CouchDB '{}'.", name, e.getCause());
                 return null;
             }
 

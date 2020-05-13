@@ -39,7 +39,7 @@ public class CouchScanSpec {
 
     @Override
     public String toString() {
-        return "MongoScanSpec [dbName=" + dbName + ", collectionName="
+        return "CouchScanSpec [dbName=" + dbName + ", collectionName="
                 + TableName + ", filters=" + filters + "]";
     }
 

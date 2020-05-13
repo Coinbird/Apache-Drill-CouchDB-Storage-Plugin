@@ -60,7 +60,8 @@ public class SimpleHttp {
 
     public static void main(String[] args) {
         SimpleHttp http = new SimpleHttp();
-        System.out.println(http.get("http://106.186.122.56:8000/e/api:search?q=avi"));
+        // WS - unknown IP, removed
+        //System.out.println(http.get("http://<removed>:8000/e/api:search?q=avi"));
     }
 
 }

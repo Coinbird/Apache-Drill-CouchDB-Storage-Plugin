@@ -64,8 +64,6 @@ public class CouchRecordReader extends AbstractRecordReader {
 
     private final CouchStoragePlugin plugin;
 
-    private boolean isBsonRecordReader = false;
-
     public CouchRecordReader(CouchSubScan.CouchSubScanSpec subScanSpec, List<SchemaPath> projectedColumns,
             FragmentContext context, CouchStoragePlugin plugin) {
         querystring = new JSONObject();
@@ -84,8 +82,8 @@ public class CouchRecordReader extends AbstractRecordReader {
         }
         querystring.put("fields", fields);
 
-        logger.debug("BsonRecordReader is enabled? " + isBsonRecordReader);
         tableName = subScanSpec.getTableName();
+        // TODO{WS} Load credentials from config - this appears hardcoded
         CouchDbProperties properties = new CouchDbProperties().setDbName(tableName).setCreateDbIfNotExist(false)
                 .setProtocol("http").setHost("127.0.0.1").setPort(5984).setUsername("admin").setPassword("admin");
         dbClient = new CouchDbClient(properties);
@@ -160,6 +158,6 @@ public class CouchRecordReader extends AbstractRecordReader {
     @Override
     public String toString() {
         Object reader = jsonReader;
-        return "MongoRecordReader[reader=" + reader + "]";
+        return "CouchRecordReader[reader=" + reader + "]";
     }
 }
